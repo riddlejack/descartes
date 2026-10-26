@@ -133,8 +133,8 @@ def sqlite_ddl() -> list[str]:
 
 
 def postgres_ddl(schema: str) -> list[str]:
-    return [f"CREATE SCHEMA IF NOT EXISTS {schema}"] + [
-        _ddl(t, _POSTGRES, f"{schema}.") for t in TABLES]
+    head = [] if schema == "public" else [f"CREATE SCHEMA IF NOT EXISTS {schema}"]
+    return head + [_ddl(t, _POSTGRES, f"{schema}.") for t in TABLES]
 
 
 def usl_compile(model: str, namespace: str) -> str:

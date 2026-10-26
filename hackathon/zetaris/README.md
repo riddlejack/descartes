@@ -82,8 +82,9 @@ python -m pytest tests/datalayer/test_live.py -v
 One USL model per run, `lightning.metastore.stemma.evidence_<run key>`, with ten tables:
 `sync_state`, `capture`, `claim`, `claim_support`, `claim_input`, `claim_entity`,
 `claim_verdict`, `claim_supersession`, `sec_fact` and `doc_table_cell`. Each run's rows
-live in their own Postgres schema, read by a fresh role that can read that schema and
-nothing else (checked before Zetaris is given it, and on every sync). The definitions come from
+live in their own Postgres database (tables in its `public` schema, where Zetaris's
+registration finds them), read by a fresh role that can connect to that database only and
+read its tables only (checked before Zetaris is given it, and on every sync). The definitions come from
 `src/stemma/datalayer/schema.py`, the one place they are written. Each foreign key
 becomes a Zetaris data-quality rule; for example, every support row must cite a
 receipt in the capture manifest.

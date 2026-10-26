@@ -1,7 +1,7 @@
 """Per-run names in the shared Postgres and in Zetaris.
 
-Each run's tables live in their own Postgres schema, read by their own role, served by
-their own Zetaris datasource and semantic layer, so nothing a query says can reach
+Each run's tables live in their own Postgres database, read by their own role, served
+by their own Zetaris datasource and semantic layer, so nothing a query says can reach
 another run's rows. Names come from a hash of the run id, so they are always plain
 identifiers whatever the run id holds.
 """
@@ -23,8 +23,12 @@ class RunSpace:
         return "r" + hashlib.sha256(self.run_id.encode("utf-8")).hexdigest()[:16]
 
     @property
-    def schema(self) -> str:
+    def database(self) -> str:
         return f"ev_{self.key}"
+
+    # The run's tables sit in its database's `public` schema, where Zetaris's JDBC
+    # registration looks for them (shown live: it registers none in another schema).
+    schema = "public"
 
     @property
     def role(self) -> str:

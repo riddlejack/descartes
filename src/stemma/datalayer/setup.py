@@ -1,11 +1,11 @@
 """Provision one run in Zetaris: its own Postgres role, datasource and semantic layer.
 
 Zetaris cannot read a file on the laptop, so the run's rows live in the run's own
-Postgres schema. Provisioning, done once per run on its first Zetaris-mode sync:
-1. a fresh Postgres role that can read that schema and nothing else (never a reused
+Postgres database. Provisioning, done once per run on its first Zetaris-mode sync:
+1. a fresh Postgres role that can read that database and nothing else (never a reused
    role; refused if one of that name exists), checked for any write capability before
    Zetaris is given it, and again on every later sync;
-2. a Zetaris datasource for that schema, connecting as that role;
+2. a Zetaris datasource for that database, connecting as that role;
 3. one Unified Semantic Layer model over the run's tables, with their keys and foreign
    keys (each foreign key becomes a Zetaris data-quality rule).
 
@@ -48,7 +48,7 @@ class Record:
     done: list[str] = field(default_factory=list)
 
     def as_json(self, space: RunSpace) -> bytes:
-        return json.dumps({"run_id": self.run_id, "schema": space.schema, "role": space.role,
+        return json.dumps({"run_id": self.run_id, "database": space.database, "role": space.role,
                            "datasource": space.datasource, "model": space.model,
                            "done": self.done}, indent=2).encode()
 
@@ -58,7 +58,7 @@ def _parent(namespace: str) -> str:
 
 
 def datasource_sql(space: RunSpace, jdbc_host: str, database: str, password: str) -> str:
-    url = f"jdbc:postgresql://{jdbc_host}:5432/{database}?currentSchema={space.schema}"
+    url = f"jdbc:postgresql://{jdbc_host}:5432/{space.database}"
     return (f'CREATE DATASOURCE {space.datasource} DESCRIBE BY "Stemma evidence of one run" '
             f'OPTIONS (jdbcdriver "org.postgresql.Driver", jdbcurl "{url}", '
             f'username "{space.role}", password "{password}", fetchsize "1000")')
@@ -122,3 +122,20 @@ def provision(run_dir: Path, run_id: str, sink: RoleSink, client: Statements,
             client.execute(sql)
             mark(name)
     return record
+
+
+def deprovision(space: RunSpace, client: Statements, namespace: str) -> list[str]:
+    """Remove a run's semantic layer and datasource from Zetaris (the run's Postgres
+    database and role are the owner's to drop). Returns what was removed; whether each
+    exists is read from Zetaris's own listing, never from an error message."""
+    removed = []
+    try:
+        client.execute(f"REMOVE USL {space.model} NAMESPACE {namespace}")
+        removed.append(f"usl {space.model}")
+    except Exception:  # noqa: BLE001, S110 - a model never compiled has nothing to remove
+        pass
+    listed = {c.strip().lower() for row in client.cells("SHOW DATASOURCES") for c in row}
+    if space.datasource.lower() in listed:
+        client.execute(f"DROP DATASOURCE {space.datasource}")
+        removed.append(f"datasource {space.datasource}")
+    return removed
