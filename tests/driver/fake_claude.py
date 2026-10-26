@@ -2,7 +2,7 @@
 
 Installed as an executable script (see conftest). It records its argv, environment and
 working folder to `<its folder>/calls/<n>.json`, prints a stream-json init built the way
-the harness builds it (tools from --tools, agents and skills from the plugin folder),
+the harness builds it (the agent's own tools within --tools, agents and skills from the plugin folder),
 writes a transcript under CLAUDE_CONFIG_DIR, and prints a result. Behaviour per role
 comes from `<its folder>/fake-config.json`: {"<role>" or "<role>@resume": {...}} with
 keys init_overrides, sleep_s, exit_code, transcript_model, transcript_effort, subagents,
@@ -65,8 +65,16 @@ def main() -> int:
 
     plugin = Path(opt(argv, "--plugin-dir") or "/nonexistent")
     tools = [t for t in (opt(argv, "--tools") or "").split(",") if t]
-    shown = ["Task" if t == "Agent" else t for t in tools]
-    shown += ["mcp__plugin_stemma_stemma__ping"]
+    # Like the harness under --agent: the agent's own frontmatter tools within --tools.
+    own: list[str] = []
+    agent_file = plugin / "agents" / f"{role}.md"
+    if agent_file.is_file():
+        for line in agent_file.read_text().splitlines():
+            if line.startswith("tools:"):
+                own = [t.strip() for t in line[len("tools:"):].split(",") if t.strip()]
+    own_names = {t.split("(", 1)[0] for t in own}
+    shown = ["Task" if t == "Agent" else t for t in tools if t in own_names]
+    shown += [t for t in own if t.startswith("mcp__")]
     agents = sorted(f"stemma:{p.stem}" for p in (plugin / "agents").glob("*.md"))
     skills = sorted(f"stemma:{p.name}" for p in (plugin / "skills").glob("*")
                     if (p / "SKILL.md").is_file())

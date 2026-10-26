@@ -69,6 +69,9 @@ DECIDERS_EYE_KEEP: Final = frozenset({"task", "intake.md", "CLAUDE.md", "draft",
 class ToolSets:
     builtin: tuple[str, ...]  # for --tools, sorted
     allow: tuple[str, ...]  # for permissions.allow, sorted
+    # The built-in tools the session's own agent has: with `--agent`, the init message
+    # lists the agent's frontmatter tools within --tools, not all of --tools (real launch).
+    main: tuple[str, ...] = ()
 
 
 def split_tools(tool_lists: list[list[str]]) -> ToolSets:
@@ -94,11 +97,14 @@ def tools_for_role(role: str, agent_tools: dict[str, list[str]]) -> ToolSets:
     their calls run under the lead session's permissions and built-in tool set."""
     if role not in agent_tools:
         raise AgentFileInvalid(f"run plugin has no agent file for role {role!r}")
-    lists = [agent_tools[role]]
+    own = agent_tools[role]
+    lists = [own]
     if role == roles.short(roles.LEAD):
         lists += [agent_tools[roles.short(s)] for s in sorted(roles.SUBAGENT_TYPES)
                   if roles.short(s) in agent_tools]
-    return split_tools(lists)
+    sets = split_tools(lists)
+    main = tuple(sorted({t.split("(", 1)[0] for t in own if not t.startswith("mcp__")}))
+    return ToolSets(sets.builtin, sets.allow, main)
 
 
 def _abs(run_dir: Path, pattern: str) -> str:

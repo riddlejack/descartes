@@ -138,12 +138,13 @@ def test_skill_not_copied_cannot_load(cfg: DriverConfig, tmp: Path, fake: Fake,
                                       limits: Limits) -> None:
     fake.configure({})
     run = new_run(cfg, tmp, limits, switches={"s1_method": "placebo"})
+    assert "PLACEBO METHOD" in (run / PLUGIN_DIR / "skills" / "method" / "SKILL.md").read_text()
     assert not (run / PLUGIN_DIR / "skills" / "decomposition-method").exists()
     assert start(cfg, run, checks_api, limits) == 0
     assert not kinds(run, "canary_failed")
     # A harness that loaded the uncopied skill anyway would fail the canary.
     fake.configure({"claim-checker": {"init_overrides": {"skills": [
-        "stemma:placebo-method", "stemma:question-card", "stemma:decomposition-method"]}}})
+        "stemma:method", "stemma:card-decision", "stemma:deck", "stemma:decomposition-method"]}}})
     checks_api.request_check(run, "claim-checker", "claim:c1", "file_claim")
     d = Driver(cfg, run, checks_api, limits)
     while d.step():
@@ -201,8 +202,8 @@ def test_tampered_plugin_refuses_launch(cfg: DriverConfig, tmp: Path, fake: Fake
     fake.configure({})
     run = new_run(cfg, tmp, limits)
     assert start(cfg, run, checks_api, limits) == 0
-    (run / PLUGIN_DIR / "skills" / "placebo-method").mkdir()
-    (run / PLUGIN_DIR / "skills" / "placebo-method" / "SKILL.md").write_text("smuggled")
+    (run / PLUGIN_DIR / "skills" / "smuggled").mkdir()
+    (run / PLUGIN_DIR / "skills" / "smuggled" / "SKILL.md").write_text("smuggled")
     checks_api.request_check(run, "claim-checker", "claim:c9", "file_claim")
     n = len(fake.calls())
     d = Driver(cfg, run, checks_api, limits)

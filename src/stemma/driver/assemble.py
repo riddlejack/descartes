@@ -2,8 +2,8 @@
 
 The run plugin holds only what the switches select. The lead's text is `lead/base.md`
 followed by one fragment per switch; the worker's likewise when `agents/worker.base.md`
-exists. Exactly one method skill is copied for s1 (or none); a skill not copied cannot
-load. Every agent file's `model` and `effort` are set from s5_models, because subagents
+exists. s1 selects the real method and cards, the placebo method and cards, or neither;
+a skill not copied cannot load. Every agent file's `model` and `effort` are set from s5_models, because subagents
 run on their frontmatter values. Digests of the folder and of each assembled text are
 returned for `run.json`.
 """
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,12 +24,15 @@ from stemma.driver.task import FRAGMENT_SWITCHES, fragment_value
 from stemma.register import roles
 
 PLUGIN_NAME: Final = roles.PLUGIN
-# s1 method skills (invariant: section 7). Other skills are copied as they are.
-METHOD_SKILLS: Final[dict[str, str | None]] = {
-    "decomposition": "decomposition-method",
-    "placebo": "placebo-method",
-    "none": None,
-}
+# s1 (invariant: section 7, v0.2.2): `decomposition` copies the method and the real
+# question-type cards, `placebo` the placebo method and placebo cards, `none` neither.
+# Real and placebo versions share frontmatter names, so each is copied into a folder named
+# by its frontmatter `name` and both arms present the same skill names. Every other
+# skill is copied as it is.
+METHOD_SKILLS: Final = {"decomposition": "decomposition-method", "placebo": "placebo-method"}
+REAL_CARD_PREFIX: Final = "card-"
+PLACEBO_CARD_PREFIX: Final = "placebo-card-"
+_SKILL_NAME: Final = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 STANDING_RULES: Final = "STANDING-RULES.md"
 IGNORED_NAMES: Final = frozenset({".gitkeep", ".DS_Store", "__pycache__"})
 
@@ -42,6 +46,7 @@ class Assembly:
     agents: list[str] = field(default_factory=list)  # short role names
     skills: list[str] = field(default_factory=list)
     tools: dict[str, list[str]] = field(default_factory=dict)  # role -> frontmatter tools
+    skill_sources: dict[str, str] = field(default_factory=dict)  # skill name -> source folder
     standing_rules_sha256: str = ""
 
     def to_json(self) -> dict[str, Any]:
@@ -52,6 +57,7 @@ class Assembly:
             "assembled": self.assembled,
             "agents": self.agents,
             "skills": self.skills,
+            "skill_sources": self.skill_sources,
             "standing_rules_sha256": self.standing_rules_sha256,
         }
 
@@ -103,6 +109,61 @@ def _set_model(text: str, where: str, role: str, models: dict[str, dict[str, str
     if spec is None:
         raise AgentFileInvalid(f"{where}: no model and effort in s5_models for role {role!r}")
     return frontmatter.set_fields(text, where, {"model": spec["model"], "effort": spec["effort"]})
+
+
+def _skill_kind(folder: str) -> str:
+    if folder in METHOD_SKILLS.values():
+        return folder
+    if folder.startswith(PLACEBO_CARD_PREFIX):
+        return "placebo-card"
+    if folder.startswith(REAL_CARD_PREFIX):
+        return "card"
+    return "other"
+
+
+def _skill_name(folder: Path) -> str:
+    where = f"skills/{folder.name}/SKILL.md"
+    if not (folder / "SKILL.md").is_file():
+        raise PluginInvalid(f"skill folder without SKILL.md: skills/{folder.name}")
+    name = frontmatter.parse((folder / "SKILL.md").read_text(encoding="utf-8"), where) \
+        .scalar("name")
+    if not name or not _SKILL_NAME.match(name):
+        raise AgentFileInvalid(f"{where}: frontmatter name missing or not a plain name")
+    return name
+
+
+def _copy_skills(src: Path, dst: Path, method: str) -> tuple[list[str], dict[str, str]]:
+    by_kind: dict[str, dict[str, str]] = {}  # kind -> frontmatter name -> source folder
+    if src.is_dir():
+        for d in sorted(p for p in src.iterdir() if p.is_dir() and p.name not in IGNORED_NAMES):
+            kind = _skill_kind(d.name)
+            name = _skill_name(d)
+            group = by_kind.setdefault(kind, {})
+            if name in group:
+                raise PluginInvalid(f"skills/{group[name]} and skills/{d.name} share the "
+                                    f"name {name!r}")
+            group[name] = d.name
+    real = {**by_kind.get("decomposition-method", {}), **by_kind.get("card", {})}
+    placebo = {**by_kind.get("placebo-method", {}), **by_kind.get("placebo-card", {})}
+    if method != "none":
+        if not by_kind.get(METHOD_SKILLS[method]):
+            raise PluginInvalid(f"s1_method={method} needs skills/{METHOD_SKILLS[method]}")
+        # The arms must offer the same skill names, or the lead's words would differ.
+        if real and placebo and sorted(real) != sorted(placebo):
+            raise PluginInvalid(f"real and placebo skills differ in names: real {sorted(real)}, "
+                                f"placebo {sorted(placebo)}")
+    chosen = {"decomposition": real, "placebo": placebo, "none": {}}[method]
+    selected = {**by_kind.get("other", {})}
+    for name, folder in chosen.items():
+        if name in selected:
+            raise PluginInvalid(f"skills/{folder} and skills/{selected[name]} share the "
+                                f"name {name!r}")
+        selected[name] = folder
+    if selected:
+        dst.mkdir()
+        for name, folder in sorted(selected.items()):
+            _copy_tree(src / folder, dst / name)
+    return sorted(selected), dict(sorted(selected.items()))
 
 
 def assemble(src: Path, dst: Path, switches: dict[str, Any]) -> Assembly:
@@ -180,28 +241,8 @@ def assemble(src: Path, dst: Path, switches: dict[str, Any]) -> Assembly:
         asm.tools[p.stem] = agent.tools()
         asm.agents.append(p.stem)
 
-    # Skills: every skill except the method skills, then the one s1 selects.
-    skills_src = src / "skills"
-    skills_dst = dst / "skills"
-    chosen = METHOD_SKILLS[switches["s1_method"]]
-    names: list[str] = []
-    if skills_src.is_dir():
-        for d in sorted(p for p in skills_src.iterdir() if p.is_dir()):
-            if d.name in IGNORED_NAMES:
-                continue
-            if d.name in METHOD_SKILLS.values() and d.name != chosen:
-                continue
-            if not (d / "SKILL.md").is_file():
-                raise PluginInvalid(f"skill folder without SKILL.md: skills/{d.name}")
-            names.append(d.name)
-    if chosen is not None and chosen not in names:
-        raise PluginInvalid(f"s1_method selects skills/{chosen}, which the source lacks")
-    if names:
-        skills_dst.mkdir()
-        for n in names:
-            _copy_tree(skills_src / n, skills_dst / n)
-    asm.skills = names
-
+    asm.skills, asm.skill_sources = _copy_skills(src / "skills", dst / "skills",
+                                                 switches["s1_method"])
     asm.standing_rules_sha256 = sha256_bytes((src / STANDING_RULES).read_bytes())
     asm.digest, asm.files = folder_digest(dst)
     return asm

@@ -73,7 +73,8 @@ def test_create_run(cfg: DriverConfig, tmp: Path) -> None:
     assert (run / "CLAUDE.md").read_text() == (cfg.plugin_src / "STANDING-RULES.md").read_text()
     digest, _ = assemble.folder_digest(run / PLUGIN_DIR)
     assert rj["plugin"]["digest"] == digest
-    assert rj["plugin"]["skills"] == ["placebo-method", "question-card"]
+    assert rj["plugin"]["skills"] == ["card-decision", "deck", "method"]
+    assert rj["plugin"]["skill_sources"]["method"] == "placebo-method"
 
 
 def _asm(src: Path, tmp: Path, **sw: object) -> assemble.Assembly:
@@ -106,20 +107,37 @@ def test_model_and_effort_written_from_s5(plugin_src: Path, tmp: Path) -> None:
         assert f.scalar("model") == "claude-opus-5-5" and f.scalar("effort") == effort
 
 
-@pytest.mark.parametrize("method,present,absent", [
-    ("decomposition", "decomposition-method", "placebo-method"),
-    ("placebo", "placebo-method", "decomposition-method"),
-    ("none", None, None),
+@pytest.mark.parametrize("method,names,bodies", [
+    ("decomposition", ["card-decision", "deck", "method"], ["REAL CARD", "OTHER", "REAL METHOD"]),
+    ("placebo", ["card-decision", "deck", "method"], ["PLACEBO CARD", "OTHER", "PLACEBO METHOD"]),
+    ("none", ["deck"], ["OTHER"]),
 ])
-def test_s1_copies_one_method_skill(plugin_src: Path, tmp: Path, method: str,
-                                    present: str | None, absent: str | None) -> None:
+def test_s1_selects_method_and_cards(plugin_src: Path, tmp: Path, method: str,
+                                     names: list[str], bodies: list[str]) -> None:
     a = _asm(plugin_src, tmp, s1_method=method)
     skills = sorted(p.name for p in (a.plugin_dir / "skills").iterdir())
-    assert "question-card" in skills
-    methods = {"decomposition-method", "placebo-method"} & set(skills)
-    assert methods == ({present} if present else set())
-    assert absent is None or not (a.plugin_dir / "skills" / absent).exists()
-    assert sorted(a.skills) == skills
+    assert skills == names == a.skills
+    for n, b in zip(names, bodies, strict=True):
+        assert b in (a.plugin_dir / "skills" / n / "SKILL.md").read_text()
+    # Both arms present identical names; nothing of the other arm is in the run plugin.
+    other = "PLACEBO" if method == "decomposition" else "REAL"
+    for f in (a.plugin_dir / "skills").rglob("*"):
+        assert f.is_dir() or (other not in f.read_text() or method == "none")
+
+
+def test_s1_arms_must_share_names(plugin_src: Path, tmp: Path) -> None:
+    (plugin_src / "skills" / "placebo-card-decision" / "SKILL.md").write_text(
+        "---\nname: card-other\ndescription: x\n---\nx\n")
+    with pytest.raises(PluginInvalid, match="differ in names"):
+        _asm(plugin_src, tmp, s1_method="placebo")
+    _asm(plugin_src, tmp, s1_method="none")
+
+
+def test_s1_method_skill_required(plugin_src: Path, tmp: Path) -> None:
+    import shutil
+    shutil.rmtree(plugin_src / "skills" / "placebo-method")
+    with pytest.raises(PluginInvalid, match="needs skills/placebo-method"):
+        _asm(plugin_src, tmp, s1_method="placebo")
 
 
 def test_missing_fragment_is_typed(plugin_src: Path, tmp: Path) -> None:

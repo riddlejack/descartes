@@ -86,10 +86,15 @@ def write_plugin(root: Path, *, worker_base: bool = True) -> Path:
                         ("claim-checker", "Read, Bash, mcp__plugin_stemma_stemma__get_claim"),
                         ("deciders-eye-reviewer", "Read, Write")):
         (root / "agents" / f"{role}.md").write_text(AGENT.format(name=role, tools=tools))
-    for skill in ("decomposition-method", "placebo-method", "question-card"):
-        (root / "skills" / skill).mkdir(parents=True)
-        (root / "skills" / skill / "SKILL.md").write_text(
-            f"---\nname: {skill}\ndescription: fixture\n---\nInvented skill.\n")
+    # Real and placebo versions share frontmatter names (contract v0.2.2, section 7).
+    for folder, name, body in (("decomposition-method", "method", "REAL METHOD"),
+                               ("placebo-method", "method", "PLACEBO METHOD"),
+                               ("card-decision", "card-decision", "REAL CARD"),
+                               ("placebo-card-decision", "card-decision", "PLACEBO CARD"),
+                               ("deck", "deck", "OTHER SKILL")):
+        (root / "skills" / folder).mkdir(parents=True)
+        (root / "skills" / folder / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: fixture\n---\n{body}\n")
     return root
 
 

@@ -240,6 +240,6 @@ def expectation(run_dir: Path, plugin_dir: Path, agents: list[str], skills: list
                 spec: LaunchSpec, version: str) -> canary.Expectation:
     return canary.Expectation(
         cwd=run_dir, plugin_dir=plugin_dir, agents=frozenset(agents), skills=frozenset(skills),
-        builtin_tools=frozenset(spec.tools.builtin), harness_version=bare_version(version),
+        builtin_tools=frozenset(spec.tools.main), harness_version=bare_version(version),
         session_id=None if spec.resume else spec.session_id,
     )

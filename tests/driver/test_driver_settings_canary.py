@@ -117,6 +117,7 @@ def test_lead_session_covers_worker_tools() -> None:
     t = tools_for_role("lead", tools)
     assert "WebSearch" in t.builtin and "mcp__plugin_stemma_stemma__file_claim" in t.allow
     assert "Bash" not in t.builtin
+    assert t.main == ("Agent", "Read")  # what init lists for the lead's own thread
     assert tools_for_role("claim-checker", tools).builtin == ("Bash", "ToolSearch")
     with pytest.raises(AgentFileInvalid):
         tools_for_role("evidence-auditor", tools)
