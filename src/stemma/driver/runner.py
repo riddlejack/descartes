@@ -38,7 +38,7 @@ from stemma.driver.errors import DriverBusy, DriverError, HarnessError, RunState
 from stemma.driver.launch import LaunchSpec, Session, expectation, launch
 from stemma.driver.runfolder import load_run
 from stemma.driver.settings import ToolSets, tools_for_role
-from stemma.register import checks_api, jsonl, roles, safeio
+from stemma.register import checks_api, roles, safeio
 
 # Checking roles the driver may start (invariant: section 2), short names.
 CHECK_ROLES: Final = frozenset(roles.short(r) for r in roles.CHECKING_ROLES)
