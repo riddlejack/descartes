@@ -81,6 +81,32 @@ def test_boundary_next_to_digit_split(markup: str, fused: str) -> None:
     assert find_quote(text, fused, flagged)["found"] is False
 
 
+@pytest.mark.parametrize("markup, kept", [
+    ("<p>sales of $<ix:nonFraction>394,328</ix:nonFraction> million</p>", "$394,328 million"),
+    ("<p>(<ix:nonFraction>3</ix:nonFraction>)%</p>", "(3)%"),
+    ("<p>rose <ix:nonFraction>12</ix:nonFraction>% in</p>", "rose 12% in"),
+])
+def test_xbrl_joins_with_non_number_outer_side(markup: str, kept: str) -> None:
+    text, flagged, _ = html_to_text(markup)
+    assert kept in text and not flagged
+    assert find_quote(text, kept, flagged)["found"]
+
+
+@pytest.mark.parametrize("markup, fused", [
+    ("<p><ix:nonFraction>100</ix:nonFraction><ix:nonFraction>200</ix:nonFraction></p>",
+     "100200"),                                                       # two adjacent figures
+    ("<p>1<ix:nonFraction>250</ix:nonFraction> units</p>", "1250"),   # digit outside
+    ("<p>-<ix:nonFraction>5</ix:nonFraction> million</p>", "-5"),     # sign outside
+    ("<p>1.<ix:nonFraction>5</ix:nonFraction> million</p>", "1.5"),   # separator by a digit
+    ("<p><ix:nonFraction>12</ix:nonFraction>,5 units</p>", "12,5"),   # separator after
+    ("<p><ix:nonFraction style='display:block'>100</ix:nonFraction>$</p>", "100$"),  # styled
+])
+def test_xbrl_number_forming_neighbours_split(markup: str, fused: str) -> None:
+    text, flagged, _ = html_to_text(markup)
+    assert fused not in text, text
+    assert any(r["kind"] == "element_split" for r in flagged)
+
+
 def test_inline_xbrl_tags_do_not_split() -> None:
     text, flagged, _ = html_to_text(
         "<p>net sales of $<ix:nonFraction name='us-gaap:Revenues'>391.0</ix:nonFraction> "

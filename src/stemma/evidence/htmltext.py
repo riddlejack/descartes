@@ -16,8 +16,11 @@ are removed. Before conversion:
   fails in the direction that evidences nothing: a split real number makes a quote
   fail, a fused one would invent a figure. `check_quote` refuses a match with an
   edge at a split. One exception: inline XBRL tags (`ix:` elements with no style or
-  class of their own) only tag a figure and never change how it is drawn, so
-  "$<ix:nonFraction>391.0</ix:nonFraction>" stays "$391.0";
+  class of their own) only tag a figure and never change how it is drawn, so text
+  joins across one when the character on the outer side is not number-forming
+  (not a digit, sign, or separator next to a digit): "$<ix:nonFraction>394,328
+  </ix:nonFraction>" stays "$394,328", while two adjacent ix figures, or a digit,
+  sign or separator touching one, still split;
 - hidden elements (the `hidden` attribute, inline `display:none` or
   `visibility:hidden`, `<template>`) keep their text, and its range is recorded;
 - tables with merged cells (`rowspan` or `colspan` above 1) keep their text, and
@@ -159,15 +162,39 @@ def _numeric_edge(left: str, right: str) -> bool:
     return b in _NUMBER_JOINERS and len(right) >= 2 and right[1].isdigit()
 
 
-def _only_xbrl_between(previous: Any, node: Any) -> bool:
-    """Is every element opened or closed between two strings an unstyled inline
-    XBRL tag? Those tag a figure without changing how it is drawn."""
+_SIGN_CHARS = "+-\u2212"
+
+
+def _number_forming(char: str, beside: str) -> bool:
+    """Could `char` belong to a number: a digit, a sign, or a separator next to a
+    digit (`beside` is the character on its other side)?"""
+    if char.isdigit() or char in _SIGN_CHARS:
+        return True
+    return char in ".,'\u00a0\u2009\u202f\u2019" and beside.isdigit()
+
+
+def _xbrl_join_allowed(previous: Any, node: Any) -> bool:
+    """May two strings join across this boundary? Only when the boundary is one
+    unstyled inline XBRL (`ix:`) tag being entered or left, and the character on the
+    outer side is not number-forming. So "$<ix:nonFraction>394,328</ix:nonFraction>"
+    joins, while two adjacent ix figures, or a digit, sign or separator touching an
+    ix figure, still split."""
+    def unstyled_ix(element: Any) -> bool:
+        return ((element.name or "").startswith("ix:") and not element.has_attr("style")
+                and not element.has_attr("class"))
+
     before = list(previous.parents)
     after = list(node.parents)
-    crossed = [p for p in before if p not in after] + [p for p in after if p not in before]
-    return bool(crossed) and all(
-        (p.name or "").startswith("ix:") and not p.has_attr("style") and not p.has_attr("class")
-        for p in crossed)
+    left = [p for p in before if p not in after]
+    entered = [p for p in after if p not in before]
+    text_before, text_after = str(previous), str(node)
+    if entered and not left and all(unstyled_ix(p) for p in entered):
+        outer, beside = text_before[-1], text_before[-2:-1]
+    elif left and not entered and all(unstyled_ix(p) for p in left):
+        outer, beside = text_after[0], text_after[1:2]
+    else:
+        return False
+    return not _number_forming(outer, beside)
 
 
 def _script_box(node: Any) -> Any:
@@ -193,7 +220,7 @@ def _split_boundaries(soup: Any, mark: str, ours: set[int]) -> None:
             continue
         if (previous is not None and _numeric_edge(str(previous), text)
                 and _script_box(previous) is _script_box(node)
-                and not _only_xbrl_between(previous, node)):
+                and not _xbrl_join_allowed(previous, node)):
             node.insert_before(soup.new_string(mark))
         previous = node
 

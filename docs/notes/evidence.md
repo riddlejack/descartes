@@ -9,7 +9,7 @@ on `EvidenceService` (`service.py`) and as an MCP tool registered by
 
 ## What works, and how it was shown
 
-Unit tests: `pytest tests/evidence` runs 265 tests in about a second, with no
+Unit tests: `pytest tests/evidence` runs 274 tests in about a second, with no
 network (a fake transport, a fake SEC backend, invented pages, a PDF built by hand
 in `conftest.py`). `ruff check` and `mypy --strict` pass on `src/stemma/evidence`.
 The live tests are marked `live` and skipped unless `STEMMA_LIVE=1`; they were run
@@ -356,9 +356,12 @@ Fixed by principle, each reproduced first in `tests/evidence/test_review_final.p
    Normalisation `...;word-and-number-token-edges;v5`.
 2. Element splits: at every element boundary where the text would touch and
    either side is a digit, or a separator (`.` `,` `-`) next to a digit, a space is
-   put in and recorded. Exception: unstyled inline XBRL (`ix:`) tags, which only
-   tag a figure; without it every "$<ix:nonFraction>…" amount in a filing's prose
-   would become unquotable. Live: Apple's 10-K gets 783 splits, almost all inside
+   put in and recorded. Exception (approved, narrowed): text joins across one
+   unstyled inline XBRL (`ix:`) tag when the character on the outer side is not
+   number-forming (not a digit, a sign, or a separator next to a digit), so
+   "$<ix:nonFraction>394,328</ix:nonFraction>" stays quotable; two adjacent ix
+   figures, a styled ix tag, or a digit, sign or separator touching an ix figure
+   still split. Live: Apple's 10-K gets 783 splits, almost all inside
    its hidden XBRL header, and its prose dollar amounts are untouched.
 3. No in-band markers: marker characters are chosen per document from the
    Supplementary Private Use Area among code points absent from the page's text and
