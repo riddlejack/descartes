@@ -1,4 +1,4 @@
-# Contracts between the parts (v0.2.10)
+# Contracts between the parts (v0.3)
 
 These are the interfaces the parts agree on, so they can be built in parallel. The
 design (`DESIGN-v1.md`, cited as "step n") says what the system does; this file says
@@ -318,10 +318,23 @@ Each guard has a producer in the live path, or it would block every run.
   verified.
 - **A branch reaches `answered` or `gap_accepted` only by a branch verdict saying so.**
   Producer: the branch-reviewer session the driver starts on `propose_branch_done`.
+- **`finish_run` may be called at any time**: when it refuses, it returns the full
+  list of unmet conditions, so it is also how the lead reads the gate. The lead calls
+  it after every review round.
 - **`finish_run` refuses** unless:
-  - every tree node is `answered`, `gap_accepted` or `stopped_by_limit`;
+  - every leaf node (`condition`, `rival`, and an `open_lane` that holds work) is
+    `answered`, `gap_accepted` or `stopped_by_limit`; an `option` or other parent node
+    closes when all its children have closed (derived, never set); an empty open lane
+    needs nothing. A leaf the lead does not research is still closed only by a branch
+    review: the lead files it as a branch whose record says what was not done and why,
+    and the reviewer may accept the gap or send it back;
   - `framer/critique.md` and `framer/lead-response.md` exist;
   - the three reviews exist for the draft version being released;
+  - review rounds: `max_review_rounds` in `run.json` is a recorded resource limit
+    (default 3). After the last permitted round `submit_draft` refuses another, and the
+    release lists every criticism the last round raised that the draft did not
+    resolve, in the completion statement. Reaching the limit is `stopped_by_limit`,
+    never a quality verdict;
   - every number segment in `deliverable/answer.md` is tagged, and every `c` tag names
     a claim that is not superseded and whose latest verdict is `holds`,
     `holds_with_correction` or `could_not_check`. A `could_not_check` figure is
