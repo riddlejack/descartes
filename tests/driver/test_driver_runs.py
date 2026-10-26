@@ -3,6 +3,7 @@ concurrency, resume, status files and the CLI."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import signal
@@ -75,6 +76,9 @@ def test_full_run_argv_env_canary_and_status(cfg: DriverConfig, tmp: Path, fake:
     env = {k: v for k, v in lead[0]["env"].items() if k not in OS_ADDED_ENV}
     assert set(env) == ALLOWED_ENV, sorted(set(env) ^ ALLOWED_ENV)
     assert set(scrubbed_env(cfg, run)) == ALLOWED_ENV
+    stub = dataclasses.replace(cfg, evidence_stub="1")
+    assert scrubbed_env(stub, run)["STEMMA_EVIDENCE_STUB"] == "1"
+    assert "STEMMA_EVIDENCE_STUB" not in env
     assert env["CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS"] == "1"
     assert env["STEMMA_RUN_DIR"] == str(run) and env["STEMMA_PYTHON"] == sys.executable
     assert env["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin"
@@ -263,10 +267,12 @@ def test_status_and_cli(cfg: DriverConfig, tmp: Path, fake: Fake, limits: Limits
     monkeypatch.setenv("STEMMA_CLAUDE_BIN", str(cfg.claude_bin))
     monkeypatch.setenv("STEMMA_CLAUDE_CONFIG", str(cfg.claude_config))
     monkeypatch.setenv("STEMMA_PYTHON", sys.executable)
+    monkeypatch.setenv("STEMMA_EVIDENCE_STUB", "1")
     task = write_task(tmp)
     monkeypatch.setattr("stemma.driver.runfolder.Limits", lambda: limits)
     assert main(["--plugin-src", str(cfg.plugin_src), "start", str(task)]) == 0
     run = Path(capsys.readouterr().out.strip().splitlines()[0])
+    assert all(c["env"]["STEMMA_EVIDENCE_STUB"] == "1" for c in fake.calls())
     (run / "tree.json").write_text(json.dumps({"nodes": [
         {"id": "n1", "status": "waiting_user", "statement": "Which region counts?"},
         {"id": "n2", "status": "answered", "statement": "x"}]}))

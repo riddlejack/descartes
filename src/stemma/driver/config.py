@@ -90,6 +90,7 @@ class DriverConfig:
     python: Path
     plugin_src: Path
     cache_dir: Path | None = None
+    evidence_stub: str | None = None  # STEMMA_EVIDENCE_STUB, passed to sessions when set
 
     @staticmethod
     def from_env(plugin_src: Path | None = None) -> DriverConfig:
@@ -108,7 +109,8 @@ class DriverConfig:
         py = Path(os.environ.get("STEMMA_PYTHON") or sys.executable)
         cache = os.environ.get("STEMMA_CACHE") or None
         src = plugin_src or default_plugin_src()
-        cfg = DriverConfig(runs, binary, config, py, src, Path(cache) if cache else None)
+        stub = os.environ.get("STEMMA_EVIDENCE_STUB") or None
+        cfg = DriverConfig(runs, binary, config, py, src, Path(cache) if cache else None, stub)
         cfg.check()
         return cfg
 

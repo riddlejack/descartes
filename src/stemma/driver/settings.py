@@ -133,11 +133,20 @@ def read_denials(run_dir: Path, role: str, prompt: str) -> list[str]:
     return list(dict.fromkeys(deny))
 
 
-def _deciders_eye_denials(run_dir: Path, prompt: str) -> list[str]:
+def _draft_version(prompt: str) -> str:
     m = re.fullmatch(r"draft:(\d+)", prompt)
     if not m:
         raise AgentFileInvalid(f"decider's-eye prompt must be draft:<version>, got {prompt!r}")
-    v = m.group(1)
+    return m.group(1)
+
+
+def _deciders_eye_reads(prompt: str) -> list[str]:
+    """The only run-folder paths the decider's-eye reviewer reads (section 6)."""
+    return ["task", "intake.md", f"draft/answer.v{_draft_version(prompt)}.md"]
+
+
+def _deciders_eye_denials(run_dir: Path, prompt: str) -> list[str]:
+    v = _draft_version(prompt)
     out: list[str] = list(DECIDERS_EYE_KNOWN)
     if run_dir.is_dir():
         for p in sorted(run_dir.iterdir()):
@@ -173,6 +182,13 @@ def build_settings(run_dir: Path, role: str, prompt: str, tools: ToolSets,
     transcripts = claude_config / "projects"
     deny.append(_rule_abs("Read", transcripts, folder=True))
     deny_read_abs = [_abs(run_dir, p) for p in reads] + [str(transcripts)]
+    filesystem: dict[str, Any] = {"denyWrite": deny_write_abs, "denyRead": deny_read_abs}
+    if role == "deciders-eye-reviewer":
+        # Bash: the whole run folder is unreadable except the three things the reviewer
+        # reads (allowRead takes precedence over denyRead: probe p12). The Read tool's
+        # deny rules cannot be overridden by an allow, so they enumerate (above).
+        filesystem["denyRead"] = [str(run_dir), str(transcripts)]
+        filesystem["allowRead"] = [_abs(run_dir, p) for p in _deciders_eye_reads(prompt)]
     settings: dict[str, Any] = dict(CANARY_SETTINGS)
     settings.update({
         "availableModels": list(AVAILABLE_MODELS),
@@ -183,7 +199,7 @@ def build_settings(run_dir: Path, role: str, prompt: str, tools: ToolSets,
             "allowUnsandboxedCommands": False,
             "autoAllowBashIfSandboxed": True,
             "network": {"allowedDomains": []},
-            "filesystem": {"denyWrite": deny_write_abs, "denyRead": deny_read_abs},
+            "filesystem": filesystem,
         },
     })
     return settings

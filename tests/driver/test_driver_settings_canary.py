@@ -93,8 +93,18 @@ def test_deciders_eye_reads_only_task_intake_and_its_draft(tmp: Path) -> None:
         assert f"{r}/{must}" in denied, must
     for allowed in ("task/**", "intake.md", "draft/answer.v2.md", "draft/**"):
         assert f"{r}/{allowed}" not in denied, allowed
+    fs = s["sandbox"]["filesystem"]
+    assert fs["denyRead"] == [r, "/cfg/projects"]
+    assert fs["allowRead"] == [f"{r}/task", f"{r}/intake.md", f"{r}/draft/answer.v2.md"]
     with pytest.raises(AgentFileInvalid):
         build_settings(run, "deciders-eye-reviewer", "draft:x", split_tools([]), CONFIG)
+
+
+def test_only_deciders_eye_gets_allow_read() -> None:
+    for role, prompt in (("claim-checker", "claim:a"), ("lead", "run:x"),
+                         ("blind-framer", "frame:own")):
+        fs = _settings(role, prompt)["sandbox"]["filesystem"]
+        assert "allowRead" not in fs and str(RUN) not in fs["denyRead"]
 
 
 def test_tool_split() -> None:
