@@ -92,10 +92,11 @@ HARNESS_TOOLS = frozenset(
     {"Read", "Write", "Edit", "Bash", "WebSearch", "Skill", "Agent", "ToolSearch"}
 )
 
-# Logical invariant: MCP tools load deferred in 2.1.308 (contract 2, item 4), so every
-# role with stemma tools carries this one line, identical everywhere. If part B finds
-# a setting that loads them at start, `undefer` removes the line and sets this False.
-MCP_TOOLS_DEFERRED = True
+# Logical invariant: whether MCP tools load deferred. Without `"alwaysLoad": true` in
+# plugin/.mcp.json, 2.1.308 defers them and every role with stemma tools needs this
+# one line, identical everywhere; with it (contract 2 item 4, v0.2.3) they load at
+# start, so no role carries the line or lists ToolSearch.
+MCP_TOOLS_DEFERRED = False
 DEFERRED_TOOLS_LINE = (
     "Your stemma tools load on demand: before you first use any, load the ones you need "
     "with ToolSearch, query select: followed by their full names joined by commas. "
@@ -347,8 +348,11 @@ def check_deferred(doc: Doc, errors: list[str]) -> None:
             errors.append(f"{rel(doc.path)}: needs the ToolSearch line exactly once")
         if isinstance(tools, list) and "ToolSearch" not in tools:
             errors.append(f"{rel(doc.path)}: lists stemma tools but not ToolSearch")
-    elif count:
-        errors.append(f"{rel(doc.path)}: carries the ToolSearch line it does not need")
+    else:
+        if count:
+            errors.append(f"{rel(doc.path)}: carries the ToolSearch line it does not need")
+        if isinstance(tools, list) and "ToolSearch" in tools:
+            errors.append(f"{rel(doc.path)}: lists ToolSearch, which it does not need")
 
 
 def check_role_meta(doc: Doc, expected_name: str, errors: list[str]) -> None:
@@ -718,13 +722,15 @@ def undefer() -> list[Path]:
     changed = []
     for path in role_texts():
         text = path.read_text()
-        if DEFERRED_TOOLS_LINE in text:
-            path.write_text(text.replace(DEFERRED_TOOLS_LINE + "\n", ""))
+        new = text.replace(DEFERRED_TOOLS_LINE + "\n", "").replace("  - ToolSearch\n", "")
+        if new != text:
+            path.write_text(new)
             changed.append(path)
     module = ROOT / "tools/roles/rolemap.py"
     if module.exists():
         text = module.read_text()
-        module.write_text(text.replace("MCP_TOOLS_DEFERRED = True", "MCP_TOOLS_DEFERRED = False"))
+        flag = "MCP_TOOLS_DEFERRED = "  # split so this line never matches itself
+        module.write_text(text.replace(flag + "True", flag + "False", 1))
         changed.append(module)
     return changed
 

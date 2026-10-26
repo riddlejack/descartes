@@ -1,6 +1,6 @@
 # Part C notes: the role texts and skills
 
-Builder C, against `docs/CONTRACTS.md` v0.2.2. Detail behind the report; the owner's
+Builder C, against `docs/CONTRACTS.md` v0.2.3. Detail behind the report; the owner's
 page is `<a private page>`.
 
 ## What is in the branch
@@ -17,8 +17,8 @@ page is `<a private page>`.
   four cards (`card-company-evaluation`, `card-market-sizing`, `card-decision`,
   `card-mechanism`), each with a `placebo-` twin carrying identical frontmatter.
 - `tools/roles/rolemap.py`: the lint, the lead assembly, the tool-prefix rewrite
-  (`retool`), the shared-block copy (`sync`), the removal of the ToolSearch line
-  (`undefer`), and the generator of `docs/ROLE-MAP.md`.
+  (`retool`), the shared-block copy (`sync`), the switch for deferred tools
+  (`undefer`, already run), and the generator of `docs/ROLE-MAP.md`.
 - `tools/roles/shared/branch-work.md`: the worker's branch method, copied by `sync`
   into the worker and the single-loop lead fragment, so both arms of S2 carry the same
   method. `tools/roles/skill-evidence.md`: the failure and evidence behind every
@@ -41,8 +41,7 @@ page is `<a private page>`.
 - Not shown: no role has run. Whether each text produces the behaviour it names is the
   test loop's question. Unverified on the pinned 2.1.308: `Agent(stemma:worker)` as the
   lead's spawn allowlist under `--agent` (the documented syntax for main-thread agents,
-  with the plugin-scoped name as my reading); that the deferred-tool line is enough for
-  each role to load its tools; that two skills sharing `name: method` never both load
+  with the plugin-scoped name as my reading); that two skills sharing `name: method` never both load
   (the driver copies one).
 
 ## Decisions and interpretations (each open to correction)
@@ -87,9 +86,11 @@ page is `<a private page>`.
     design ranks most likely, and the blind review removed four more (below).
 14. **Tools.** Grep and Glob are gone (not tools in 2.1.308). Read-only checkers have
     no Bash: they know their paths from their id and the contract. The retrospective
-    writer has Bash to list the run folder. Every role with stemma tools lists
-    ToolSearch and carries one identical line telling it to load them first; `undefer`
-    removes that line everywhere if B finds a setting that loads tools at start.
+    writer has Bash to list the run folder. Stemma tools load at start
+    (`"alwaysLoad": true` in B's `plugin/.mcp.json`, contract v0.2.3), so roles call them
+    directly and list no ToolSearch; the lint rejects both. If a later harness defers
+    them again, set `MCP_TOOLS_DEFERRED = True` in the lint, which then requires one
+    identical ToolSearch line (`DEFERRED_TOOLS_LINE`) in every role with stemma tools.
 
 ## The placebo, and how it was made neutral
 
@@ -182,4 +183,3 @@ are not provisional.
 - The driver's lead assembly is `rolemap.assemble_lead(choice)`; B may import it or
   reimplement it, in the contract's order (s1, s2, s3, s4, s6).
 - `await_checks` should accept branch ids and draft versions (decision 9).
-- If tools can be loaded at start, run `python tools/roles/rolemap.py undefer`.

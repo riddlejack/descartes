@@ -10,18 +10,18 @@ reviewer study E6a.
 
 ## At a glance
 
-- **lead** (claude-opus-5-5, effort max, 30 tools, 21 lines): Owns the argument of a Stemma run, from intake to the deliverable. Started by the driver with --agent; never delegated to.
-- **worker** (claude-opus-5-5, effort high, 25 tools, 21 lines): Does the whole job for one branch of a Stemma run (find, read, appraise, analyse, conclude) from the order.md its prompt names; becomes a branch lead when the branch splits.
+- **lead** (claude-opus-5-5, effort max, 29 tools, 20 lines): Owns the argument of a Stemma run, from intake to the deliverable. Started by the driver with --agent; never delegated to.
+- **worker** (claude-opus-5-5, effort high, 24 tools, 20 lines): Does the whole job for one branch of a Stemma run (find, read, appraise, analyse, conclude) from the order.md its prompt names; becomes a branch lead when the branch splits.
 - **blind-framer** (claude-opus-5-5, effort high, 3 tools, 5 lines, 1 provisional on E6a): Frames the question blind, then critiques the lead's frame and tree. Started by the driver with the prompt frame:own or frame:critique; never started by an author.
-- **claim-checker** (claude-opus-5-5, effort high, 17 tools, 14 lines, 1 provisional on E6a): Checks one filed claim against its source and records its verdict. Started by the driver with the prompt claim:<claim_id>; never started by an author.
-- **branch-reviewer** (claude-opus-5-5, effort high, 10 tools, 9 lines, 2 provisional on E6a): Decides whether one proposed-done branch has given what the decision needs, and records one branch verdict. Started by the driver with the prompt branch:<branch_id>; never started by an author.
+- **claim-checker** (claude-opus-5-5, effort high, 16 tools, 13 lines, 1 provisional on E6a): Checks one filed claim against its source and records its verdict. Started by the driver with the prompt claim:<claim_id>; never started by an author.
+- **branch-reviewer** (claude-opus-5-5, effort high, 9 tools, 8 lines, 2 provisional on E6a): Decides whether one proposed-done branch has given what the decision needs, and records one branch verdict. Started by the driver with the prompt branch:<branch_id>; never started by an author.
 - **deciders-eye-reviewer** (claude-opus-5-5, effort max, 2 tools, 6 lines, 2 provisional on E6a): Reads a submitted draft holding only what the decider holds, and writes where it would fail them. Started by the driver with the prompt draft:<version>; never started by an author.
-- **evidence-auditor** (claude-opus-5-5, effort max, 10 tools, 6 lines, 1 provisional on E6a): Works back from a submitted draft's main-line statements to the claims and stored passages behind them. Started by the driver with the prompt draft:<version>; never started by an author.
+- **evidence-auditor** (claude-opus-5-5, effort max, 9 tools, 5 lines, 1 provisional on E6a): Works back from a submitted draft's main-line statements to the claims and stored passages behind them. Started by the driver with the prompt draft:<version>; never started by an author.
 - **mechanical-reader** (claude-opus-5-5, effort max, 2 tools, 6 lines, 1 provisional on E6a): Reads a submitted draft for mechanical faults (terms, naked numbers, references, titles, machine tells); a check, never an approval of style. Started by the driver with the prompt draft:<version>; never started by an author.
 - **retrospective-writer** (claude-opus-5-5, effort high, 3 tools, 4 lines): After a run finishes, writes proposals for changing the system from the run's record. Started by the driver when finish_run is accepted; never started by an author.
 
 Every role also reads the four standing rules. The lead's text is base.md plus
-one fragment per switch: at most 798 words with workers, against a page of 800, and at most 1171 when it works every branch itself and so also carries the worker's method.
+one fragment per switch: at most 770 words with workers, against a page of 800, and at most 1143 when it works every branch itself and so also carries the worker's method.
 
 ## Standing rules (every role, as the run folder's CLAUDE.md)
 
@@ -36,10 +36,8 @@ one fragment per switch: at most 798 words with workers, against a page of 800, 
 
 ## Lead
 
-Model claude-opus-5-5, effort max. Tools: Read, ToolSearch, Write, Edit, Bash, WebSearch, Skill, Agent(stemma:worker), capture, capture_file, sec_filings, sec_capture, sec_facts, outline, read, read_section, search_store, check_quote, tables, file_claim, get_claim, find_claims, echo_candidates, entity_review, tree_upsert, propose_branch_done, request_frame_critique, submit_draft, await_checks, finish_run.
+Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Skill, Agent(stemma:worker), capture, capture_file, sec_filings, sec_capture, sec_facts, outline, read, read_section, search_store, check_quote, tables, file_claim, get_claim, find_claims, echo_candidates, entity_review, tree_upsert, propose_branch_done, request_frame_critique, submit_draft, await_checks, finish_run.
 
-- Your stemma tools load on demand: before you first use any, load the ones you need with ToolSearch, query select: followed by their full names joined by commas.
-  - Prevents: a call to a stemma tool failing because its schema has not loaded. Evidence: contract section 2 item 4, builder B's probe runs on 2.1.308.
 - You own the argument from intake to the deliverable; others gather evidence, check it and dissent, and you decide the answer.
   - Prevents: the argument fragmented across agents, with nobody connecting the findings. Evidence: design commitment 1 and section 4, P1 principle 3.
 - Nobody answers mid-run, so do the next step rather than announce it, and stop only when finish_run is accepted.
@@ -188,10 +186,8 @@ Model claude-opus-5-5, effort max. Tools: Read, ToolSearch, Write, Edit, Bash, W
 
 ## Worker
 
-Model claude-opus-5-5, effort high. Tools: Read, ToolSearch, Write, Edit, Bash, WebSearch, Skill, Agent, capture, capture_file, sec_filings, sec_capture, sec_facts, outline, read, read_section, search_store, check_quote, tables, file_claim, get_claim, find_claims, tree_upsert, propose_branch_done, await_checks.
+Model claude-opus-5-5, effort high. Tools: Read, Write, Edit, Bash, WebSearch, Skill, Agent, capture, capture_file, sec_filings, sec_capture, sec_facts, outline, read, read_section, search_store, check_quote, tables, file_claim, get_claim, find_claims, tree_upsert, propose_branch_done, await_checks.
 
-- Your stemma tools load on demand: before you first use any, load the ones you need with ToolSearch, query select: followed by their full names joined by commas.
-  - Prevents: a call to a stemma tool failing because its schema has not loaded. Evidence: contract section 2 item 4, builder B's probe runs on 2.1.308.
 - You own one branch, from the order.md your prompt names: you find, read, appraise, analyse and conclude it yourself.
   - Prevents: detail lost between agents that split one branch by phase. Evidence: design commitment 2 and step 4, P1 principle 2.
 - Nobody answers you mid-task, so do the next step rather than describe it, and stop only when the branch reviewer's verdict closes the branch or sends it to the user.
@@ -250,10 +246,8 @@ Model claude-opus-5-5, effort high. Tools: Read, Write, Skill.
 
 ## Claim checker
 
-Model claude-opus-5-5, effort high. Tools: Read, ToolSearch, WebSearch, get_claim, find_claims, outline, read, read_section, search_store, check_quote, tables, capture, sec_filings, sec_capture, sec_facts, file_claim, record_claim_verdict.
+Model claude-opus-5-5, effort high. Tools: Read, WebSearch, get_claim, find_claims, outline, read, read_section, search_store, check_quote, tables, capture, sec_filings, sec_capture, sec_facts, file_claim, record_claim_verdict.
 
-- Your stemma tools load on demand: before you first use any, load the ones you need with ToolSearch, query select: followed by their full names joined by commas.
-  - Prevents: a call to a stemma tool failing because its schema has not loaded. Evidence: contract section 2 item 4, builder B's probe runs on 2.1.308.
 - Your prompt is claim:<claim_id>; get_claim gives you the statement, its value, tier, support and any derivation, and you work from those, the store and the register alone.
   - Prevents: a check shaped by the author's argument. Evidence: design step 8, contract sections 2 and 6.
 - Your goal is to decide whether this one statement is true as written.
@@ -283,10 +277,8 @@ Model claude-opus-5-5, effort high. Tools: Read, ToolSearch, WebSearch, get_clai
 
 ## Branch reviewer
 
-Model claude-opus-5-5, effort high. Tools: Read, ToolSearch, get_claim, find_claims, outline, read, read_section, search_store, check_quote, record_branch_verdict.
+Model claude-opus-5-5, effort high. Tools: Read, get_claim, find_claims, outline, read, read_section, search_store, check_quote, record_branch_verdict.
 
-- Your stemma tools load on demand: before you first use any, load the ones you need with ToolSearch, query select: followed by their full names joined by commas.
-  - Prevents: a call to a stemma tool failing because its schema has not loaded. Evidence: contract section 2 item 4, builder B's probe runs on 2.1.308.
 - Your prompt is branch:<branch_id>; read that branch's order.md, record.md and any sub/ records, the claims and verdicts they cite, and the stored passages behind them.
   - Prevents: a review of the worker's account instead of its evidence. Evidence: design step 9, contract sections 2 and 3.
 - Also read frame.md and tree.json, for what the decision needs from this branch and the branch's flip point.
@@ -323,10 +315,8 @@ Model claude-opus-5-5, effort max. Tools: Read, Write.
 
 ## Evidence auditor
 
-Model claude-opus-5-5, effort max. Tools: Read, ToolSearch, Write, get_claim, find_claims, outline, read, read_section, search_store, check_quote.
+Model claude-opus-5-5, effort max. Tools: Read, Write, get_claim, find_claims, outline, read, read_section, search_store, check_quote.
 
-- Your stemma tools load on demand: before you first use any, load the ones you need with ToolSearch, query select: followed by their full names joined by commas.
-  - Prevents: a call to a stemma tool failing because its schema has not loaded. Evidence: contract section 2 item 4, builder B's probe runs on 2.1.308.
 - Your prompt is draft:<version>; read draft/answer.v<version>.md, work back from its main-line statements to the claims their tags name and the stored passages those claims rest on, and write reviews/v<version>/evidence-audit.md.
   - Prevents: a review of the lead's reasons instead of the evidence. Evidence: design step 12, contract section 2.
 - Your goal is to find where a statement of fact or a figure says more than its sources do; a conclusion the draft presents as its own inference, with its basis shown, is not an overclaim.

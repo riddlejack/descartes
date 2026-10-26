@@ -226,15 +226,15 @@ def test_grep_and_glob_are_not_tools(rm: ModuleType) -> None:
     assert "Grep is not an allowed harness tool" in errors_of(rm)
 
 
-def test_missing_toolsearch_line_fails(rm: ModuleType) -> None:
-    edit(rm.AGENTS_DIR / "claim-checker.md", rm.DEFERRED_TOOLS_LINE + "\n", "")
-    assert "needs the ToolSearch line exactly once" in errors_of(rm)
-
-
-def test_toolsearch_line_without_stemma_tools_fails(rm: ModuleType) -> None:
-    reviewer = rm.AGENTS_DIR / "mechanical-reader.md"
-    reviewer.write_text(reviewer.read_text() + rm.DEFERRED_TOOLS_LINE + "\n")
+def test_toolsearch_line_when_tools_load_at_start_fails(rm: ModuleType) -> None:
+    worker = rm.AGENTS_DIR / "worker.md"
+    worker.write_text(worker.read_text() + rm.DEFERRED_TOOLS_LINE + "\n")
     assert "does not need" in errors_of(rm)
+
+
+def test_toolsearch_tool_when_tools_load_at_start_fails(rm: ModuleType) -> None:
+    edit(rm.AGENTS_DIR / "worker.md", "  - Read\n", "  - Read\n  - ToolSearch\n")
+    assert "lists ToolSearch" in errors_of(rm)
 
 
 def test_shared_block_edited_in_one_role_fails(rm: ModuleType) -> None:
@@ -261,7 +261,10 @@ def test_single_loop_lead_carries_the_worker_method(rm: ModuleType) -> None:
 
 
 def test_undefer_removes_every_toolsearch_line(rm: ModuleType) -> None:
+    worker = rm.AGENTS_DIR / "worker.md"
+    edit(worker, "  - Read\n", "  - Read\n  - ToolSearch\n")
+    worker.write_text(worker.read_text() + rm.DEFERRED_TOOLS_LINE + "\n")
     rm.undefer()
-    for path in rm.role_texts():
-        assert rm.DEFERRED_TOOLS_LINE not in path.read_text()
+    assert rm.DEFERRED_TOOLS_LINE not in worker.read_text()
+    assert "ToolSearch" not in worker.read_text()
     assert "MCP_TOOLS_DEFERRED = False" in (rm.ROOT / "tools/roles/rolemap.py").read_text()
