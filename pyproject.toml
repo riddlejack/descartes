@@ -30,6 +30,7 @@ dev = ["pytest==9.1.1", "ruff==0.17.2", "mypy==2.4.0"]
 
 [project.scripts]
 stemma-mcp = "stemma.mcp_server:main"
+stemma = "stemma.driver.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/stemma"]
