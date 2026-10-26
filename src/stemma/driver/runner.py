@@ -24,14 +24,14 @@ from pathlib import Path
 from types import FrameType
 from typing import Any, Final, Protocol, cast
 
-from stemma.driver import canary, events, frontmatter, hostio, status, verify
+from stemma.driver import canary, events, frontmatter, hostio, status, usage, verify
 from stemma.driver.assemble import folder_digest, sha256_bytes
 from stemma.driver.config import LOCK_FILE, PLUGIN_DIR, STATE_FILE, DriverConfig, Limits
 from stemma.driver.errors import DriverBusy, DriverError, HarnessError, RunStateError
 from stemma.driver.launch import LaunchSpec, Session, expectation, launch
 from stemma.driver.runfolder import load_run
 from stemma.driver.settings import ToolSets, tools_for_role
-from stemma.register import checks_api, roles, safeio
+from stemma.register import checks_api, jsonl, roles, safeio
 
 # Checking roles the driver may start (invariant: section 2), short names.
 CHECK_ROLES: Final = frozenset(roles.short(r) for r in roles.CHECKING_ROLES)
@@ -203,6 +203,9 @@ class Driver:
         # Checks to launch again, by request id, with the end of their last session; they
         # wait their turn with the pending checks (see step).
         self.relaunch_due: dict[str, tuple[CheckRequestLike, str | None, str | None]] = {}
+        self.usage_summary = usage.summary(usage.read_records(self.run_dir))
+        self.milestones = usage.Milestones(self.run_dir / events.EVENTS)
+        self._reg: Any = None  # the register, opened when a claim's branch is first needed
         self.exit_code = 0
 
     # ----- state -------------------------------------------------------------------
@@ -431,6 +434,11 @@ class Driver:
         s.reap(self.limits.stop_grace_s)
         self._scan_transcripts(live, final=True)
         outcome = self._outcome(s)
+        try:
+            self._record_usage(name, live, outcome)
+        except Exception as exc:  # noqa: BLE001 - accounting never stops a run; it is loud
+            events.emit(self.run_dir, "usage_not_recorded", session=name,
+                        error=f"{type(exc).__name__}: {exc}")
         if outcome == "rate_limited":
             self.state["usage_limited"] = True
         code = s.proc.returncode if s.proc.returncode is not None else -1
@@ -477,6 +485,61 @@ class Driver:
         last: dict[str, Any] = {"result": str(r.get("result") or "")[:4000], **summary}
         lead.update({"running": False, "exit_code": code, "outcome": outcome, "result": last})
         self._save_state()
+
+    # ----- token accounting -------------------------------------------------------------
+    def _branch_of(self, s: Session) -> tuple[str | None, str | None]:
+        prompt = s.spec.prompt
+        if prompt.startswith("branch:"):
+            return prompt.split(":", 1)[1], "the check's prompt"
+        if prompt.startswith("claim:"):
+            try:
+                if self._reg is None:
+                    from stemma.register.store import open_register  # the register (part B)
+
+                    self._reg = open_register(self.run_dir)
+                return self._reg.get_claim(prompt.split(":", 1)[1]).get("branch_id"), \
+                    "the claim's branch_id"
+            except Exception:  # noqa: BLE001 - an unknown claim leaves the branch unknown
+                return None, None
+        return None, None
+
+    def _record_usage(self, name: str, live: Live, outcome: str) -> None:
+        """One usage record for the session's own thread and one per subagent, counted
+        from their transcripts within this launch's time window."""
+        s = live.session
+        end = time.time()
+        starts = usage.phase_starts(self.milestones.update())
+        sid = (s.init or {}).get("session_id") or s.spec.session_id
+        main = live.tail.path if live.tail is not None else verify.find_transcript(
+            self.cfg.claude_config, self.run_dir, s.init, sid)
+        branch, branch_source = self._branch_of(s)
+        base = {"session": name, "session_id": sid, "request_id": s.spec.request_id,
+                "prompt": s.spec.prompt, "expected_model": s.spec.model,
+                "expected_effort": s.spec.effort, "launched_at": usage.iso(s.started_wall),
+                "ended_at": usage.iso(end), "outcome": outcome}
+        records = []
+        mine = usage.in_window(usage.read_messages(main), s.started_wall, end) if main else []
+        records.append({"kind": "session", "role": s.spec.role, **base,
+                        "branch": branch, "branch_source": branch_source,
+                        "wall_s": round(end - s.started_wall, 1),
+                        "transcript_found": main is not None,
+                        "harness": usage.harness_figures(s.result),
+                        "cost_note": usage.COST_NOTE, **usage.tally(mine, starts)})
+        for sub in sorted(live.subagents.values(), key=lambda x: x.agent_id):
+            msgs = usage.in_window(usage.read_messages(sub.tail.path), s.started_wall, end)
+            if not msgs:
+                continue  # an earlier launch's subagent, already counted then
+            t = usage.tally(msgs, starts)
+            wall = msgs[-1].at - msgs[0].at
+            records.append({"kind": "subagent", "role": roles.short(sub.agent_type or "unknown"),
+                            **base, "agent_id": sub.agent_id, "agent_type": sub.agent_type,
+                            "spawn_depth": sub.spawn_depth,
+                            "branch": usage.branch_from_brief(sub.tail.path),
+                            "branch_source": "the first branches/<id>/ its brief names",
+                            "wall_s": round(wall, 1), "harness": None,
+                            "cost_note": "inside the parent session's cost estimate", **t})
+        jsonl.append(self.run_dir / usage.USAGE_FILE, *records)
+        self.usage_summary = usage.summary(usage.read_records(self.run_dir))
 
     def _revoke_and_relaunch(self, s: Session, code: int) -> None:
         rid = s.spec.request_id
@@ -562,7 +625,8 @@ class Driver:
         landed = [{"path": k, "at": v[3]} for k, v in sorted(self.state["artifacts"].items(),
                                                              key=lambda kv: kv[1][3])]
         status.write(self.run_dir, status.build(self.run_dir, self.run_id, state, lead, checks,
-                                                landed, outcome or self.state.get("outcome")))
+                                                landed, outcome or self.state.get("outcome"),
+                                                usage=self.usage_summary))
 
     def _live_checks(self) -> int:
         return sum(1 for lv in self.live.values() if lv.session.spec.request_id is not None)
@@ -675,6 +739,7 @@ class Driver:
         events.emit(self.run_dir, "driver_finished", exit_code=code, outcome=outcome,
                     lead_outcome=self.state["lead"].get("outcome"))
         self.write_status("finished" if outcome == "released" else "stopped", outcome)
+        usage.write_md(self.run_dir, self.run_id, self.usage_summary)
         return code
 
 

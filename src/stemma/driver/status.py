@@ -53,7 +53,7 @@ def waiting_on_user(run_dir: Path) -> list[dict[str, Any]]:
 
 def build(run_dir: Path, run_id: str, state: str, lead: dict[str, Any],
           checks: list[dict[str, Any]], landed: list[dict[str, Any]],
-          outcome: str | None = None) -> dict[str, Any]:
+          outcome: str | None = None, usage: dict[str, Any] | None = None) -> dict[str, Any]:
     alerts = [e for e in events.read(run_dir) if e.get("event") in events.LOUD]
     return {
         "run_id": run_id,
@@ -70,6 +70,7 @@ def build(run_dir: Path, run_id: str, state: str, lead: dict[str, Any],
         "waiting_on_user": waiting_on_user(run_dir),
         "lead_last_message": (lead.get("result") or {}).get("result"),
         "alerts": alerts,
+        "usage": usage,
     }
 
 
@@ -77,6 +78,25 @@ def _li(items: list[str]) -> str:
     if not items:
         return "<p>None.</p>"
     return "<ul>" + "".join(f"<li>{i}</li>" for i in items) + "</ul>"
+
+
+def _usage_html(u: dict[str, Any] | None) -> str:
+    if not u or not u.get("by_role"):
+        return "<p>No session has ended yet.</p>"
+    e = html.escape
+
+    def tok(t: dict[str, int]) -> str:
+        return (f"{t['input_tokens']:,} input, {t['output_tokens']:,} output, "
+                f"{t['cache_creation_input_tokens']:,} written to cache, "
+                f"{t['cache_read_input_tokens']:,} read from cache")
+
+    rows = [f"Whole run: {tok(u['tokens'])}; cost estimate ${u['cost_estimate_usd']:,.2f}"]
+    rows += [f"{e(role)} ({row['sessions']}): {tok(row['tokens'])}"
+             + (f"; cost estimate ${row['cost_estimate_usd']:,.2f}"
+                if "subagent" not in role else "")
+             for role, row in sorted(u["by_role"].items())]
+    rows += [f"Phase {e(ph)}: {tok(t)}" for ph, t in u.get("by_phase", {}).items()]
+    return _li(rows) + f"<p>{e(u['cost_note'])}. Phases are {e(u['phase_note'])}.</p>"
 
 
 def render_html(st: dict[str, Any]) -> str:
@@ -114,6 +134,7 @@ def render_html(st: dict[str, Any]) -> str:
         "<h2>Checks waiting to start</h2>", _li([check_line(c)
                                                  for c in st["checks"]["pending"]]),
         "<h2>Checks finished</h2>", _li([check_line(c) for c in st["checks"]["ended"]]),
+        "<h2>Token use (ended sessions)</h2>", _usage_html(st.get("usage")),
         "<h2>What has landed</h2>",
         _li([f"{e(a['path'])} ({e(a['at'])})" for a in st["landed"]]),
         "</body></html>\n",

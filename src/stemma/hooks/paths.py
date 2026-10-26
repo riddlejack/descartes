@@ -49,7 +49,8 @@ def _parts(rel: PurePosixPath) -> tuple[str, ...]:
 # files that configure later sessions (`CLAUDE.md`, `.claude/`), which no agent may change.
 _TOOL_ONLY_TOP = frozenset(
     {"store", "register", "tree.json", "tree.md", "events.jsonl", "run.json", "status.json",
-     "status.html", "task", "claude.md", ".claude", ".stemma", "reviews", "deliverable"}
+     "status.html", "usage.jsonl", "usage.md", "task", "claude.md", ".claude", ".stemma",
+     "reviews", "deliverable"}
 )
 # Tool-written files inside an otherwise author-written folder (casefolded).
 _TOOL_ONLY_FILES = frozenset({("framer", "own-frame.md"), ("framer", "critique.md")})

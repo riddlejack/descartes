@@ -52,6 +52,7 @@ FRAMER_OWN_DENY: Final = (
 DECIDERS_EYE_KNOWN: Final = (
     "frame.md", "history/", "tree.json", "tree.md", "framer/", "branches/", "store/",
     "analysis/", "deliverable/", "events.jsonl", "status.json", "status.html",
+    "usage.jsonl", "usage.jsonl.lock", "usage.md",
     "retro.md", "run.json", "draft/",
     # register/ holds the frozen draft the reviewer reads; everything else in it is denied.
     "register/log.jsonl", "register/log.jsonl.lock", "register/checks.jsonl",
