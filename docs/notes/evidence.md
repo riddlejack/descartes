@@ -9,7 +9,7 @@ on `EvidenceService` (`service.py`) and as an MCP tool registered by
 
 ## What works, and how it was shown
 
-Unit tests: `pytest tests/evidence` runs 136 tests in about a second, with no
+Unit tests: `pytest tests/evidence` runs 142 tests in about a second, with no
 network (a fake transport, a fake SEC backend, invented pages, a PDF built by hand
 in `conftest.py`). `ruff check` and `mypy --strict` pass on `src/stemma/evidence`.
 The live tests are marked `live` and skipped unless `STEMMA_LIVE=1`; they were run
@@ -161,10 +161,18 @@ document (1,503,889 bytes, 269,262 characters, `ok`, 0.34 s);
 `sec_facts(..., "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
 filed_before="2025-01-01", form="10-K")` returned 34 as-filed facts from 6
 filings, every one with its filing's receipt; 10 periods appear in more than one
-filing, each version kept as its own row. Gap: a 10-K's HTML has no heading tags,
-so its outline is empty; reading by offset and searching work, but there are no
-"Item 7" anchors. An outline built from SEC's Item headings would be a small
-addition.
+filing, each version kept as its own row. A filing's HTML has no heading tags, so `sec_outline.py` adds Item anchors for
+10-K, 10-Q and 8-K captures (and amendments): Item heading lines outside tables,
+the last per (Part, Item) so a contents list loses to the body, cross-references
+such as "Item 7 of this report" ignored, each section ending at the next Item or
+Part. Anchors are `item-7`, `item-1a`, `item-2.02`, or `part-ii-item-1` where a
+10-Q repeats an id across parts; `read_section` jumps to them. Unit-tested on
+invented 10-K, 10-Q and 8-K shapes (styled headings, a contents table, a
+plain-text contents list, a title on the next line). Live (Apple, filed before
+2025): the 10-K got all 27 Part and Item anchors, Item 7 running 19,218
+characters; the 10-Q got Part I and Part II items told apart; the 8-K got Items
+2.02 and 9.01. A filing captured first through plain `capture` keeps the outline
+of that first extraction, without Items.
 
 ## Docling table view (optional extra `evidence-tables`)
 `tables(sha256)` converts the stored bytes with Docling once, keeps the result in

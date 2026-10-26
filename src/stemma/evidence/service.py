@@ -14,7 +14,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from stemma.evidence import limits
+from stemma.evidence import limits, sec_outline
 from stemma.evidence.archive import Archive
 from stemma.evidence.cache import RequestCache, request_key
 from stemma.evidence.errors import HAS_TEXT, CaptureStatus, EvidenceError
@@ -182,6 +182,13 @@ class EvidenceService:
             self._reuse_extraction(receipt, sha, earlier)
             return
         result = extract(body, declared_type, name_hint)
+        form = (receipt.get("sec") or {}).get("form")
+        if result.text and sec_outline.applies_to(form):
+            items = sec_outline.item_outline(result.text)
+            if items:
+                result.outline = sorted(result.outline + items, key=lambda e: int(e["start"]))
+            else:
+                result.warnings.append(f"sec_items_not_found: no Item headings in this {form}")
         receipt["status"] = result.status
         receipt["content_type"] = result.content_type
         receipt["charset"] = result.charset

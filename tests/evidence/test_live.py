@@ -97,7 +97,25 @@ def test_live_sec_filing_and_facts() -> None:
     periods: dict[tuple[Any, Any], set[Any]] = {}
     for fact in facts["facts"]:
         periods.setdefault((fact["start"], fact["end"]), set()).add(fact["accession"])
+    items: dict[str, Any] = {}
+    for form in ("10-K", "10-Q", "8-K"):
+        found = svc.sec_filings("AAPL", form=form, filed_before="2025-01-01")["filings"][0]
+        receipt = filing if form == "10-K" else svc.sec_capture(found["accession"])
+        assert receipt["status"] == "ok", receipt
+        outline = svc.outline(receipt["sha256"])["outline"]
+        anchors = [o["anchor"] for o in outline if o["kind"] in ("sec_item", "sec_part")]
+        assert any(a.endswith("item-1a") or a.endswith("item-2.02") or a.endswith("item-9.01")
+                   for a in anchors), anchors
+        first = svc.read_section(receipt["sha256"], next(
+            o["anchor"] for o in outline if o["kind"] == "sec_item"))
+        items[form] = {"accession": found["accession"], "anchors": anchors,
+                       "first_section_title": first["title"],
+                       "first_section_chars": first["section_end"] - first["start"]}
+    mda = svc.read_section(filing["sha256"], "item-7")
+    assert mda["text"].lstrip("#* ").lower().startswith("item 7")
+    items["10-K"]["item_7_chars"] = mda["section_end"] - mda["start"]
     write("sec", {
+        "items": items,
         "listing_count": len(listing["filings"]), "latest": latest, "filing": summary(filing),
         "facts_count": len(facts["facts"]),
         "periods_reported_in_more_than_one_filing": sum(1 for v in periods.values() if len(v) > 1),

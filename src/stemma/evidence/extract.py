@@ -92,7 +92,7 @@ def extractor_versions() -> dict[str, str]:
 
 
 # Invariant: bumped whenever this module's rules change the text it produces.
-EXTRACT_RULES_VERSION = "2"
+EXTRACT_RULES_VERSION = "3"
 
 
 def sniff_content_type(declared: str | None, body: bytes, name_hint: str = "") -> str:
