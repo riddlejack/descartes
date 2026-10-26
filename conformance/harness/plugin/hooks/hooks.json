@@ -1,0 +1,7 @@
+{"hooks": {
+  "PreToolUse": [
+    {"matcher": "*", "hooks": [{"type": "command", "command": "${PROBE_PY} ${CLAUDE_PLUGIN_ROOT}/hooks/pre.py", "onFailure": "block"}]},
+    {"matcher": "Write", "hooks": [{"type": "command", "command": "/nonexistent/python ${CLAUDE_PLUGIN_ROOT}/hooks/pre.py", "onFailure": "block"}]}
+  ],
+  "SubagentStart": [{"hooks": [{"type": "command", "command": "${PROBE_PY} ${CLAUDE_PLUGIN_ROOT}/hooks/log.py SubagentStart"}]}]
+}}

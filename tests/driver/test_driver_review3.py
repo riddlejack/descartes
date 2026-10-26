@@ -1,0 +1,61 @@
+"""The Codex recheck's driver items on a6929ff, fake binary.
+
+(1) a revocation that cannot be completed blocks the release and the run says why;
+(3) a release that a later revocation undermines is withdrawn, and the outcome follows;
+    checking sessions are verified at their end before their records count.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from driverkit import Fake, write_task
+
+from stemma.driver import events
+from stemma.driver.config import DriverConfig, Limits
+from stemma.driver.runfolder import create_run
+from stemma.driver.runner import OUTCOME_CODES, start
+from stemma.register import checks_api
+
+
+def kinds(run: Path, kind: str) -> list[dict[str, Any]]:
+    return [e for e in events.read(run) if e["event"] == kind]
+
+
+def test_failed_revocation_blocks_the_release(cfg: DriverConfig, tmp: Path, fake: Fake,
+                                              limits: Limits) -> None:
+    fake.configure({"lead": {"sleep_s": 0.3}, "blind-framer": {"transcript_effort": "low",
+                                                                "sleep_s": 0.3}})
+    run = create_run(cfg, write_task(tmp), limits=limits)
+
+    def broken_revoke(_run: Path, _sid: str, _why: str) -> None:
+        raise OSError("register unavailable")
+
+    code = start(cfg, run, checks_api, limits, released=lambda _r: True,
+                 revoke=broken_revoke)
+    # Even with the register claiming a release, the run is not released.
+    assert code == OUTCOME_CODES["revocation_failed"]
+    assert kinds(run, "revoke_failed")
+    assert any("register unavailable" in r for r in checks_api.release_blocks(run))
+    assert kinds(run, "driver_finished")[-1]["outcome"] == "revocation_failed"
+
+
+def test_checking_sessions_are_verified_at_their_end(cfg: DriverConfig, tmp: Path, fake: Fake,
+                                                     limits: Limits) -> None:
+    fake.configure({"lead": {"sleep_s": 0.3}, "blind-framer": {"sleep_s": 0.2}})
+    run = create_run(cfg, write_task(tmp), limits=limits)
+    start(cfg, run, checks_api, limits)
+    framer = next(c for c in fake.calls() if c["role"] == "blind-framer")
+    assert framer["session_id"] in checks_api.verified_sessions(run)
+    assert kinds(run, "session_verified")
+
+
+def test_wrong_model_session_is_never_verified(cfg: DriverConfig, tmp: Path, fake: Fake,
+                                               limits: Limits) -> None:
+    fake.configure({"lead": {"sleep_s": 0.3},
+                    "blind-framer": {"transcript_effort": "low", "sleep_s": 0.3}})
+    run = create_run(cfg, write_task(tmp), limits=limits)
+    start(cfg, run, checks_api, limits, revoke=lambda *_a: None)
+    framers = [c["session_id"] for c in fake.calls() if c["role"] == "blind-framer"]
+    assert not set(framers) & checks_api.verified_sessions(run)

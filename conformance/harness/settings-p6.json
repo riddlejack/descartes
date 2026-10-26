@@ -1,0 +1,5 @@
+{"syncClaudeAiPlugins": false, "syncClaudeAiSkills": false, "disableClaudeAiConnectors": true, "disableBundledSkills": true,
+ "skillOverrides": {"design": "off", "doctor": "off"},
+ "enabledPlugins": {"cc-plugin-agents-md@builtin": false, "cc-plugin-telemetry@builtin": false, "cc-plugin-plugin-authoring@builtin": false},
+ "availableModels": ["claude-opus-5-5", "claude-fable-5-1"],
+ "permissions": {"deny": ["WebFetch", "Agent(fork)"], "allow": ["Bash(echo:*)", "Write", "Agent(stemma:plain)", "mcp__plugin_stemma_stemma__echo"]}}

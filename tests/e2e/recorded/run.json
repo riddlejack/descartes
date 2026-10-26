@@ -1,0 +1,199 @@
+{
+ "as_of": null,
+ "created_at": "2026-10-26T06:56:36Z",
+ "harness": {
+  "binary": "<HOME>/.private/runs/tools/claude-code-2.1.308/node_modules/.bin/claude",
+  "config_dir": "<HOME>/.private/runs/tools/claude-clean-config",
+  "version": "2.1.308 (Claude Code)"
+ },
+ "limits": {
+  "check_max_s": 10800.0,
+  "init_timeout_s": 180.0,
+  "lead_max_s": 86400.0,
+  "max_check_attempts": 3,
+  "max_concurrent_checks": 4,
+  "poll_interval_s": 2.0,
+  "stderr_tail_bytes": 2000,
+  "stop_grace_s": 10.0
+ },
+ "models": {
+  "blind-framer": {
+   "effort": "low",
+   "model": "claude-opus-5-5"
+  },
+  "branch-reviewer": {
+   "effort": "low",
+   "model": "claude-opus-5-5"
+  },
+  "claim-checker": {
+   "effort": "low",
+   "model": "claude-opus-5-5"
+  },
+  "deciders-eye-reviewer": {
+   "effort": "low",
+   "model": "claude-opus-5-5"
+  },
+  "evidence-auditor": {
+   "effort": "low",
+   "model": "claude-opus-5-5"
+  },
+  "lead": {
+   "effort": "low",
+   "model": "claude-opus-5-5"
+  },
+  "mechanical-reader": {
+   "effort": "low",
+   "model": "claude-opus-5-5"
+  },
+  "retrospective-writer": {
+   "effort": "low",
+   "model": "claude-opus-5-5"
+  },
+  "worker": {
+   "effort": "low",
+   "model": "claude-opus-5-5"
+  }
+ },
+ "plugin": {
+  "agents": [
+   "blind-framer",
+   "branch-reviewer",
+   "claim-checker",
+   "deciders-eye-reviewer",
+   "evidence-auditor",
+   "lead",
+   "mechanical-reader",
+   "retrospective-writer",
+   "worker"
+  ],
+  "assembled": {
+   "agents/lead.md": {
+    "from": [
+     "lead/base.md",
+     "lead/s1_method.decomposition.md",
+     "lead/s2_shape.team.md",
+     "lead/s3_hypothesis_in_briefs.false.md",
+     "lead/s4_orientation.frame_first.md",
+     "lead/s6_cross_family.off.md"
+    ],
+    "sha256": "45eb537d7277dc0130d238fa87a0c6ee4b7be3058945cc919b267cb364083fec"
+   }
+  },
+  "digest": "e32a6ff55e195a40d4422a64d29fb3caae64aae4ea085ccd92c7e851dace3fef",
+  "files": {
+   ".claude-plugin/plugin.json": "d3d7686b17e1605d36dc58bfa79215b869010bcb182e38cd9e174cec76eddfc9",
+   ".mcp.json": "de2b00bc112ca125508ba25e3cc65cfb000fce379c8e1fde25a8261217154685",
+   "agents/blind-framer.md": "ff1bf895e44378c7a10c2fa0922724c97edf6b720436b15cfde8688e3fdffe01",
+   "agents/branch-reviewer.md": "e792afe6c8f690fc73cb4245dd8e7284b6154c02ed65421ba662cf3dfe488ce8",
+   "agents/claim-checker.md": "e81f2c4c039b1d8a35bca7253f74ed09fae435d72f1147217d22f62253cabcc5",
+   "agents/deciders-eye-reviewer.md": "bee86b411af58d878458a6d41664bc1ea61b3d79c20b7413e629c525c7f8f9c4",
+   "agents/evidence-auditor.md": "39dd1b8bc2137e44e32fe74f2639e55ce262a0f11f8d6875465dd6b15b115b46",
+   "agents/lead.md": "45eb537d7277dc0130d238fa87a0c6ee4b7be3058945cc919b267cb364083fec",
+   "agents/mechanical-reader.md": "1e33e4b4824eee7c5ceabdaf4c072e145f3fda5cdf082ca50136d70c1806c251",
+   "agents/retrospective-writer.md": "cf16f7619cf252263a5d88696af932d3e362ca6e0d588f601e1a15d345c98a8a",
+   "agents/worker.md": "f9e41bf8bbf9edfd6600f1bedef97689df8502c27ada7edafd9e28a02a5ecb43",
+   "hooks/hooks.json": "bdca615837cbeba21b4e749f2960c7598adfd4f1b7cd78a7374a637cd5e1d642",
+   "skills/method/SKILL.md": "243a0063fccd1d1766dcdb41ff59d4ade30c851ddf2f89987d8d4203ed13d8fd"
+  },
+  "path": "<SCRATCH>",
+  "skill_sources": {
+   "method": "decomposition-method"
+  },
+  "skills": [
+   "method"
+  ],
+  "standing_rules_sha256": "bbf2e65bc7ad0e7506299e933fe37b8d0b70fadc9c2497b9e3c535ed37090ccf"
+ },
+ "run_id": "20261026-065636-1ab23f",
+ "switches": {
+  "s1_method": "decomposition",
+  "s2_shape": "team",
+  "s3_hypothesis_in_briefs": false,
+  "s4_orientation": "frame_first",
+  "s5_models": {
+   "blind-framer": {
+    "effort": "low",
+    "model": "claude-opus-5-5"
+   },
+   "branch-reviewer": {
+    "effort": "low",
+    "model": "claude-opus-5-5"
+   },
+   "claim-checker": {
+    "effort": "low",
+    "model": "claude-opus-5-5"
+   },
+   "deciders-eye-reviewer": {
+    "effort": "low",
+    "model": "claude-opus-5-5"
+   },
+   "evidence-auditor": {
+    "effort": "low",
+    "model": "claude-opus-5-5"
+   },
+   "lead": {
+    "effort": "low",
+    "model": "claude-opus-5-5"
+   },
+   "mechanical-reader": {
+    "effort": "low",
+    "model": "claude-opus-5-5"
+   },
+   "retrospective-writer": {
+    "effort": "low",
+    "model": "claude-opus-5-5"
+   },
+   "worker": {
+    "effort": "low",
+    "model": "claude-opus-5-5"
+   }
+  },
+  "s6_cross_family": "off"
+ },
+ "task": {
+  "as_of": null,
+  "attachments": [],
+  "intake": null,
+  "question": "Placeholder question for the plumbing test: are unit sales large enough?",
+  "switches": {
+   "s5_models": {
+    "blind-framer": {
+     "effort": "low",
+     "model": "claude-opus-5-5"
+    },
+    "branch-reviewer": {
+     "effort": "low",
+     "model": "claude-opus-5-5"
+    },
+    "claim-checker": {
+     "effort": "low",
+     "model": "claude-opus-5-5"
+    },
+    "deciders-eye-reviewer": {
+     "effort": "low",
+     "model": "claude-opus-5-5"
+    },
+    "evidence-auditor": {
+     "effort": "low",
+     "model": "claude-opus-5-5"
+    },
+    "lead": {
+     "effort": "low",
+     "model": "claude-opus-5-5"
+    },
+    "mechanical-reader": {
+     "effort": "low",
+     "model": "claude-opus-5-5"
+    },
+    "retrospective-writer": {
+     "effort": "low",
+     "model": "claude-opus-5-5"
+    },
+    "worker": {
+     "effort": "low",
+     "model": "claude-opus-5-5"
+    }
+   }
+  }
+ }
+}
