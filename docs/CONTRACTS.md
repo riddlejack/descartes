@@ -1,4 +1,4 @@
-# Contracts between the parts (v0.2.2)
+# Contracts between the parts (v0.2.3)
 
 These are the interfaces the parts agree on, so they can be built in parallel. The
 design (`DESIGN-v1.md`, cited as "step n") says what the system does; this file says
@@ -66,8 +66,8 @@ ran" (commitment 3) made structural.
    verdicts that have landed and lists the ones still running. It never invents one.
 4. All agents reach the evidence service and the register through one MCP server,
    `stemma` (tools named `mcp__plugin_stemma_stemma__<tool>`, verified). MCP tools
-   load deferred in 2.1.308: unless B finds a setting that loads them at start, a
-   role's first use of a tool is preceded by `ToolSearch` with `select:<name>`.
+   load at start because `plugin/.mcp.json` sets `"alwaysLoad": true` (verified; without
+   it 2.1.308 defers them), so role texts need no `ToolSearch` step.
 5. Agents exchange work through files in the run folder (section 3), never through
    retold figures: a figure crosses a hand-off as a claim id.
 6. The run ends when `finish_run` is accepted (section 6).
@@ -327,7 +327,7 @@ Each guard has a producer in the live path, or it would block every run.
 ## 10. Open questions each builder answers in their report
 - B: answered by run on 26 Oct (probe notes and kit in B's branch). Nesting: the
   lead is depth 0 and a depth-3 agent has no Agent tool, so a worker may have two
-  levels below it. Still open: a setting that loads MCP tools at start.
+  levels below it. `alwaysLoad` loads MCP tools at start. Sandbox denials held against case variants, `..`, symlinks, renames, not-yet-existing paths and `**` globs.
 - A: which archive service gives a copy before a date, and how reliably.
 - C: which lines depend on the pending E6a reviewer study (reviewers stay goal-only
   until it reports).
