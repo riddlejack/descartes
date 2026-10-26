@@ -14,7 +14,7 @@ dependencies = []
 server = ["mcp==2.3.0"]   # part B wires the one MCP server
 evidence = []             # part A
 register = []             # part B
-driver = []               # part B
+driver = ["claude-agent-sdk==0.2.174"]  # part B (MIT); evidence test only, the driver runs the CLI itself
 dev = ["pytest==9.1.1", "ruff==0.17.2", "mypy==2.4.0"]
 
 [project.scripts]
