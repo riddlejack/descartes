@@ -273,7 +273,7 @@ def frames_and_reviews(reg: Register, version: int = 1) -> None:
     for i, role in enumerate(("deciders-eye-reviewer", "evidence-auditor",
                               "mechanical-reader")):
         who = launched(reg, role, f"draft:{version}", f"s-r{version}-{i}")
-        reg.record_review(who, version, f"review by {role}")
+        reg.record_review(who, version, f"review by {role}", [])
 
 
 def ready_run(reg: Register, body: str | None = None) -> str:

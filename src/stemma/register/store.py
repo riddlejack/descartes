@@ -86,28 +86,39 @@ _SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 def closure(nodes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """How each node closes and whether it has (CONTRACTS section 6, v0.3), by node id:
     `closes_by` is "branch" (a leaf: condition, rival, an open lane holding work, an
-    option filed as a branch), "children" (any node with children, and an option), or
-    "nothing" (an empty open lane); `status` is the stored one for a leaf and derived for
-    the rest; `closed` follows. A parent closes only with at least one child, all closed:
-    an option with nothing under it is an unfinished frame (`childless`), never closed."""
-    children: dict[str, list[str]] = {}
-    for n in nodes:
-        if n.get("parent") is not None:
-            children.setdefault(str(n["parent"]), []).append(str(n["id"]))
+    option filed as a branch), "children" (any node with children, and an option),
+    "nothing" (an empty open lane), or "unreachable" (no path up to a root: its parents
+    form a cycle or lead to no node); `status` is the stored one for a leaf and derived
+    for the rest; `closed` follows. A parent closes only with at least one child, all
+    closed: an option with nothing under it is an unfinished frame (`childless`).
+    The walk starts at the roots and visits each reachable node once."""
     by_id = {str(n["id"]): n for n in nodes}
+    children: dict[str, list[str]] = {}
+    roots: list[str] = []
+    for nid, n in by_id.items():
+        parent = n.get("parent")
+        if parent is None:
+            roots.append(nid)
+        else:
+            children.setdefault(str(parent), []).append(nid)
+    order: list[str] = []  # reachable nodes, each once, parents before children
+    seen: set[str] = set()
+    stack = sorted(roots, reverse=True)
+    while stack:
+        nid = stack.pop()
+        if nid in seen:
+            continue
+        seen.add(nid)
+        order.append(nid)
+        stack.extend(sorted(children.get(nid, []), reverse=True))
     out: dict[str, dict[str, Any]] = {}
-
-    def visit(nid: str, path: frozenset[str]) -> dict[str, Any]:
-        if nid in out:
-            return out[nid]
-        n, kids = by_id[nid], [k for k in children.get(nid, []) if k in by_id]
-        if nid in path:  # a cycle in parents cannot close (invariant: a tree has none)
-            return {"closes_by": "children", "status": "open", "closed": False}
+    for nid in reversed(order):  # children before parents
+        n, kids = by_id[nid], children.get(nid, [])
         if n["kind"] == "option" and not kids and not n.get("branch_id"):
-            res = {"closes_by": "children", "status": "open", "closed": False,
-                   "childless": True}
+            res: dict[str, Any] = {"closes_by": "children", "status": "open", "closed": False,
+                                   "childless": True}
         elif kids:
-            subs = [visit(k, path | {nid}) for k in kids]
+            subs = [out[k] for k in kids]
             if all(c["closed"] for c in subs):
                 st = ("stopped_by_limit" if any(c["status"] == "stopped_by_limit" for c in subs)
                       else "gap_accepted" if any(c["status"] == "gap_accepted" for c in subs)
@@ -120,10 +131,9 @@ def closure(nodes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         else:
             res = {"closes_by": "branch", "status": n["status"], "closed": n["status"] in DONE}
         out[nid] = res
-        return res
-
     for nid in by_id:
-        visit(nid, frozenset())
+        if nid not in out:
+            out[nid] = {"closes_by": "unreachable", "status": "open", "closed": False}
     return out
 
 
@@ -253,7 +263,12 @@ class Register:
         e = self.wm.view("graph").entity(claim_entity(cid))
         if e is None:
             raise Refused(f"Refused: no claim has id {cid}.")
-        verdicts = self._live_facts(claim_entity(cid), "verdict")
+        refused = self._sessions_with_refused_correction(cid)
+        # A session whose correction of this claim was refused found it wrong: a holds it
+        # recorded on the claim, before or after, does not stand.
+        verdicts = [f for f in self._live_facts(claim_entity(cid), "verdict")
+                    if not ((f["value"] or {}).get("verdict") == "holds"
+                            and f["source"].get("runId") in refused)]
         superseded = self._live_facts(claim_entity(cid), "superseded_by")
         latest = verdicts[-1] if verdicts else None
         rec = dict(e["attrs"]["claim"])
@@ -386,9 +401,12 @@ class Register:
     def _refused_corrections_log(self) -> Path:
         return self.run_dir / "register" / "refused_corrections.jsonl"
 
+    def _sessions_with_refused_correction(self, cid: str) -> frozenset[str]:
+        return frozenset(r["session_id"] for r in jsonl.read_all(self._refused_corrections_log())
+                         if r["claim_id"] == cid)
+
     def _correction_refused(self, session_id: str | None, cid: str) -> bool:
-        return any(r["session_id"] == session_id and r["claim_id"] == cid
-                   for r in jsonl.read_all(self._refused_corrections_log()))
+        return session_id in self._sessions_with_refused_correction(cid)
 
     def _record_claim_verdict(self, caller: Caller, cid: str, verdict: str, evidence: str,
                               corrected_claim: dict[str, Any] | None) -> dict[str, Any]:
@@ -613,6 +631,12 @@ class Register:
             parent = merged.get("parent")
             if parent is not None and (parent not in existing or parent == nid):
                 raise Refused(f"Refused: parent {parent} is not a node.")
+            up, hops = parent, 0
+            while up is not None and hops <= len(existing):
+                if up == nid:
+                    raise Refused(f"Refused: parent {parent} is under node {nid}; a node "
+                                  f"cannot be placed under its own descendant.")
+                up, hops = (existing.get(up) or {}).get("parent"), hops + 1
             if not isinstance(merged.get("crux"), bool):
                 raise Refused("Refused: crux is true or false.")
             branch = merged.get("branch_id")
@@ -892,26 +916,24 @@ class Register:
         return len(self.submitted_versions()) >= self.max_review_rounds()
 
     def _completion_statement(self, version: int) -> str:
-        """When the review rounds ran out: the criticisms of the last permitted round, which
-        no further round could resolve, as the three reviewers wrote them (code selects
-        nothing; whether each was resolved is the reader's and the lead's judgment)."""
-        last = max(self.submitted_versions())
+        """When the review rounds ran out: the last permitted round's criticisms, which no
+        further round could resolve, as the reviewers recorded them, material points first
+        (code selects nothing; the reviewers judged materiality)."""
         limit = self.max_review_rounds()
+        have = self._recorded_reviews(version)
         parts = ["# Completion statement", "",
                  (f"Review rounds stopped by limit (stopped_by_limit): {limit} of {limit} "
                   f"rounds (max_review_rounds in run.json, a resource limit, not a quality "
-                  f"verdict). Released: version {version}."), ""]
-        shown = [last] if version == last else [last, version]
-        for v in shown:
-            label = "the last permitted round" if v == last else "the released version"
-            parts += [f"## Criticisms raised in the reviews of version {v} ({label})", ""]
-            for role in roles.FINAL_REVIEWERS:
-                rel = f"reviews/v{v}/{REVIEW_FILE_OF[role]}"
-                try:
-                    body = safeio.read_text(self.run_dir, rel).strip()
-                except (FileNotFoundError, safeio.UnsafePath):
-                    body = "(no review recorded)"
-                parts += [f"### {roles.short(role)}", "", body, ""]
+                  f"verdict). Released: version {version}, the last round."), "",
+                 "## Material points the last round raised, unresolved", ""]
+        material = [(roles.short(role), pt["point"]) for role in roles.FINAL_REVIEWERS
+                    for pt in have[role].get("points", []) if pt["material"]]
+        parts += [f"- {who}: {point}" for who, point in material] or ["- none"]
+        parts += ["", f"## The reviews of version {version}", ""]
+        for role in roles.FINAL_REVIEWERS:
+            body = safeio.read_text(self.run_dir,
+                                    f"reviews/v{version}/{REVIEW_FILE_OF[role]}").strip()
+            parts += [f"### {roles.short(role)}", "", body, ""]
         return "\n".join(parts)
 
     def submitted_versions(self) -> list[int]:
@@ -974,14 +996,24 @@ class Register:
             self._run_fact(caller, "frame_recorded", record)
         return {**record, "file": FRAME_FILES[kind]}
 
-    def record_review(self, caller: Caller, version: int, text: str) -> dict[str, Any]:
+    def record_review(self, caller: Caller, version: int, text: str,
+                      points: list[dict[str, Any]]) -> dict[str, Any]:
         """A final reviewer only: its review of draft <version>, from the session the
-        driver launched for draft:<version>."""
+        driver launched for draft:<version>, with its points, each {point, material}: the
+        reviewer judges materiality, code only reads it (CONTRACTS section 6, v0.3.1)."""
         self._require(caller, frozenset(roles.FINAL_REVIEWERS), "record reviews")
         if isinstance(version, bool) or not isinstance(version, int) or version < 1:
             raise Refused("Refused: version is a positive whole number.")
         if not isinstance(text, str) or not text.strip():
             raise Refused("Refused: the review text is empty.")
+        if not isinstance(points, list):
+            raise Refused("Refused: points is a list of {point, material}.")
+        for i, pt in enumerate(points, start=1):
+            if (not isinstance(pt, dict) or set(pt) != {"point", "material"}
+                    or not isinstance(pt["point"], str) or not pt["point"].strip()
+                    or not isinstance(pt["material"], bool)):
+                raise Refused(f"Refused: point {i} is not {{point: text, material: true or "
+                              f"false}}.")
         rel = f"reviews/v{version}/{REVIEW_FILE_OF[caller.agent_type]}"
         with jsonl.exclusive(self._lock):
             self._session_prompt_is(caller, roles.short(caller.agent_type), f"draft:{version}")
@@ -989,7 +1021,9 @@ class Register:
                 raise Refused("Refused: this review is already recorded.")
             self._write(rel, text)
             record = {"version": version, "role": caller.agent_type,
-                      "sha256": sha256_bytes(text.encode("utf-8")), "session": caller.session_id}
+                      "sha256": sha256_bytes(text.encode("utf-8")), "session": caller.session_id,
+                      "points": [{"point": pt["point"], "material": pt["material"]}
+                                 for pt in points]}
             self._run_fact(caller, "review_recorded", record)
         return {**record, "file": rel}
 
@@ -1015,6 +1049,10 @@ class Register:
         if not nodes:
             failures.append("the tree has no nodes")
         for n in nodes:
+            if n["closes_by"] == "unreachable":
+                failures.append(f"node {n['id']} is not reachable from a root of the tree "
+                                f"(its parents form a cycle or lead to no node)")
+                continue
             if n.get("childless"):
                 failures.append(f"node {n['id']} is an option with no conditions under it; "
                                 f"add what would have to be true, or file it as a branch")
@@ -1048,13 +1086,22 @@ class Register:
         if version not in versions:
             failures.append(f"version {version} was not submitted")
             return failures
+        at_limit = len(versions) >= self.max_review_rounds()
+        if at_limit and version != max(versions):
+            failures.append(f"the review-round limit is reached: only the latest submitted "
+                            f"version, {max(versions)}, may be released")
         have = self._recorded_reviews(version)
         for role in roles.FINAL_REVIEWERS:
             if role not in have:
                 failures.append(f"the {roles.short(role)} review of version {version} "
                                 f"is not recorded")
-            else:
-                rests_on(have[role]["session"], f"the {roles.short(role)} review")
+                continue
+            rests_on(have[role]["session"], f"the {roles.short(role)} review")
+            if not at_limit:
+                for pt in have[role].get("points", []):
+                    if pt["material"]:
+                        failures.append(f"the {roles.short(role)} review of version {version} "
+                                        f"raises a material point: {pt['point'][:300]}")
         if text is None:
             text = safeio.read_text(self.run_dir, frozen_draft(version))
         for a in self.assumptions():
@@ -1080,6 +1127,19 @@ class Register:
                 rests_on(rec["verdict_session"], f"the verdict on claim {short}")
         self._relied = sorted(relied)
         return failures
+
+    def gate_status(self, caller: Caller, version: int) -> dict[str, Any]:
+        """Read the release gate for `version` without releasing: every unmet condition,
+        the same list finish_run refuses with (CONTRACTS section 6, v0.3.1)."""
+        self._require(caller, frozenset({roles.LEAD}), "read the release gate")
+        if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+            raise Refused("Refused: version is a positive whole number.")
+        with jsonl.exclusive(self._lock):
+            self.wm.refresh()
+            self._sync_records()
+            unmet = self.finish_failures(version)
+        return {"version": version, "releasable": not unmet, "unmet_count": len(unmet),
+                "unmet": "\n".join(f"{i}. {f}" for i, f in enumerate(unmet, start=1))}
 
     def finish_run(self, caller: Caller, version: int) -> dict[str, Any]:
         """Release the frozen, reviewed draft `version` as the deliverable. The bytes read

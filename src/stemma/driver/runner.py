@@ -327,13 +327,16 @@ class Driver:
         self.api.mark_launched(self.run_dir, rid, spec.session_id, spec.model, spec.effort,
                                relaunch=relaunch)
 
+    def _latest_round(self, req: CheckRequestLike) -> int:
+        return max((o.request.round for o in self.api.states(self.run_dir).values()
+                    if o.request.role == req.role and o.request.prompt == req.prompt),
+                   default=req.round)
+
     def _due_again(self, st: CheckStateLike) -> None:
         """Queue a check to launch again (same request and round, a new session), unless
         a later round replaced it or it used up its attempts."""
         rid, req = st.request.request_id, st.request
-        latest = max((o.request.round for o in self.api.states(self.run_dir).values()
-                      if o.request.role == req.role and o.request.prompt == req.prompt),
-                     default=req.round)
+        latest = self._latest_round(req)
         attempts = int(self.state["check_attempts"].get(rid, 0))
         if latest > req.round:
             reason, outcome = f"round {latest} replaced round {req.round}", "superseded"
@@ -601,6 +604,15 @@ class Driver:
                 continue
             again = self.relaunch_due.pop(req.request_id, None)
             if again is not None:
+                latest = self._latest_round(req)
+                if latest > req.round:  # a newer round was asked for while this one waited
+                    events.emit(self.run_dir, "check_not_relaunched",
+                                request_id=req.request_id, previous_outcome=again[2],
+                                reason=f"round {latest} replaced round {req.round}")
+                    st = self.api.states(self.run_dir).get(req.request_id)
+                    if st is not None and st.status == "running":
+                        self.api.mark_ended(self.run_dir, req.request_id, -1, "superseded")
+                    continue
                 events.emit(self.run_dir, "check_relaunch", request_id=req.request_id,
                             previous_session_id=again[1], previous_outcome=again[2])
             self._launch_check(req, relaunch=again is not None)

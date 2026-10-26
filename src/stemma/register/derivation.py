@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 
@@ -28,10 +28,26 @@ DEFAULT_TIME_LIMIT_S = 120
 RESULT_MAX_BYTES = 4096
 # Resource limit: bytes of the script's stderr kept for the refusal record.
 STDERR_TAIL_BYTES = 2000
+# Resource limit: Python files (the script and its helper modules) copied for a re-run.
+CODE_MAX_FILES = 64
+# Resource limit: bytes of those files together.
+CODE_MAX_BYTES = 4 * 1024 * 1024
+# Resource limit: captured documents one derivation may name.
+DOCUMENTS_MAX = 32
+# Resource limit: characters of those documents together.
+DOCUMENTS_MAX_CHARS = 64 * 1024 * 1024
 
 
 class DerivationError(Exception):
     """The script could not be re-run, or reported no result."""
+
+
+@dataclass(frozen=True)
+class Code:
+    """A script and the Python files beside it, read once without following links."""
+
+    script: str  # the script's file name, a key of `files`
+    files: dict[str, bytes]
 
 
 @dataclass(frozen=True)
@@ -121,36 +137,95 @@ def _read_capped(path: Path, cap: int, what: str, tail: bool = False) -> bytes:
         os.close(fd)
 
 
-def _copy_code(script: Path, tmp: Path) -> Path:
-    """Copy the script and the other Python files beside it (its helper modules), never
-    following a link, into `tmp`; return the script's copy. Data files are not copied:
-    a script reads figures through inputs() and documents through document()."""
-    folder = script.parent
-    for entry in os.scandir(folder):
-        if not entry.name.endswith(".py") or entry.is_symlink() or not entry.is_file():
-            continue
-        fd = os.open(entry.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+def _read_folder_code(dfd: int, script: str, where: str) -> Code:
+    """Every .py file in the folder open as `dfd`, each a regular file with one link,
+    opened without following a link; limits checked before anything is copied."""
+    names = sorted(n for n in os.listdir(dfd) if n.endswith(".py"))
+    if len(names) > CODE_MAX_FILES:
+        raise DerivationError(f"{where} holds {len(names)} Python files, more than the "
+                              f"{CODE_MAX_FILES} a re-run copies")
+    sizes: dict[str, int] = {}
+    for name in names:
         try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
-                continue
-            data = b""
-            while chunk := os.read(fd, 1 << 20):
-                data += chunk
+            st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        if stat.S_ISREG(st.st_mode):
+            sizes[name] = st.st_size
+    if sum(sizes.values()) > CODE_MAX_BYTES:
+        raise DerivationError(f"the Python files in {where} are larger than "
+                              f"{CODE_MAX_BYTES} bytes together")
+    if script not in sizes:
+        raise DerivationError(f"script {script} is not a plain file")
+    files: dict[str, bytes] = {}
+    for name in sizes:
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+        except OSError as exc:
+            raise DerivationError(f"{name} in {where} is not a plain file") from exc
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+                raise DerivationError(f"{name} in {where} is not a plain file (a link, or "
+                                      f"more than one name for one file)")
+            if st.st_size > CODE_MAX_BYTES:
+                raise DerivationError(f"{name} in {where} is larger than {CODE_MAX_BYTES} bytes")
+            data = os.read(fd, CODE_MAX_BYTES + 1)
         finally:
             os.close(fd)
-        (tmp / entry.name).write_bytes(data)
-    copy = tmp / script.name
-    if not copy.is_file():
-        raise DerivationError(f"script {script.name} is not a plain file")
-    return copy
+        if len(data) > CODE_MAX_BYTES:
+            raise DerivationError(f"{name} in {where} is larger than {CODE_MAX_BYTES} bytes")
+        files[name] = data
+    if sum(len(d) for d in files.values()) > CODE_MAX_BYTES:
+        raise DerivationError(f"the Python files in {where} are larger than "
+                              f"{CODE_MAX_BYTES} bytes together")
+    return Code(script, files)
 
 
-def rerun(script: Path, values: dict[str, float], documents: dict[str, str] | None = None,
-          python: str | None = None,
+def read_code(run_dir: Path, rel: str) -> Code:
+    """The script run_dir/rel and the Python files beside it (its helper modules), every
+    folder on the way opened without following a link (`safeio.folder_fd`)."""
+    from stemma.register import safeio  # the register's safe opens
+
+    parts = PurePosixPath(rel).parts
+    if not parts or not parts[-1].endswith(".py"):
+        raise DerivationError(f"script {rel} is not a .py file")
+    folder = PurePosixPath(*parts[:-1])
+    try:
+        with safeio.folder_fd(run_dir, folder) as dfd:
+            return _read_folder_code(dfd, parts[-1], str(folder))
+    except FileNotFoundError as exc:
+        raise DerivationError(f"script {rel} does not exist") from exc
+    except (safeio.UnsafePath, NotADirectoryError) as exc:
+        raise DerivationError(f"the folder of script {rel} is not a plain folder") from exc
+
+
+def _code_of(script: Path | Code) -> Code:
+    """A Code as given, or, for a bare path, read from its folder (the folder itself
+    opened without following a link; callers in a run pass `read_code`'s Code)."""
+    if isinstance(script, Code):
+        return script
+    try:
+        dfd = os.open(script.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise DerivationError(f"script {script.name} does not exist") from exc
+    try:
+        return _read_folder_code(dfd, script.name, script.parent.name)
+    finally:
+        os.close(dfd)
+
+
+def rerun(script: Path | Code, values: dict[str, float],
+          documents: dict[str, str] | None = None, python: str | None = None,
           time_limit_s: int = DEFAULT_TIME_LIMIT_S) -> RerunResult:
     """Run `script` with `values` as its inputs and return the number it reported."""
-    if not script.is_file():
-        raise DerivationError(f"script {script.name} does not exist")
+    bundle = _code_of(script)
+    documents = documents or {}
+    if len(documents) > DOCUMENTS_MAX:
+        raise DerivationError(f"{len(documents)} documents named, more than {DOCUMENTS_MAX}")
+    if sum(len(t) for t in documents.values()) > DOCUMENTS_MAX_CHARS:
+        raise DerivationError(f"the named documents are longer than {DOCUMENTS_MAX_CHARS} "
+                              f"characters together")
     if not Path(SANDBOX_EXEC).exists():
         raise DerivationError("sandbox-exec is not available on this machine")
     py = os.path.abspath(python or os.environ.get("STEMMA_PYTHON") or sys.executable)
@@ -171,10 +246,12 @@ def rerun(script: Path, values: dict[str, float], documents: dict[str, str] | No
         # The script and its helper modules run from copies inside the temporary folder,
         # with the documents it named, so nothing else (the run folder included) is
         # readable to it.
-        copy = _copy_code(script, tmp)
+        for name, data in bundle.files.items():
+            (tmp / name).write_bytes(data)
+        copy = tmp / bundle.script
         docs = tmp / "documents"
         docs.mkdir()
-        for rid, text in (documents or {}).items():
+        for rid, text in documents.items():
             if "/" in rid or rid.startswith("."):
                 raise DerivationError(f"receipt id {rid!r} is not a plain name")
             (docs / f"{rid}.txt").write_text(text, encoding="utf-8")

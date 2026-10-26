@@ -251,20 +251,30 @@ def record_frame(ctx: Context[Any], kind: str, text: str) -> dict[str, Any]:
 
 
 @server.tool()
-def record_review(ctx: Context[Any], version: int, text: str) -> dict[str, Any]:
-    """Final reviewers only: record your review of draft <version> as markdown text. The
-    register writes reviews/v<version>/<your file>; reviews are written by this tool
-    only. The draft under review is register/drafts/answer.v<version>.md."""
-    return _call(ctx, "record_review", lambda r, c: r.record_review(c, version, text))
+def record_review(ctx: Context[Any], version: int, text: str,
+                  points: list[dict[str, Any]]) -> dict[str, Any]:
+    """Final reviewers only: record your review of draft <version> as markdown text, with
+    its points as a list of {point: text, material: true or false} (you judge which are
+    material). The register writes reviews/v<version>/<your file>; reviews are written by
+    this tool only. The draft under review is register/drafts/answer.v<version>.md."""
+    return _call(ctx, "record_review", lambda r, c: r.record_review(c, version, text, points))
+
+
+@server.tool()
+def gate_status(ctx: Context[Any], version: int) -> dict[str, Any]:
+    """Lead only: read the release gate for draft <version> without releasing. Returns
+    every unmet condition, numbered one per line, the same list finish_run refuses with.
+    Call it after every review round."""
+    return _call(ctx, "gate_status", lambda r, c: r.gate_status(c, version))
 
 
 @server.tool()
 def finish_run(ctx: Context[Any], version: int) -> dict[str, Any]:
     """Lead only: release the submitted, reviewed draft <version> as the deliverable.
-    The register copies the frozen draft to deliverable/answer.md itself. Call it at any
-    time to read the gate: when it refuses, it lists every unmet condition, numbered.
-    After the last review round run.json allows, the release also writes
-    deliverable/completion.md with that round's criticisms."""
+    The register copies the frozen draft to deliverable/answer.md itself; it releases
+    only when gate_status shows nothing unmet, and when it refuses it lists every unmet
+    condition, numbered. After the last review round run.json allows, only the latest
+    version may be released, and deliverable/completion.md lists that round's points."""
     return _call(ctx, "finish_run", lambda r, c: r.finish_run(c, version))
 
 

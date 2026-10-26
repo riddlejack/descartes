@@ -180,3 +180,31 @@ def test_a_check_stopped_by_its_canary_is_launched_again_up_to_its_attempts(
     assert len(kinds(run, "check_relaunch")) == limits.max_check_attempts - 1
     given_up = kinds(run, "check_not_relaunched")
     assert len(given_up) == 1 and given_up[0]["previous_outcome"] == "canary_failed"
+
+
+def test_a_queued_retry_is_not_launched_once_a_newer_round_exists(
+        cfg: DriverConfig, tmp: Path, fake: Fake, limits: Limits) -> None:
+    # Codex review of 15437e8: the round was checked when the retry was queued, not when
+    # it launched, so a retry queued before round 2 was asked for still ran.
+    import time
+
+    from stemma.driver.runner import Driver
+
+    fake.configure({"claim-checker": {"sleep_s": 0.1}})
+    run = create_run(cfg, write_task(tmp), limits=limits)
+    prompt = "claim:" + "c" * 64
+    old = checks_api.request_check(run, "claim-checker", prompt, "file_claim", round_no=1)
+    checks_api.mark_launched(run, old.request_id, "s-old", "m", "e")
+    checks_api.mark_ended(run, old.request_id, 1, "failed")
+    d = Driver(cfg, run, checks_api, limits)
+    d.relaunch_unended_checks()
+    assert old.request_id in d.relaunch_due  # queued while it was the latest round
+    new = checks_api.request_check(run, "claim-checker", prompt, "file_claim", round_no=2)
+    while d.step():
+        time.sleep(limits.poll_interval_s)
+    st = checks_api.states(run)
+    assert st[new.request_id].outcome == "completed"
+    assert st[old.request_id].outcome == "failed"  # never launched again
+    assert len([c for c in fake.calls() if c["role"] == "claim-checker"]) == 1
+    skipped = kinds(run, "check_not_relaunched")
+    assert [e["request_id"] for e in skipped] == [old.request_id]

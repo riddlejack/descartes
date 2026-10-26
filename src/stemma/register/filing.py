@@ -18,11 +18,11 @@ import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from stemma.evidence.quotes import find_quote
-from stemma.register.derivation import DerivationError, RerunResult
+from stemma.register.derivation import DOCUMENTS_MAX, DerivationError, RerunResult, read_code
 from stemma.register.evidence_port import Evidence, QuoteCheckFailed
 
 TIERS = ("observed", "interested_party", "secondary", "estimated", "assumed")
@@ -193,10 +193,18 @@ def check_estimated(claim: dict[str, Any], run_dir: Path, rerun: Rerun,
         raise Refused("Refused: an estimated claim needs a derivation.")
     if value is None:
         raise Refused("Refused: an estimated claim needs a value.")
-    script = (run_dir / deriv["script"]).resolve()
-    analysis = (run_dir / "analysis").resolve()
-    if analysis not in script.parents:
+    rel = PurePosixPath(deriv["script"])
+    if (rel.is_absolute() or len(rel.parts) < 2 or rel.parts[0] != "analysis"
+            or any(x in ("", ".", "..") for x in rel.parts)):
         raise Refused("Refused: the derivation script is not in analysis/.")
+    docs_named = deriv.get("documents", [])
+    if len(docs_named) > DOCUMENTS_MAX:
+        raise Refused(f"Refused: the derivation names {len(docs_named)} documents, more than "
+                      f"{DOCUMENTS_MAX} (a resource limit).")
+    try:
+        code = read_code(run_dir, str(rel))
+    except DerivationError as exc:
+        raise Refused(f"Refused: the derivation could not be re-run: {exc}.") from exc
     values: dict[str, float] = {}
     for given in deriv.get("inputs", []):
         full, number = lookup(given)
@@ -204,7 +212,7 @@ def check_estimated(claim: dict[str, Any], run_dir: Path, rerun: Rerun,
     # A derivation may read whole captured documents (a dataset, a table) by receipt id,
     # through stemma.analysis.document(); the re-run gets exactly those stored texts.
     documents: dict[str, str] = {}
-    for rid in deriv.get("documents", []):
+    for rid in docs_named:
         if evidence is None:
             raise Refused("Refused: the derivation's documents cannot be read.")
         try:
@@ -212,7 +220,7 @@ def check_estimated(claim: dict[str, Any], run_dir: Path, rerun: Rerun,
         except QuoteCheckFailed as exc:
             raise Refused(f"Refused: derivation document {rid}: {exc}.") from exc
     try:
-        rr = rerun(script, values, documents) if documents else rerun(script, values)
+        rr = rerun(code, values, documents) if documents else rerun(code, values)
     except DerivationError as exc:
         raise Refused(f"Refused: the derivation could not be re-run: {exc}.") from exc
     if rr.number is None:

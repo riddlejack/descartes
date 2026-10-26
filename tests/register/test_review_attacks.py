@@ -159,11 +159,11 @@ def test_record_review_only_from_the_session_launched_for_that_version(reg: Regi
     reg.submit_draft(LEAD, 2)
     v1_session = Caller("stemma:mechanical-reader", None, "s-r1-2")  # launched for draft:1
     with pytest.raises(Refused, match="not started for draft:2"):
-        reg.record_review(v1_session, 2, "x")
+        reg.record_review(v1_session, 2, "x", [])
     with pytest.raises(Refused, match="do not record reviews"):
-        reg.record_review(LEAD, 2, "x")
+        reg.record_review(LEAD, 2, "x", [])
     with pytest.raises(Refused, match="already recorded"):
-        reg.record_review(v1_session, 1, "again")
+        reg.record_review(v1_session, 1, "again", [])
 
 
 def test_record_frame_only_by_the_launched_framer(reg: Register) -> None:

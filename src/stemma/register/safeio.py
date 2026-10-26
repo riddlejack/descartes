@@ -16,7 +16,7 @@ import os
 import secrets
 import stat
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path, PurePosixPath
 
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
@@ -56,6 +56,11 @@ def _dir_fd(run_dir: Path, parts: list[str], create: bool) -> Iterator[int]:
         yield fd
     finally:
         os.close(fd)
+
+
+def folder_fd(run_dir: Path, rel: str | PurePosixPath) -> AbstractContextManager[int]:
+    """A descriptor for the folder run_dir/rel, every component a real folder (no link)."""
+    return _dir_fd(run_dir, _parts(rel), create=False)
 
 
 def write_bytes(run_dir: Path, rel: str | PurePosixPath, data: bytes) -> None:
