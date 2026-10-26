@@ -8,20 +8,17 @@ from pathlib import Path
 from typing import Any
 
 import anyio
-import pytest
+from evidence_kit import capture_invented
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 TEXT = "Acme Widgets reported revenue of 1.2bn in fiscal 2025."
 
 
-def make_run(tmp_path: Path) -> Path:
+def make_run(tmp_path: Path) -> tuple[Path, str]:
+    """A run whose store holds one invented document, captured by part A's service."""
     run = tmp_path / "run"
-    (run / "store/receipts").mkdir(parents=True)
-    (run / "store/text").mkdir(parents=True)
-    (run / "store/receipts/r1.json").write_text(json.dumps({"sha256": "a" * 64}))
-    (run / "store/text" / ("a" * 64 + ".txt")).write_text(TEXT)
-    return run
+    return run, capture_invented(run, "acme-note.txt", TEXT)
 
 
 def stamp(run: Path, tool_use_id: str, agent_type: str, session: str = "s-1") -> None:
@@ -35,7 +32,7 @@ async def session_calls(run: Path, calls: list[tuple[str, dict[str, Any], str | 
                         ) -> list[tuple[bool, str]]:
     params = StdioServerParameters(
         command=sys.executable, args=["-I", "-m", "stemma.mcp_server"],
-        env={"STEMMA_RUN_DIR": str(run), "STEMMA_EVIDENCE_STUB": "1", "PATH": "/usr/bin:/bin"},
+        env={"STEMMA_RUN_DIR": str(run), "PATH": "/usr/bin:/bin"},
     )
     out: list[tuple[bool, str]] = []
     async with stdio_client(params) as (read, write), ClientSession(read, write) as s:
@@ -48,15 +45,16 @@ async def session_calls(run: Path, calls: list[tuple[str, dict[str, Any], str | 
     return out
 
 
-CLAIM = {"statement": "Acme Widgets' fiscal 2025 revenue was 1.2bn.", "tier": "observed",
-         "branch_id": "b1",
-         "value": {"number": 1.2e9, "kind": "level", "as_written": "1.2bn"},
-         "support": [{"receipt_id": "r1", "quote": "revenue of 1.2bn in fiscal 2025"}]}
+def claim_on(receipt_id: str) -> dict[str, Any]:
+    return {"statement": "Acme Widgets' fiscal 2025 revenue was 1.2bn.", "tier": "observed",
+            "branch_id": "b1",
+            "value": {"number": 1.2e9, "kind": "level", "as_written": "1.2bn"},
+            "support": [{"receipt_id": receipt_id, "quote": "revenue of 1.2bn in fiscal 2025"}]}
 
 
-@pytest.mark.parametrize("evidence_stub", [True])
-def test_identity_comes_from_the_stamp(tmp_path: Path, evidence_stub: bool) -> None:
-    run = make_run(tmp_path)
+def test_identity_comes_from_the_stamp(tmp_path: Path) -> None:
+    run, receipt = make_run(tmp_path)
+    CLAIM = claim_on(receipt)
     stamp(run, "toolu_w", "stemma:worker")
     stamp(run, "toolu_c", "stemma:claim-checker")
     forged = dict(CLAIM, statement="Forged author attempt: revenue was 1.2bn.")
@@ -86,7 +84,7 @@ def test_identity_comes_from_the_stamp(tmp_path: Path, evidence_stub: bool) -> N
 
 
 def test_server_lists_the_register_tools(tmp_path: Path) -> None:
-    run = make_run(tmp_path)
+    run, _ = make_run(tmp_path)
 
     async def names() -> list[str]:
         params = StdioServerParameters(command=sys.executable,

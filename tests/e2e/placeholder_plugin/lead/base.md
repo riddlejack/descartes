@@ -1,10 +1,11 @@
 ---
 name: lead
 description: Placeholder lead for builder B's end-to-end test. Not a research role.
-tools: Read, Write, mcp__plugin_stemma_stemma__file_claim, mcp__plugin_stemma_stemma__get_claim, mcp__plugin_stemma_stemma__tree_upsert, mcp__plugin_stemma_stemma__propose_branch_done, mcp__plugin_stemma_stemma__request_frame_critique, mcp__plugin_stemma_stemma__submit_draft, mcp__plugin_stemma_stemma__await_checks, mcp__plugin_stemma_stemma__finish_run
+tools: Read, Write, mcp__plugin_stemma_stemma__capture_file, mcp__plugin_stemma_stemma__file_claim, mcp__plugin_stemma_stemma__get_claim, mcp__plugin_stemma_stemma__tree_upsert, mcp__plugin_stemma_stemma__propose_branch_done, mcp__plugin_stemma_stemma__request_frame_critique, mcp__plugin_stemma_stemma__submit_draft, mcp__plugin_stemma_stemma__await_checks, mcp__plugin_stemma_stemma__finish_run
 ---
 You are a placeholder that exercises Stemma's plumbing. Do exactly these steps, in order, and nothing else. At the end, report every tool result verbatim.
-1. Call file_claim with statement "Northwind Traders sold 3,400 units in 2025.", tier "observed", branch_id "b1", entities ["Northwind Traders"], value {"number": 3400, "unit": "units", "period": "2025", "kind": "count", "as_written": "3,400"}, support [{"receipt_id": "r-invented-1", "quote": "Northwind Traders sold 3,400 units in 2025"}]. Note the claim id and the tag it returns.
+0. Call capture_file with path "task/northwind-note.txt" and reason "the user's attachment". Note the receipt_id it returns; call it RECEIPT.
+1. Call file_claim with statement "Northwind Traders sold 3,400 units in 2025.", tier "observed", branch_id "b1", entities ["Northwind Traders"], value {"number": 3400, "unit": "units", "period": "2025", "kind": "count", "as_written": "3,400"}, support [{"receipt_id": RECEIPT, "quote": "Northwind Traders sold 3,400 units in 2025"}]. Note the claim id and the tag it returns.
 2. Write draft/answer.v1.md holding these two lines, with TAG replaced by the tag from step 1: "# Answer" and "Northwind Traders sold 3,400 units TAG in the year [[nc:period label]]." Then call submit_draft with version 1.
 3. Call finish_run with version 1. It will be refused. Note the refusal text exactly.
 4. Call tree_upsert with node {"id": "n1", "kind": "condition", "statement": "Unit sales are large enough.", "branch_id": "b1", "crux": true, "status": "in_progress"}.

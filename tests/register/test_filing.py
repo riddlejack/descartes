@@ -13,7 +13,7 @@ import pytest
 
 from stemma.register import tags
 from stemma.register.derivation import rerun
-from stemma.register.evidence_port import QuoteCheckFailed, stub_check_quote
+from stemma.register.evidence_port import QuoteCheckFailed
 from stemma.register.filing import Refused, claim_id_of, parse_warning, run_checks
 
 TEXT = "Acme Widgets reported revenue of 1.2bn in fiscal 2025, up from 1.0bn.\nMargins held."
@@ -223,16 +223,17 @@ def test_analysis_inputs_only_named_and_one_result(tmp_path: Path) -> None:
     assert json.loads(out.read_text()) == {"number": 4.0}
 
 
-def test_stub_evidence_reads_contract_layout(tmp_path: Path) -> None:
-    (tmp_path / "store/receipts").mkdir(parents=True)
-    (tmp_path / "store/text").mkdir(parents=True)
-    (tmp_path / "store/receipts/r1.json").write_text(json.dumps({"sha256": "f" * 64}))
-    (tmp_path / "store/text" / ("f" * 64 + ".txt")).write_text("a  b\nc")
-    assert stub_check_quote(tmp_path, "r1", "a b c")["found"] is True
-    assert stub_check_quote(tmp_path, "r1", "a c")["found"] is False
-    for bad in ("../r1", "r2"):
+def test_real_evidence_service_checks_quotes(tmp_path: Path) -> None:
+    from evidence_kit import capture_invented
+
+    from stemma.register.evidence_port import load
+    rid = capture_invented(tmp_path, "note.txt", "Invented note: a  b\nc and more.")
+    ev = load()
+    assert ev.check_quote(tmp_path, rid, "a b c") is True
+    assert ev.check_quote(tmp_path, rid, "a c") is False
+    for bad in ("../" + rid, "r-not-issued"):
         with pytest.raises(QuoteCheckFailed):
-            stub_check_quote(tmp_path, bad, "a")
+            ev.check_quote(tmp_path, bad, "a")
 
 
 # --- Tags -----------------------------------------------------------------------------

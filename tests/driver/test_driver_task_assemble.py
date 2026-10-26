@@ -74,7 +74,6 @@ def test_create_run(cfg: DriverConfig, tmp: Path) -> None:
     assert rj["harness"]["version"] == "2.1.308 (Claude Code)"
     assert rj["models"]["lead"] == {"model": "claude-opus-5-5", "effort": "max"}
     assert rj["limits"]["max_concurrent_checks"] == 4
-    assert rj["evidence_stub"] is False
     assert (run / "task" / "attachments" / "memo.txt").read_text() == "invented attachment"
     assert "The board." in (run / "task" / "intake.md").read_text()
     assert (run / "CLAUDE.md").read_text() == (cfg.plugin_src / "STANDING-RULES.md").read_text()

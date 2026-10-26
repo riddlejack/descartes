@@ -42,8 +42,6 @@ def driver_env(cfg: DriverConfig, run_dir: Path) -> dict[str, str]:
     }
     if cfg.cache_dir is not None:
         extra["STEMMA_CACHE"] = str(cfg.cache_dir)  # the evidence service's fetch cache
-    if cfg.evidence_stub is not None:
-        extra["STEMMA_EVIDENCE_STUB"] = cfg.evidence_stub  # evidence service stub mode (tests)
     return extra
 
 

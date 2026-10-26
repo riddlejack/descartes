@@ -87,9 +87,9 @@ the detail. Harness facts below were each shown by a run (report and kit in
   new check request (same id-only prompt, round n+1).
 - **Tool names** (section 5 allows refinement): the thirteen listed, plus `get_tree`
   and `claim_dependents`.
-- **Evidence stub.** Until part A lands here, the register reaches A's
-  `stemma.evidence.api` if importable, else a stub only when `STEMMA_EVIDENCE_STUB=1`
-  (recorded in `run.json`); never silently.
+- **Evidence.** The register calls part A's `stemma.evidence.api` (merged); the stub
+  used before the merge is removed, and tests capture invented documents through A's
+  `capture_file`.
 
 - **The launch is one function.** `stemma.driver.clean.clean_launch` builds argv, the
   environment (from nothing) and the settings file for any runner; `check_canary` with
@@ -150,7 +150,7 @@ the detail. Harness facts below were each shown by a run (report and kit in
   `revocation_failed` (exit 6), even if the register claims a release.
 
 ## How it was shown
-- 555 unit and hostile tests (`pytest tests`), no network; `ruff` and `mypy --strict`
+- 829 unit and hostile tests with every extras group installed (4 live tests skipped) (`pytest tests`), no network; `ruff` and `mypy --strict`
   clean on `src/`.
 - Race tests: two processes filing claims at once (register), four writing the World
   Model log at once (engine), both barrier-synchronised.
@@ -167,7 +167,6 @@ the detail. Harness facts below were each shown by a run (report and kit in
   (`guards.guard_read`, which allows only `task/`, `intake.md` and its own draft) is
   what confines the Read tool.
 - Resume after a real stop has been tested with the fake binary only.
-- Part A's real evidence service has not been run with the register; the e2e used the
-  stub (recorded in `run.json`).
+- None known beyond the above.
 - World Model features not built: clustering and scores, aggregates, snapshot writes,
   tombstones, unmerge, custom views, subscriptions.

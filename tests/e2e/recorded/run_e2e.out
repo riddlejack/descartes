@@ -2,12 +2,12 @@ run folder: <SCRATCH>
 {
  "driver_exit": 0,
  "denials": [
-  "Refused: finish_run: the tree has no nodes; the blind framer's critique is not recorded; framer/lead-response.md does not exist; the deciders-eye-reviewer review of version 1 is not recorded; the evidence-auditor review of version 1 is not recorded; the mechanical-reader review of version 1 is not recorded; claim 197b37675a64 has verdict none."
+  "Refused: finish_run: the tree has no nodes; the blind framer's critique is not recorded; framer/lead-response.md does not exist; the deciders-eye-reviewer review of version 1 is not recorded; the evidence-auditor review of version 1 is not recorded; the mechanical-reader review of version 1 is not recorded; claim ee77fd878889 has verdict none."
  ],
  "launches": [
   {
    "role": "lead",
-   "prompt": "run:20261026-064412-4fb980",
+   "prompt": "run:20261026-065636-1ab23f",
    "model": "claude-opus-5-5",
    "effort": "low"
   },
@@ -19,7 +19,7 @@ run folder: <SCRATCH>
   },
   {
    "role": "claim-checker",
-   "prompt": "claim:197b37675a64f0650f35ef20b3f300ae1bbffc532b053a19701e408d310adf09",
+   "prompt": "claim:ee77fd878889e521bb50cd7c8047df98e09c3b5c82a1899d5f459220a50dfdbe",
    "model": "claude-opus-5-5",
    "effort": "low"
   },
@@ -66,7 +66,6 @@ run folder: <SCRATCH>
   "canary_passed",
   "denied",
   "driver_finished",
-  "evidence_stub_on",
   "file_write",
   "register_read",
   "register_write",
@@ -81,7 +80,7 @@ run folder: <SCRATCH>
    "ended",
    "completed"
   ],
-  "claim:197b37675a64f0650f35ef20b3f300ae1bbffc532b053a19701e408d310adf09 (claim-checker)": [
+  "claim:ee77fd878889e521bb50cd7c8047df98e09c3b5c82a1899d5f459220a50dfdbe (claim-checker)": [
    "ended",
    "completed"
   ],
@@ -112,23 +111,23 @@ run folder: <SCRATCH>
  },
  "claims": [
   {
-   "tag": "[[c:197b37675a64]]",
+   "tag": "[[c:ee77fd878889]]",
    "verdict": "holds",
    "author": "stemma:lead"
   }
  ],
  "finished": [
   {
-   "at": "2026-10-26T06:45:06.260Z",
+   "at": "2026-10-26T06:57:29.965Z",
    "version": 1,
-   "sha256": "47da6359d283d0f539f3324e7c79688c48e4295575097fd62ba7c828cb208ec4",
+   "sha256": "7f9371f378d88cee594ef8a7ded1424e67f072ab9bd797a9dbc87a43e4eb8c45",
    "sessions": [
-    "0347e29a-4de8-4d43-be59-90e376f8a60b",
-    "06561182-2d53-408c-ba11-8f8a13583104",
-    "37baeba1-7d13-4f01-9088-4577d88a0f3f",
-    "38c31b94-1265-4b3f-a1b1-3168bd51f347",
-    "7c9f3c03-1ad1-4b7e-94f4-33f3c710417b",
-    "af5078cd-6d35-46b0-b699-253243cbf317"
+    "7a615694-7b04-42ea-903b-f0ac8a47255a",
+    "856c0337-628c-4f43-8d71-f9ed15891886",
+    "9ae8c37c-de1b-4832-8069-f05699a80cec",
+    "c48f0c62-6b04-437f-a594-8c43322a98ba",
+    "cb0db35d-2277-4606-915b-4c42542005bb",
+    "fe2433c7-0781-476a-8faf-fd74195f71d3"
    ]
   }
  ],

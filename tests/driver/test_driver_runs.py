@@ -3,7 +3,6 @@ concurrency, resume, status files and the CLI."""
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import os
 import signal
@@ -83,8 +82,6 @@ def test_full_run_argv_env_canary_and_status(cfg: DriverConfig, tmp: Path, fake:
     assert env.pop("CLAUDE_CODE_TMPDIR") == str(run / ".stemma-tmp" / sid)
     assert set(env) == ALLOWED_ENV, sorted(set(env) ^ ALLOWED_ENV)
     assert set(scrubbed_env(cfg, run)) == ALLOWED_ENV
-    stub = dataclasses.replace(cfg, evidence_stub="1")
-    assert scrubbed_env(stub, run)["STEMMA_EVIDENCE_STUB"] == "1"
     assert "STEMMA_EVIDENCE_STUB" not in env
     assert env["CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS"] == "1"
     assert env["STEMMA_RUN_DIR"] == str(run) and env["STEMMA_PYTHON"] == sys.executable
@@ -274,16 +271,14 @@ def test_status_and_cli(cfg: DriverConfig, tmp: Path, fake: Fake, limits: Limits
     monkeypatch.setenv("STEMMA_CLAUDE_BIN", str(cfg.claude_bin))
     monkeypatch.setenv("STEMMA_CLAUDE_CONFIG", str(cfg.claude_config))
     monkeypatch.setenv("STEMMA_PYTHON", sys.executable)
-    monkeypatch.setenv("STEMMA_EVIDENCE_STUB", "1")
+    monkeypatch.setenv("STEMMA_EVIDENCE_STUB", "1")  # no longer passed to any session
     task = write_task(tmp)
     monkeypatch.setattr("stemma.driver.runfolder.Limits", lambda: limits)
     monkeypatch.setattr("stemma.driver.runner.register_released", released)
     assert main(["--plugin-src", str(cfg.plugin_src), "start", str(task)]) == 0
     run = Path(capsys.readouterr().out.strip().splitlines()[0])
-    assert all(c["env"]["STEMMA_EVIDENCE_STUB"] == "1" for c in fake.calls())
-    assert json.loads((run / "run.json").read_text())["evidence_stub"] is True
-    assert kinds(run, "evidence_stub_on")[0]["value"] == "1"
-    assert not kinds(run, "evidence_stub_mismatch")
+    assert all("STEMMA_EVIDENCE_STUB" not in c["env"] for c in fake.calls())
+    assert "evidence_stub" not in json.loads((run / "run.json").read_text())
     (run / "tree.json").write_text(json.dumps({"nodes": [
         {"id": "n1", "status": "waiting_user", "statement": "Region share", "branch_id": "b1"},
         {"id": "n3", "status": "waiting_user", "statement": "Deep one", "branch_id": "b9"},

@@ -3,20 +3,19 @@
 Not collected by pytest. Run it as
 
     STEMMA_RUNS=<folder> STEMMA_CLAUDE_BIN=<pinned claude> STEMMA_CLAUDE_CONFIG=<clean config> \
-    STEMMA_PYTHON=$PWD/.venv/bin/python STEMMA_EVIDENCE_STUB=1 \
+    STEMMA_PYTHON=$PWD/.venv/bin/python \
     .venv/bin/python tests/e2e/run_e2e.py
 
 It assembles a plugin source from the placeholder role texts beside this file plus the
 real `plugin/hooks/` and `plugin/.mcp.json`, creates a run folder from an invented task,
-writes one invented capture into the run's store, and runs the driver. The placeholder
-lead files one claim on that capture, calls `finish_run` (refused: no verdict yet), sets
+puts one invented note under the run's `task/`, and runs the driver. The placeholder lead
+captures the note with part A's `capture_file`, files one claim on that receipt, calls `finish_run` (refused: no verdict yet), sets
 up the rest of the release gate's producers, waits for the checks the driver starts, and
 calls `finish_run` again. The script then prints what the run folder shows.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 import sys
@@ -26,7 +25,7 @@ from pathlib import Path
 from stemma.driver.config import DriverConfig
 from stemma.driver.runfolder import create_run
 from stemma.driver.runner import start
-from stemma.register import checks_api, jsonl
+from stemma.register import checks_api, jsonl, safeio
 from stemma.register.store import Register
 
 HERE = Path(__file__).resolve().parent
@@ -45,17 +44,9 @@ def plugin_source(dst: Path) -> Path:
     return dst
 
 
-def invented_capture(run_dir: Path) -> None:
-    data = TEXT.encode()
-    sha = hashlib.sha256(data).hexdigest()
-    for sub in ("bytes", "text", "receipts"):
-        (run_dir / "store" / sub).mkdir(parents=True, exist_ok=True)
-    (run_dir / "store/bytes" / sha).write_bytes(data)
-    (run_dir / "store/text" / f"{sha}.txt").write_text(TEXT, encoding="utf-8")
-    (run_dir / "store/receipts/r-invented-1.json").write_text(json.dumps({
-        "receipt_id": "r-invented-1", "sha256": sha, "status": "ok", "content_type":
-        "text/plain", "text_path": f"store/text/{sha}.txt", "text_chars": len(TEXT),
-        "note": "invented capture written by tests/e2e/run_e2e.py"}), encoding="utf-8")
+def invented_note(run_dir: Path) -> None:
+    """An invented attachment under task/ (tool-only: written by the host, no symlink)."""
+    safeio.write_text(run_dir, "task/northwind-note.txt", TEXT)
 
 
 def main() -> int:
@@ -67,7 +58,7 @@ def main() -> int:
         "switches": {"s5_models": MODELS}}), encoding="utf-8")
     cfg = DriverConfig.from_env(src)
     run_dir = create_run(cfg, task)
-    invented_capture(run_dir)
+    invented_note(run_dir)
     print(f"run folder: {run_dir}", flush=True)
     code = start(cfg, run_dir)
 
