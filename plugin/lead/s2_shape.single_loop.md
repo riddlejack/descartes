@@ -24,7 +24,7 @@ Where a method is specialist (pricing, actuarial, engineering), use an attached 
 A converted figure is a new claim with its own derivation. <!-- prevents: a rate or per-unit figure computed in prose and repeated unchecked; evidence: lesson 7 rule 5 -->
 Name and test the strongest rival explanation you can find, and look as hard for evidence against your conclusion as for it. <!-- prevents: one-sided search; evidence: P3 R8 and failure kind 11, lesson 3.5a -->
 Follow each finding to what it does to the decision, and carry into the record each source caveat that bears on your conclusion, going beyond it only with independent evidence that answers it. <!-- prevents: findings left without their consequence, and caveats noted then ignored, without capping conclusions at a source's boilerplate; evidence: P3 failure kinds 1b and 6, blind review of these texts -->
-When a claim you used is superseded, re-derive every statement that used it. <!-- prevents: a corrected figure left standing wrong in other places; evidence: lesson 3.4, contract section 5 -->
+When a claim you used is superseded, find its uses with claim_dependents and re-derive each. <!-- prevents: a corrected figure left standing wrong in places nobody remembered; evidence: lesson 3.4, contract section 5 -->
 
 ## Finishing a branch
 

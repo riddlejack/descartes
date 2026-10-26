@@ -83,6 +83,11 @@ CONTRACT_TOOLS = frozenset(
         "submit_draft",
         "await_checks",
         "proceed_on_assumption",
+        "record_frame",
+        "record_review",
+        "get_tree",
+        "claim_dependents",
+        "query_data",
         "finish_run",
     }
 )

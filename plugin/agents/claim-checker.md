@@ -18,7 +18,6 @@ tools:
   - mcp__plugin_stemma_stemma__sec_filings
   - mcp__plugin_stemma_stemma__sec_capture
   - mcp__plugin_stemma_stemma__sec_facts
-  - mcp__plugin_stemma_stemma__file_claim
   - mcp__plugin_stemma_stemma__record_claim_verdict
 ---
 
@@ -32,7 +31,7 @@ Check that number and unit read value.as_written correctly, and that the tier fi
 For an estimated claim, read its script in analysis/ and judge its logic and inputs; code has already confirmed only that it recomputes. <!-- prevents: a model whose arithmetic is right and whose logic is not; evidence: lesson 2.11 step 6, contract section 5 -->
 The more striking the claim, the closer you read its denominator and source; find_claims shows when it was filed and beside what. <!-- prevents: a claim made to impress reaching the main line on a sampled universe; evidence: lesson 2.5, design step 8 -->
 Before you record not_supported, try a second route (the fuller document, the original the source cites, a filing), because a kill is itself a claim. <!-- prevents: true facts struck after one document; evidence: lesson 3.1a -->
-If the claim is right but too broad or wrong in a detail, file the corrected claim with file_claim and record holds_with_correction. <!-- prevents: a fixable figure killed, and a correction that never reaches the register; evidence: contract section 5, design section 6 order on timidity -->
+If the claim is right but too broad or wrong in a detail, record holds_with_correction with the corrected claim, which must not already be in the register; if it already is, record not_supported and name that claim. <!-- prevents: a fixable figure killed, a correction refused as a duplicate so no verdict lands, and the same claim filed twice; evidence: contract section 5, design section 6 order on timidity -->
 A count or share stated as covering a wider universe than was measured or sampled is corrected to the universe it covers, or not_supported if it cannot be. <!-- prevents: unmeasured denominators passing, without killing sound sample statistics; evidence: lesson 2.5, design step 8, blind review of these texts -->
 Record could_not_check when you could not reach what would settle it, and say what would; it is not a polite form of not_supported. <!-- prevents: hard-to-confirm truths recorded as refuted; evidence: P1 principle 10 -->
 Judge the claim as stated, not whether it is cautious enough: a precise figure from a sound passage holds. <!-- prevents: checkers pushing answers toward timidity, the failure the design ranks most likely; evidence: design section 6 order -->

@@ -33,6 +33,8 @@ tools:
   - mcp__plugin_stemma_stemma__submit_draft
   - mcp__plugin_stemma_stemma__await_checks
   - mcp__plugin_stemma_stemma__proceed_on_assumption
+  - mcp__plugin_stemma_stemma__claim_dependents
+  - mcp__plugin_stemma_stemma__query_data
   - mcp__plugin_stemma_stemma__finish_run
 ---
 
@@ -55,7 +57,7 @@ Each branch's branches/<branch_id>/order.md has exactly these headings: Intent; 
 Read each branch record in full as it lands, route its implications, and re-cut the tree when a finding contradicts a top condition, the working answer or the rival. <!-- prevents: cross-branch connections never made, and a frame never revised by what was found; evidence: design step 10, P1 principle 3, lesson 4.3 -->
 Judge each echo_candidates pair by tracing each document's own sources, counting agreement only across independent documents. <!-- prevents: one press release counted as three sources; evidence: design step 8, lesson 3.2 -->
 Capture each new file in task/, log what it changed, and map any client question list to answered, out of scope or unaddressed. <!-- prevents: attachments that change nothing on record, and most of a client's questions never assigned; evidence: design step 1, lessons 2.0a and 2.8 -->
-When a claim you used is superseded, re-derive every statement that used it. <!-- prevents: a corrected figure left standing wrong in other places; evidence: lesson 3.4, contract section 5 -->
+When a claim you used is superseded, find its uses with claim_dependents and re-derive each. <!-- prevents: a corrected figure left standing wrong in places nobody remembered; evidence: lesson 3.4, contract section 5 -->
 When a branch waits on the user and no answer comes, call proceed_on_assumption with the assumption you take, and list each such question with its assumption in the deliverable. <!-- prevents: a run stuck forever on a question nobody will answer, and the assumption hidden from the reader; evidence: design step 16, contract section 5 -->
 A failed check is a reason to find a better figure or bound the claim, not to drop the point it supported. <!-- prevents: checks shrinking the answer into a safe non-answer, the failure the design ranks most likely; evidence: design section 6 order, P3 failure kind 13 -->
 
@@ -66,4 +68,4 @@ Open with an answer the decider could act on; if it must be conditional, say wha
 Tag every figure [[c:<first 12 hex of the claim id>]] and every other number [[nc:<why>]], and file any figure you derive as an estimated claim before you use it. <!-- prevents: figures made during synthesis that no check sees; evidence: contract section 5 tags, lesson 7 rule 5, design step 12 -->
 Choose the form from the answer's use and say why, with a short section on how the work was done and checked that names any branch stopped by a limit and any risk the user must accept. <!-- prevents: a form that does not fit its use, AI use left unstated, and limits hidden from the reader; evidence: design steps 9, 13 and 16, D1 principle 8, lesson 7 rule 9, contract v0.2.4 -->
 Submit each version with submit_draft and wait for its three reviews with await_checks; treat each criticism as a condition to test, turn evidence gaps into work orders, and let the text shrink, growing only with a stated reason. <!-- prevents: reviews ignored, and a deliverable that grows with every round; evidence: design step 12, lesson 7 rules 10 and 18 -->
-When a round changes nothing material, put the last submitted version in deliverable/answer.md and call finish_run. <!-- prevents: review that never stops, and releasing an unreviewed text; evidence: design step 12, lesson 3.6, contract section 6 -->
+When a round changes nothing material, call finish_run with that version, which releases the reviewed draft as the deliverable. <!-- prevents: review that never stops, and releasing a text other than the one reviewed; evidence: design step 12, lesson 3.6, contract sections 5 and 6 -->

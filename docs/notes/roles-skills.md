@@ -1,6 +1,6 @@
 # Part C notes: the role texts and skills
 
-Builder C, against `docs/CONTRACTS.md` v0.2.4. Detail behind the report; the owner's
+Builder C, against `docs/CONTRACTS.md` v0.2.7. Detail behind the report; the owner's
 page is `<a private page>`.
 
 ## What is in the branch
@@ -157,6 +157,24 @@ Recorded at first, then decided by the orchestrator in contract v0.2.4 and appli
 - **`await_checks`** accepts claim ids, branch ids and draft versions.
 - **Late documents and documents behind a re-cut** are accepted as covered by the
   per-claim checks for now.
+
+## Contract v0.2.7 (part B's merge-gate fixes)
+
+- The blind framer records its frame and critique with `record_frame` (kind own or
+  critique); `framer/` files are tool-only, so it has no Write.
+- The three final reviewers read the frozen draft, `register/drafts/answer.v<n>.md`,
+  and record with `record_review`; `reviews/` is tool-only, so they have no Write.
+- The lead calls `finish_run(version)`, which copies the reviewed draft into
+  `deliverable/`; no role writes there.
+- The claim checker passes a correction inside `record_claim_verdict`; it must not
+  already be in the register (the register refuses it, and no verdict would land), so
+  the checker records not_supported and names the existing claim instead. The
+  checker no longer lists `file_claim`.
+- The lead and the shared branch method find a superseded claim's uses with
+  `claim_dependents`.
+- `query_data` is in the lead's and worker's tools with no line of its own: a figure
+  from a row still has to be filed with a quotation found in its receipt, and
+  derivations read only claims, so code already stops an unfiled row figure.
 
 ## Lines that depend on the pending E6a reviewer study (contract 10)
 
