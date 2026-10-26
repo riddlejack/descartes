@@ -26,16 +26,14 @@ TASK = {
         "How much detail?": "a short memo",
         "What data do you hold?": "none",
     },
-    "switches": {"s1_method": "decomposition", "s2_shape": "team",
-                 "s3_hypothesis_in_briefs": True, "s4_orientation": "frame_first"},
-}
+}  # no switches: the defaults
 # Resource limits that keep the run small (not a quality bar; recorded as such).
 LIMITS = Limits(max_concurrent_checks=3, check_max_s=40 * 60.0, lead_max_s=4 * 3600.0,
-                max_check_attempts=3)
+                max_check_attempts=3, max_review_rounds=3)
 
 
 def main() -> int:
-    work = Path(tempfile.mkdtemp(prefix="stemma-ws-task-"))
+    work = Path(tempfile.mkdtemp(prefix="stemma-ws2-task-"))
     task = work / "task.json"
     task.write_text(json.dumps(TASK, indent=1), encoding="utf-8")
     cfg = DriverConfig.from_env()
