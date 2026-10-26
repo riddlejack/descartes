@@ -1,4 +1,4 @@
-# Contracts between the parts (v0.3)
+# Contracts between the parts (v0.3.1)
 
 These are the interfaces the parts agree on, so they can be built in parallel. The
 design (`DESIGN-v1.md`, cited as "step n") says what the system does; this file says
@@ -104,7 +104,8 @@ marked *tool-only* are written by an MCP tool or the driver, never by an agent
 - `store/` (*tool-only*, A): the evidence store (section 4).
 - `register/` (*tool-only*, B): the claim register (section 5).
 - `analysis/` (workers, lead): recorded calculation scripts (section 5) and outputs.
-- `draft/answer.v<n>.md` (lead); `submit_draft` freezes a version.
+- `draft/answer.v<n>.md` (lead); `submit_draft` freezes a version into
+  `register/drafts/answer.v<n>.md` (tool-only), which the reviewers read.
 - `reviews/v<n>/deciders-eye.md`, `evidence-audit.md`, `mechanical.md`.
 - `deliverable/answer.md` (lead: the final slide-by-slide text, tagged as section 5
   says); `deliverable/answer.reader.md` (driver: tags rendered as references); a deck
@@ -318,9 +319,12 @@ Each guard has a producer in the live path, or it would block every run.
   verified.
 - **A branch reaches `answered` or `gap_accepted` only by a branch verdict saying so.**
   Producer: the branch-reviewer session the driver starts on `propose_branch_done`.
-- **`finish_run` may be called at any time**: when it refuses, it returns the full
-  list of unmet conditions, so it is also how the lead reads the gate. The lead calls
-  it after every review round.
+- **`gate_status(version)` reads the gate without releasing**: the full list of unmet
+  conditions, one per line. The lead calls it after every review round. `finish_run`
+  releases when nothing is unmet, so it is never used to probe.
+- **Reviews carry structured points.** `record_review` takes the review text and a
+  list of points, each `{point, material: true|false}`; the reviewer judges
+  materiality, code only reads it.
 - **`finish_run` refuses** unless:
   - every leaf node (`condition`, `rival`, and an `open_lane` that holds work) is
     `answered`, `gap_accepted` or `stopped_by_limit`; an `option` or other parent node
@@ -329,7 +333,8 @@ Each guard has a producer in the live path, or it would block every run.
     review: the lead files it as a branch whose record says what was not done and why,
     and the reviewer may accept the gap or send it back;
   - `framer/critique.md` and `framer/lead-response.md` exist;
-  - the three reviews exist for the draft version being released;
+  - the three reviews exist for the draft version being released, and none of them
+    holds a material point, unless the review-round limit below has been reached;
   - review rounds: `max_review_rounds` in `run.json` is a recorded resource limit
     (default 3). After the last permitted round `submit_draft` refuses another, and the
     release lists every criticism the last round raised that the draft did not
