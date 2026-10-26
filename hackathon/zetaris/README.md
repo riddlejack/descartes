@@ -15,38 +15,41 @@ This is how Zetaris becomes the data layer on one Mac. Every secret lives in
 
 ## Steps only the owner can take
 
-1. Register at https://cloud.enterprise.zetaris.com/register and accept Zetaris's terms.
-2. On https://cloud.enterprise.zetaris.com/dashboard/download, download
-   `zetaris-platform.zip` into `~/.private/zetaris/`, and run the registry login it
-   shows (`docker login zetarishackathon.azurecr.io`) in Terminal.
-3. After the platform is up: sign in at http://localhost:3000, create an API key under
-   Management → API Tokens, and add `ZETARIS_API_KEY=<key>` to
-   `~/.private/zetaris/stemma.env`. Zetaris's guide says an agent must never create or
-   fetch this key.
-
-## Steps the builder runs
+1. Done 26 Oct: registered, downloaded `zetaris-platform.zip` into `~/.private/zetaris/`.
+2. Sign in to Zetaris's image registry: paste the `docker login zetarishackathon.azurecr.io`
+   command from the download page into Terminal. No agent runs a command carrying the
+   owner's password.
+3. Then, in the same Terminal, one command that finishes the install (preflight, a 4 GB
+   pull, the first start, Zetaris's `verify.sh`, and the network link to the evidence
+   database; 20 to 45 minutes, logged to `~/.private/zetaris/install.log`):
 
 ```bash
-docker compose --env-file ~/.private/zetaris/stemma.env -f hackathon/zetaris/compose.yaml up -d
+bash ~/.private/zetaris/finish-install.sh
 ```
 
+4. When it ends it says what is left: sign in at http://localhost:3000 with the email and
+   password in `~/.private/zetaris/admin.txt`, create an API key under Management → API
+   Tokens, and add `ZETARIS_API_KEY=<key>` to `~/.private/zetaris/stemma.env`. Zetaris's
+   guide says an agent must never create or fetch this key.
+
+## What the builder prepared
+
+- The bundle unzipped into `~/.private/zetaris/zetaris-platform/` (zip sha256
+  `14c6a811…13d3`, images 2.4.3-v2.4.3.1-hackathon, JDBC driver 2.4.3.1). Its `.env` ships
+  filled in; two changes, the original kept as `.env.as-shipped` (both mode 600): our own
+  admin password in place of the published default, and `TELEMETRY_ENABLED=false`
+  (declining the optional usage report, so the first sign-in does not ask).
+- `preflight.sh` passes except the registry sign-in: Docker 29.2.1, Compose 5.1.3,
+  Rosetta on (Colima `vz`), 4 CPUs, 7 GB (8 recommended, 6 required), 80 GB free.
+- `postgres:16-alpine`, the stack's one public image, pulled in advance.
+- `stemma-evidence-pg` running (`compose.yaml` here, restarts with Docker).
+- `finish-install.sh` (a copy of the one in this folder) in `~/.private/zetaris/`.
+
+The evidence database joins Zetaris's network (`zetaris_default`) so the query engine
+reaches it by name (`stemma-evidence-pg:5432`):
+
 ```bash
-cd ~/.private/zetaris && unzip zetaris-platform.zip && cd zetaris-platform && ./preflight.sh
-```
-
-Then set the `.env` values Zetaris's install guide lists (admin email and password,
-`ZSPARK_DRIVER_MEM=2g`, `ZSPARK_DRIVER_CORES=2`, `ZSPARK_MASTER_URL=local[2]`,
-`ZETARIS_API_MAX_HEAP=1g`, `ZETARIS_SEED_TPCH=true`), `chmod 600 .env`, and:
-
-```bash
-docker compose pull && docker compose up -d && ./verify.sh
-```
-
-Connect the evidence database to Zetaris's network, so its query engine reaches it by
-name (`stemma-evidence-pg:5432`):
-
-```bash
-docker network connect zetaris-platform_default stemma-evidence-pg
+docker network connect zetaris_default stemma-evidence-pg
 ```
 
 Zetaris's own checks, in the order its quick start asks: `verify.sh` (nine checks),

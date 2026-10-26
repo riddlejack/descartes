@@ -58,9 +58,11 @@ Dockerfile, logs) waits for the orchestrator.
   `src/stemma/providers`.
 
 **Not yet shown:**
-- **Zetaris itself is not installed.** The platform bundle needs the owner's Zetaris
-  account (registration, terms, download, registry login); the orchestrator has the
-  exact steps. So Zetaris's own checks (`verify.sh`, the Pikachu query, the REST smoke
+- **Zetaris itself is not installed yet.** The owner downloaded the bundle on 26 Oct;
+  it is unzipped, configured and passes `preflight.sh` except the registry sign-in,
+  which only the owner may run. After it, one command finishes the install
+  (`bash ~/.private/zetaris/finish-install.sh`; see `hackathon/zetaris/README.md`),
+  then the owner creates the REST API key in Zetaris's interface. So Zetaris's own checks (`verify.sh`, the Pikachu query, the REST smoke
   test), the semantic-layer setup, and the live test that registers an invented run
   and reads it back through Zetaris have not run. The equality test so far runs the
   Zetaris code path against a fake that answers from SQLite; that proves the client
@@ -183,8 +185,15 @@ the direct path returns is missing, renamed or changed in type, and the model is
 
 ## Versions recorded
 
-- Zetaris getting-started repository: commit 6a2fbaa (22 Oct 2026). Platform: not
-  installed.
+- Zetaris getting-started repository: commit 6a2fbaa (22 Oct 2026). Platform bundle:
+  zip sha256 `14c6a811a140378bec1749ceffd7fa123bafb2f178545b26354e8f9433b413d3`, images
+  `2.4.3-v2.4.3.1-hackathon`, JDBC driver 2.4.3.1; not yet started (registry sign-in).
+- The bundle's `verify.sh` queries through the interface's proxy
+  (`/api/proxy/query/sql/start`, body `select` and `pageLimit`) and gets rows back as
+  objects whose values are strings (`"seven":"7"`). The client here uses the direct REST
+  route the getting-started helpers use (`/sql-editor/sqls/run` on port 8888) and reads
+  rows as lists or objects, parsing numbers from text; which route and shape the live
+  instance gives is the first thing the live test settles.
 - Meterless repository: commit 1742dec (19 Oct 2026); Runtime contract 0.90.0.
 - Postgres 16.13, image `postgres@sha256:71e27bf6…3ddf`; pg8000 1.31.5.
 - Docker on Colima (4 CPUs, 7.7 GiB visible to Docker, 30 GiB disk, aarch64, amd64 by

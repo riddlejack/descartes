@@ -6,6 +6,7 @@ name: stemma-evidence
 services:
   stemma-evidence-pg:
     container_name: stemma-evidence-pg
+    restart: unless-stopped
     # postgres 16.13, pinned by digest (the multi-arch index; runs natively on arm64).
     image: postgres@sha256:71e27bf60b70bded003791b5573f8b808365613f341df20ffcf0c1ed7bc13ddf
     environment:

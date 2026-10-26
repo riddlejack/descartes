@@ -36,8 +36,9 @@ def query_data(sql: str) -> dict[str, Any]:
 query_data.__doc__ = f"""Run one read-only SELECT over this run's evidence tables (through Zetaris
 when configured, SQLite otherwise) and return columns and rows (at most {QUERY_ROWS}).
 Each row must carry a receipt or claim id; a figure taken from a row is still filed as
-a claim with its own support. Plain functions only (count, sum, min, max, avg, round,
-lower, upper, substr, coalesce and a few more); no semicolons or comments. Tables:
+a claim with its own support. Give every computed column an alias. Plain functions only
+(count, sum, min, max, avg, round, lower, upper, substr, coalesce and a few more); no
+semicolons or comments. Tables:
 {_tables_text()}"""
 
 TOOLS: tuple[Callable[..., dict[str, Any]], ...] = (query_data,)
