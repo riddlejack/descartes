@@ -28,6 +28,7 @@ class CheckRequest:
     prompt: str  # id-only, e.g. "claim:<claim_id>"
     event: str  # the register event that called for it
     created_at: str
+    round: int = 1  # the same check asked again (a branch re-proposed) is a new round
 
 
 @dataclass(frozen=True)
@@ -58,8 +59,8 @@ def log_path(run_dir: Path) -> Path:
     return run_dir / "register" / "checks.jsonl"
 
 
-def request_id_for(role: str, prompt: str) -> str:
-    return hashlib.sha256(f"{role}\n{prompt}".encode()).hexdigest()[:16]
+def request_id_for(role: str, prompt: str, round_no: int = 1) -> str:
+    return hashlib.sha256(f"{role}\n{prompt}\n{round_no}".encode()).hexdigest()[:16]
 
 
 def _states(records: list[dict[str, Any]]) -> dict[str, CheckState]:
@@ -68,7 +69,8 @@ def _states(records: list[dict[str, Any]]) -> dict[str, CheckState]:
         rid = r["request_id"]
         if r["kind"] == "request":
             if rid not in out:
-                req = CheckRequest(rid, r["role"], r["prompt"], r["event"], r["at"])
+                req = CheckRequest(rid, r["role"], r["prompt"], r["event"], r["at"],
+                                   r.get("round", 1))
                 out[rid] = CheckState(req, None, None, None, None, None, None, None)
         elif r["kind"] == "launched":
             s = out[rid]
@@ -85,11 +87,13 @@ def states(run_dir: Path) -> dict[str, CheckState]:
     return _states(jsonl.read_all(log_path(run_dir)))
 
 
-def request_check(run_dir: Path, role: str, prompt: str, event: str) -> CheckRequest:
+def request_check(run_dir: Path, role: str, prompt: str, event: str,
+                  round_no: int = 1) -> CheckRequest:
+    """Ask for a check; idempotent per (role, prompt, round)."""
     role = roles.short(role)
     if f"{roles.PLUGIN}:{role}" not in roles.CHECKING_ROLES:
         raise ValueError(f"{role} is not a checking role")
-    rid = request_id_for(role, prompt)
+    rid = request_id_for(role, prompt, round_no)
     log = log_path(run_dir)
     with jsonl.exclusive(log):
         existing = _states(jsonl.read_all(log)).get(rid)
@@ -97,8 +101,9 @@ def request_check(run_dir: Path, role: str, prompt: str, event: str) -> CheckReq
             return existing.request
         at = _now()
         jsonl.append_unlocked(log, [{"kind": "request", "request_id": rid, "role": role,
-                                     "prompt": prompt, "event": event, "at": at}])
-    return CheckRequest(rid, role, prompt, event, at)
+                                     "prompt": prompt, "event": event, "at": at,
+                                     "round": round_no}])
+    return CheckRequest(rid, role, prompt, event, at, round_no)
 
 
 def pending_checks(run_dir: Path) -> list[CheckRequest]:
@@ -127,6 +132,14 @@ def mark_launched(run_dir: Path, request_id: str, session_id: str, model: str,
 def mark_ended(run_dir: Path, request_id: str, exit_code: int, outcome: str) -> None:
     _mark(run_dir, {"kind": "ended", "request_id": request_id, "exit_code": exit_code,
                     "outcome": outcome, "at": _now()}, frozenset({"running"}))
+
+
+def for_prompt(run_dir: Path, role: str, prompt: str) -> list[CheckState]:
+    """Every round of one check, oldest first."""
+    role = roles.short(role)
+    found = [s for s in states(run_dir).values()
+             if s.request.role == role and s.request.prompt == prompt]
+    return sorted(found, key=lambda s: s.request.round)
 
 
 def state_for_session(run_dir: Path, session_id: str) -> CheckState | None:
