@@ -102,7 +102,9 @@ class EvidenceService:
 
     def _sec(self) -> SecBackend:
         if self._sec_backend is None:
-            self._sec_backend = EdgarToolsBackend(self.sec_identity or "")
+            # edgartools keeps its own lookup cache; keep it out of the home folder.
+            base = self.cache.root if self.cache is not None else self.store.derived_dir
+            self._sec_backend = EdgarToolsBackend(self.sec_identity or "", base / "edgartools")
         return self._sec_backend
 
     # Receipts -----------------------------------------------------------------------
@@ -135,7 +137,8 @@ class EvidenceService:
         }
 
     def _finish(self, receipt: dict[str, Any], body: bytes | None, declared_type: str | None,
-                *, name_hint: str = "", withhold_text: bool = False) -> dict[str, Any]:
+                *, name_hint: str = "", withhold_text: bool = False,
+                loud_note: str | None = None) -> dict[str, Any]:
         """Store bytes, extract and index text, write the receipt. Returns it."""
         if body is not None:
             sha = self.store.put_bytes(body)
@@ -148,6 +151,8 @@ class EvidenceService:
                     receipt["content_type"] = (declared_type or "").split(";")[0] or None
                 else:
                     self._extract_into(receipt, sha, body, declared_type, name_hint)
+        if loud_note and receipt["status"] in (CaptureStatus.EMPTY_TEXT, CaptureStatus.SHORT_TEXT):
+            receipt["warnings"].append(loud_note)
         receipt["status"] = str(receipt["status"])
         self.store.put_receipt(receipt)
         return receipt
@@ -268,14 +273,15 @@ class EvidenceService:
 
         body, content_type = self._fetch_cached(kind, url, receipt, do_fetch)
         markup_like = False
+        note: str | None = None
         if body is not None:
             media = (content_type or "").split(";")[0].strip().lower()
             markup_like = media in HTML_TYPES or media in XML_TYPES or media == ""
             if markup_like and as_of:
-                receipt["warnings"].append("browser_fallback_not_used_in_as_of_mode")
+                note = "browser_fallback_not_used_in_as_of_mode"
             elif markup_like and self._renderer is None:
-                receipt["warnings"].append("browser_fallback_not_installed")
-        plain = self._finish(receipt, body, content_type)
+                note = "browser_fallback_not_installed"
+        plain = self._finish(receipt, body, content_type, loud_note=note)
         needs_fallback = plain["status"] in (CaptureStatus.EMPTY_TEXT, CaptureStatus.SHORT_TEXT)
         if needs_fallback and markup_like and not as_of and self._renderer is not None:
             return self._render_fallback(plain, reason)

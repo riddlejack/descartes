@@ -60,9 +60,12 @@ def test_fallback_failure_is_recorded(make_service: Factory) -> None:
 
 
 def test_fallback_absent_is_warned(make_service: Factory) -> None:
-    t = FakeTransport({"https://app.example.org/": Reply(200, [("Content-Type", "text/html")], SPA)})
-    r = make_service(t, renderer=None).capture("https://app.example.org/", "dashboard")
+    t = FakeTransport({"https://app.example.org/": Reply(200, [("Content-Type", "text/html")], SPA),
+                       "https://ok.example.org/": Reply(200, [("Content-Type", "text/html")], FULL)})
+    svc = make_service(t, renderer=None)
+    r = svc.capture("https://app.example.org/", "dashboard")
     assert r["status"] == "empty_text" and "browser_fallback_not_installed" in r["warnings"]
+    assert svc.capture("https://ok.example.org/", "fine")["warnings"] == []
 
 
 def test_tables_not_installed(make_service: Factory, monkeypatch: pytest.MonkeyPatch) -> None:

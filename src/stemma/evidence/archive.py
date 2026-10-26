@@ -130,6 +130,8 @@ class Archive:
         record["snapshot_timestamp"] = snap.timestamp
         record["snapshot_url"] = snapshot_url(snap)
         cutoff = as_of_cutoff(as_of)
+        # A fact, not a judgment: how far before as_of the copy is. "Before" can be years.
+        record["snapshot_age_days"] = (cutoff - _timestamp_time(snap.timestamp)).days
 
         def hop_check(hop: Url) -> str | None:
             match = _WAYBACK_HOP.match(hop.url)

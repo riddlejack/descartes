@@ -26,10 +26,10 @@ def docling_version() -> str | None:
 
 
 def convert_tables(body: bytes, content_type: str) -> list[dict[str, Any]]:
-    from docling.datamodel.base_models import (  # type: ignore[import-not-found]
+    from docling.datamodel.base_models import (  # type: ignore[import-not-found,unused-ignore]
         DocumentStream,
     )
-    from docling.document_converter import (  # type: ignore[import-not-found]
+    from docling.document_converter import (  # type: ignore[import-not-found,unused-ignore]
         DocumentConverter,
     )
 

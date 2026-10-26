@@ -54,7 +54,7 @@ class PlaywrightRenderer:
         try:
             from importlib import metadata
 
-            import playwright.sync_api  # type: ignore[import-not-found]  # noqa: F401
+            import playwright.sync_api  # type: ignore[import-not-found,unused-ignore]  # noqa: F401
 
             self.version = metadata.version("playwright")
         except Exception as exc:

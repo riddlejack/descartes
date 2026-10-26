@@ -9,8 +9,10 @@ Tests replace `EdgarToolsBackend` with a fake, so they never reach SEC.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from stemma.evidence.errors import EvidenceError
@@ -110,12 +112,15 @@ class EdgarToolsBackend:
     """The real backend. Needs `STEMMA_SEC_IDENTITY` ("Name email"), which SEC
     requires in every request's User-Agent."""
 
-    def __init__(self, identity: str) -> None:
+    def __init__(self, identity: str, data_dir: Path) -> None:
         if not identity or "@" not in identity:
             raise EvidenceError(
                 "sec_identity_missing",
                 "SEC requires a contact identity; set STEMMA_SEC_IDENTITY",
             )
+        data_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["EDGAR_LOCAL_DATA_DIR"] = str(data_dir)
+        os.environ["EDGAR_CACHE_DIR"] = str(data_dir / "cache")
         import edgar
 
         edgar.set_identity(identity)

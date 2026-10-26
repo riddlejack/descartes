@@ -54,6 +54,7 @@ def test_newest_snapshot_before_as_of_used(make_service: Factory, run_dir: Path)
     r = svc.capture(URL, "rate as of")
     assert r["status"] == "ok" and r["kind"] == "archive"
     assert r["archive"]["snapshot_timestamp"] == "20240530235959"
+    assert r["archive"]["snapshot_age_days"] == 1
     assert r["as_of"] == AS_OF
     assert all("stats.example.org" not in c[0].split("/")[2] for c in t.calls)  # never live
 
