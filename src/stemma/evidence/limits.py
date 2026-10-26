@@ -55,6 +55,19 @@ PDF_MAX_OUTPUT_BYTES = 8 * PDF_MAX_TEXT_CHARS
 # Resource limit: bytes of error output the PDF extraction child may write.
 PDF_MAX_STDERR_BYTES = 256 * 1024
 
+# Resource limit: characters of stored text one data file (JSON, spreadsheet) may yield.
+DATA_MAX_TEXT_CHARS = 50_000_000
+# Resource limit: JSON nesting depth that is pretty-printed (deeper is kept verbatim).
+JSON_MAX_DEPTH = 256
+# Resource limit: characters of a CSV read to detect its dialect.
+CSV_SNIFF_CHARS = 65_536
+# Resource limit: seconds the spreadsheet extraction child process may run.
+SHEET_EXTRACT_TIMEOUT_S = 120.0
+# Resource limit: non-empty cells one workbook may yield.
+SHEET_MAX_CELLS = 5_000_000
+# Resource limit: total unzipped bytes of one XLSX (a zip bomb guard).
+SHEET_MAX_UNZIPPED_BYTES = 512 * 1024 * 1024
+
 # Resource limit: code points returned by one `read` or `read_section` call.
 READ_MAX_CHARS = 20_000
 # Resource limit: outline entries carried on a receipt (the `outline` tool returns more).
