@@ -196,3 +196,28 @@ Breakage 3: a write without provenance is given a default one instead of refused
     
       7/8 checks passed
     exit=1
+
+## The same runner against the file-backed store (26 October 2026)
+
+The runner only ever asks for `storage: "memory"`, so by itself it does not exercise the
+file log the register runs on. `STEMMA_WM_MEMORY_AS_FILE=<folder>` (read in
+`WorldModel.__init__`, unset in runs) makes every memory world a fresh file log, and
+`sh conformance/run-file.sh` runs the unmodified runner that way and fails if no log
+was written. Output:
+
+```
+
+World Model conformance: implementation = <HOME>/Desktop/stemma-2/.claude/worktrees/part-b-register-guards-driver-bd46bc/conformance/bridge.ts
+
+  PASS sid-001 stable ids: diacritics and NBSP normalize identically (NFKD + strip marks)
+  PASS sid-002 stable ids: distinct names stay distinct (no over-normalization)
+  PASS band-001 merge bands at the boundaries: 0.85 auto, 0.84 review, 0.82 review, 0.81 new
+  PASS prov-001 writes without provenance are rejected
+  PASS idem-001 ingest idempotency: same batch twice produces an empty diff
+  PASS idem-002 the idempotency check can fail: a mutated batch changes the shape
+  PASS bitemp-001 bitemporal edges: a superseding edge closes the old one; point-in-time queries respect validity
+  PASS audit-001 every mutation writes an audit entry in order
+
+  8/8 checks passed
+file logs written: 5 (in /var/folders/9r/k5rv44qj39bdsvrj04pwz1480000gn/T//wm-conformance-file.DZF3X0)
+```

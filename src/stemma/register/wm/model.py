@@ -99,6 +99,9 @@ class _Plan[R]:
     notes: list[str] = field(default_factory=list)
 
 
+# Conformance only (see WorldModel.__init__): a folder that turns memory worlds into file logs.
+MEMORY_AS_FILE_ENV = "STEMMA_WM_MEMORY_AS_FILE"
+
 class WorldModel:
     """A World Model over an append-only event log.
 
@@ -131,6 +134,14 @@ class WorldModel:
             },
         )
         storage = opts.get("storage", "memory")
+        # Conformance only: World Model's runner always asks for memory storage, so this
+        # variable makes every memory world a fresh file log in the named folder, letting
+        # the unmodified runner exercise the file store the register uses. Unset in runs.
+        file_dir = os.environ.get(MEMORY_AS_FILE_ENV)
+        if storage == "memory" and file_dir and opts.get("path") is None:
+            storage = "file"
+            opts = {**opts, "storage": "file",
+                    "path": os.path.join(file_dir, f"world-{os.getpid()}-{id(self)}.jsonl")}
         if storage == "memory":
             if opts.get("path") is not None:
                 raise ValidationError("WorldModel: `path` is only for storage 'file'")
