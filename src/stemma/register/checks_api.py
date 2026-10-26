@@ -66,6 +66,8 @@ def request_id_for(role: str, prompt: str, round_no: int = 1) -> str:
 def _states(records: list[dict[str, Any]]) -> dict[str, CheckState]:
     out: dict[str, CheckState] = {}
     for r in records:
+        if r["kind"] == "revoked":
+            continue
         rid = r["request_id"]
         if r["kind"] == "request":
             if rid not in out:
@@ -142,7 +144,24 @@ def for_prompt(run_dir: Path, role: str, prompt: str) -> list[CheckState]:
     return sorted(found, key=lambda s: s.request.round)
 
 
+def revoke(run_dir: Path, session_id: str, reason: str) -> None:
+    """The driver found this session ran on a model or effort other than run.json's:
+    it loses verdict authority, now and for what it already recorded."""
+    if not session_id or not reason.strip():
+        raise ValueError("a revocation names the session and the reason")
+    jsonl.append(log_path(run_dir), {"kind": "revoked", "request_id": "", "at": _now(),
+                                     "session_id": session_id, "reason": reason})
+
+
+def revoked_sessions(run_dir: Path) -> frozenset[str]:
+    return frozenset(r["session_id"] for r in jsonl.read_all(log_path(run_dir))
+                     if r["kind"] == "revoked")
+
+
 def state_for_session(run_dir: Path, session_id: str) -> CheckState | None:
+    """The check a live (not revoked) session was launched for."""
+    if session_id in revoked_sessions(run_dir):
+        return None
     for s in states(run_dir).values():
         if s.session_id == session_id:
             return s

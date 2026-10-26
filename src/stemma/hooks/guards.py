@@ -108,8 +108,14 @@ def guard_agent(hook: dict[str, Any]) -> Decision:
 
 
 def guard_write(hook: dict[str, Any], run_dir: Path) -> Decision:
-    rel = paths.run_relative(_target(hook), str(hook.get("cwd") or run_dir), run_dir)
-    if rel is not None and paths.is_tool_only(rel):
+    target = _target(hook)
+    rel = paths.run_relative(os.path.expanduser(target), str(hook.get("cwd") or run_dir),
+                             run_dir)
+    if rel is None:
+        # The run folder, minus its tool-only paths, is the only place an agent writes:
+        # outside it lie the installed guards, the plugin and other runs.
+        return refuse(hook, f"Refused: {target} is outside the run folder.")
+    if paths.is_tool_only(rel):
         return refuse(hook, f"Refused: {rel} is written only by Stemma's tools.")
     return ALLOW
 

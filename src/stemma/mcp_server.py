@@ -182,8 +182,10 @@ def get_tree(ctx: Context[Any]) -> list[dict[str, Any]]:
 
 @server.tool()
 def propose_branch_done(ctx: Context[Any], branch_id: str) -> dict[str, Any]:
-    """Propose a branch done once branches/<id>/record.md has every heading. A branch
-    reviewer session is then started; await_checks(["branch:<id>"]) waits for it."""
+    """Propose a branch done once branches/<id>/record.md has every heading. The record is
+    frozen as a snapshot (returned as record_snapshot) for a branch reviewer session, then
+    started; await_checks(["branch:<id>"]) waits for it. Changing record.md after a review
+    reopens the branch."""
     return _call(ctx, "propose_branch_done", lambda r, c: r.propose_branch_done(c, branch_id))
 
 
@@ -191,7 +193,9 @@ def propose_branch_done(ctx: Context[Any], branch_id: str) -> dict[str, Any]:
 def record_branch_verdict(ctx: Context[Any], branch_id: str, verdict: str, reason: str,
                           method: str | None = None,
                           gap_type: str | None = None) -> dict[str, Any]:
-    """Branch reviewer only: answered | find_more (method) | analyse | bound | ask_user
+    """Branch reviewer only, judging the record snapshot of your round
+    (register/branches/<id>/record.r<round>.md): answered | find_more (method) | analyse |
+    bound | ask_user
     (the reason is the question for the user) | accept_gap (gap_type: user_held |
     source_unavailable | method_exhausted | out_of_scope), with the reason."""
     return _call(ctx, "record_branch_verdict",
