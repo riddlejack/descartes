@@ -9,7 +9,7 @@ on `EvidenceService` (`service.py`) and as an MCP tool registered by
 
 ## What works, and how it was shown
 
-Unit tests: `pytest tests/evidence` runs 274 tests in about a second, with no
+Unit tests: `pytest tests/evidence` runs 308 tests in about a second, with no
 network (a fake transport, a fake SEC backend, invented pages, a PDF built by hand
 in `conftest.py`). `ruff check` and `mypy --strict` pass on `src/stemma/evidence`.
 The live tests are marked `live` and skipped unless `STEMMA_LIVE=1`; they were run
@@ -137,6 +137,88 @@ immutable) but refused with `filed_after_as_of` if filed on or after the date;
 it. The raw XBRL concept answer (which lists later filings too) is kept as bytes
 but its text is withheld (`text_withheld_as_of`), so later figures never become
 searchable or readable through the tools.
+
+## Data files (branch `claude/part-a-datafiles`, 26 October 2026)
+Whole-content text for data files, under the same rules (nothing deleted or fused,
+code-point offsets, typed failure, extractor and version on the receipt; details
+in `format_details`). Tests: `tests/evidence/test_datafiles.py` (13, invented
+files).
+- **Plain text, CSV, TSV:** stored verbatim (line endings normalised only), so the
+  delimiter structure is the file's own. The dialect `csv.Sniffer` detects
+  (delimiter, quote character, rows, widest row) is recorded; undetected is said.
+  A `.csv` or `.tsv` name upgrades a `text/plain` or untyped file.
+- **JSON** (and any `+json` type): pretty-printed by our own printer, two-space
+  indent, source key order, duplicate keys kept, every number literal exactly as
+  written (`1.10`, `1e5`, `12345678901234567890`). Deeper than 256 levels, over
+  the size limit or invalid: kept verbatim, warned.
+- **XML:** any `+xml` type (SDMX and other vendor types) goes through the markup
+  path.
+- **XLSX** (openpyxl 3.1.5, MIT) and **XLS** (xlrd 2.0.2, BSD), in an isolated
+  child process under recorded time, cell (5 million), text and unzipped-size
+  (512 MiB, a zip-bomb guard) limits. Every sheet, in order, is a section
+  `## Sheet n: <name>` (an outline anchor `sheet-n`), one line per row, each
+  non-empty cell `<ref>: <value>`, cells tab-separated, so a quotation names its
+  cell. Values are as stored: a number format other than General follows in
+  brackets (`B10: 5024294 [#,##0]`), a formula's cached value is followed by the
+  formula, a missing cache is written and warned, tabs and line breaks inside a
+  cell are written `\t` and `\n`. Hidden sheets, rows and columns are flagged
+  `hidden`; merged cells `table_merged_cells`. A spreadsheet signature beats a
+  wrong header (servers send XLSX as `application/vnd.ms-excel` or zip).
+- **Live, once:** the US Census Bureau's 2023 state population estimates as CSV
+  (32,466 bytes; dialect `,` and `"`, 67 rows, 60 columns; a full Alabama row
+  quoted and checked) and as XLSX (14,964 bytes; 1 sheet, 408 cells; the cells
+  "A10: .Alabama / B10: 5024294 [#,##0]" quoted and checked).
+- **Limits:** display formatting is not rendered, so the sheet's "5,024,294" is
+  stored as `5024294 [#,##0]` and a quotation must use the stored form; XLS was
+  tested only on invented broken input (no XLS writer is pinned), not live.
+
+## Raised PDF markers (footnote numbers, superscripts)
+A CRS report's text read "…as of December 31, 2025.18\nAccording…", the "18"
+being a raised footnote marker, so the number tokeniser read "2025.18" and the
+sentence end could not be quoted. Fixed where it arises, in the PDF worker: each
+character's baseline (`FPDFText_GetCharOrigin`) and font size are compared with
+the last ordinary character on its line; a glyph at least 0.2 of the line's font
+size higher and at most 0.9 of its size (or 0.33 higher at any size) is a raised
+marker (extraction flags, recorded in `pdfworker.py`). A space is put in before
+the marker run (and after it, when text follows directly), each recorded as a
+`superscript_split` range, and the marker is flagged `superscript`. Unlike an HTML
+`element_split`, a quote may end or start at a `superscript_split`: the geometry
+shows the marker is a separate glyph, and refusing the edge would leave the
+sentence unquotable, the failure being fixed. A quote spanning a split or
+including a marker gets a warning. Quote edges were not loosened: a real
+"2025.18" stays one number. Tests: `tests/evidence/test_pdf_markers.py` (marker
+after a period, after a number, followed by text, a real decimal, a footnote line
+at the page foot not flagged). Live, once: CRS report R48598 from congress.gov
+(26 pages; crsreports.congress.gov answers our fetcher 403): 92 markers set apart,
+e.g. "…($1.4 trillion in FY2024). 1\nIt", and no footnote number left fused to a
+sentence. Raised ordinals are split too ("119 th Congress").
+
+## Data-file review fixes (Codex review of 8e59532)
+Each reproduced first in `tests/evidence/test_review_datafiles.py`:
+1. PDF markers are measured in each glyph run's own direction (PDFium's angle,
+   clockwise), with a new run at any change of angle, so rotated text is not split;
+   a smaller glyph raised 0.1 of the run's font size counts. Every quote edge at a
+   `superscript_split` is now warned, so a split never silently makes a smaller
+   number quotable.
+2, 4, 6, 7. XLSX is now read by streaming its XML (no workbook load): the unzipped
+   size, cells and the total area of merged ranges are checked as the XML streams
+   past, before anything is built. Every cell value is the file's own text, never
+   a float (`9007199254740993`, `1.10`, `1E-3` stay as written); formats, dates
+   and formulas go beside it (`[format yyyy-mm-dd; date 1900-02-28]`; serial 60 is
+   named as Excel's nonexistent 29 February 1900). Normal, array, shared and
+   data-table formulas are all kept; a formula without a cached value is stored as
+   `[no cached value]` with its formula. Every column of a hidden column range is
+   flagged. openpyxl remains only for its built-in format table.
+3. JSON is bounded while it is written (8 times the source plus 64 KiB, within the
+   text limit); past it, kept verbatim and warned.
+5. XML attributes are stored: each element's attributes are written at its start
+   as `[name="value" ...]` (namespace declarations aside).
+8. The CSV delimiter is the one that splits every row into the same number of
+   columns; where comma and semicolon both do and every comma sits between digits
+   it is a decimal comma and the semicolon wins; otherwise the dialect is recorded
+   ambiguous with the candidates, never guessed.
+Suspected, real: XLS numbers now carry their number format and date beside them,
+as XLSX does (xlrd gives no formulas; said in a warning).
 
 ## SEC tools
 edgartools 5.62.1 resolves the company and lists filings (with filing dates and

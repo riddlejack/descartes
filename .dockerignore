@@ -1,0 +1,16 @@
+# Secrets never enter the build context, at any depth (the Dockerfile also copies only
+# named paths). The example file holds names only.
+**/.env
+**/.env.*
+**/*.env
+!.env.example
+.git
+.venv
+.claude
+runs
+cache
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
