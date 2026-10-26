@@ -12,7 +12,14 @@ dependencies = []
 # Each part pins its own dependencies in its own group, and edits no other group.
 [project.optional-dependencies]
 server = ["mcp==2.3.0"]   # part B wires the one MCP server
-evidence = []             # part A
+evidence = [              # part A
+    "markdownify==1.2.3",
+    "beautifulsoup4==4.15.0",
+    "pypdfium2==5.14.0",
+    "edgartools==5.62.1",
+    "certifi==2026.10.23",
+]
+evidence-tables = ["docling==2.142.1"]     # part A, optional: derived table view
 register = []             # part B
 driver = ["claude-agent-sdk==0.2.174"]  # part B (MIT); evidence test only, the driver runs the CLI itself
 dev = ["pytest==9.1.1", "ruff==0.17.2", "mypy==2.4.0"]

@@ -1,4 +1,4 @@
-# Contracts between the parts (v0.2)
+# Contracts between the parts (v0.2.8)
 
 These are the interfaces the parts agree on, so they can be built in parallel. The
 design (`DESIGN-v1.md`, cited as "step n") says what the system does; this file says
@@ -16,12 +16,16 @@ part B proves each with a tiny run before anything depends on it.
   `src/stemma/driver/`, `src/stemma/analysis/`, `src/stemma/mcp_server.py`,
   `plugin/.mcp.json`, `plugin/hooks/`, `conformance/`, their tests.
 - **C. Roles and skills:** `plugin/agents/`, `plugin/skills/`, `plugin/lead/`,
-  `plugin/STANDING-RULES.md`, `docs/ROLE-MAP.md`.
+  `plugin/STANDING-RULES.md`, `docs/ROLE-MAP.md`, `tools/roles/` (the role-file lint
+  and the role-map generator), `tests/roles/`.
 - **Each part** writes its notes in `docs/notes/<part>.md`, and adds pinned
   dependencies only to its own extras group in `pyproject.toml` (A: `evidence`; B:
   `server`, `register`, `driver`); the orchestrator resolves any merge there.
 - **Orchestrator:** this file, `AGENTS.md`, `plugin/.claude-plugin/plugin.json`.
-- Later: **D. Hackathon adapters** (`hackathon/`, `run.py`, `Dockerfile`), and the
+- **D. Hackathon adapters:** `src/stemma/datalayer/`, `src/stemma/providers/`,
+  `hackathon/`, `run.py`, `Dockerfile`, their tests; at merge, the six-line hook in
+  B's `register/store.py` that routes derivation inputs through the data layer.
+- Later: **E. Checker tests** (`tests/checkers/`), and the
   paid search service the design names (one chosen by a small test; needs the
   owner's account). Until then, discovery is Claude Code's WebSearch.
 
@@ -42,8 +46,13 @@ ran" (commitment 3) made structural.
    `--agent stemma:lead`, the run folder as working directory, that plugin, the
    pinned binary (`STEMMA_CLAUDE_BIN`), the clean config (`STEMMA_CLAUDE_CONFIG`),
    per-run settings (section 6) and the standing rules written as the run folder's
-   `CLAUDE.md`. Nothing else loads, checked by a canary at launch. Never `--bare`
-   (it skips plugin hooks). The driver sets `STEMMA_RUN_DIR` and `STEMMA_PYTHON`
+   `CLAUDE.md`. The lead gets `--model` and `--effort` on its command line (a
+   `--agent` main session ignores frontmatter effort). Nothing else loads, checked
+   by a canary at launch: every session starts from `env -i` plus an allowlisted
+   environment (the desktop app's inherited environment breaks the sign-in), with
+   per-launch settings that switch off the clean config's claude.ai-synced plugins,
+   skills and connectors, bundled skills and built-in plugins, and with `--tools`
+   naming the built-in tools allowed. Never `--bare` (it skips plugin hooks). The driver sets `STEMMA_RUN_DIR` and `STEMMA_PYTHON`
    (the interpreter with every part's dependencies) for every session; the MCP
    server and hooks find the run folder and the interpreter through them.
 2. The driver watches the register and the tree, and launches each checking session
@@ -59,7 +68,9 @@ ran" (commitment 3) made structural.
 3. Authors wait for checks with `await_checks(ids, max_wait_s)`, which returns the
    verdicts that have landed and lists the ones still running. It never invents one.
 4. All agents reach the evidence service and the register through one MCP server,
-   `stemma` (tools named `mcp__plugin_stemma_stemma__<tool>`, *B verifies*).
+   `stemma` (tools named `mcp__plugin_stemma_stemma__<tool>`, verified). MCP tools
+   load at start because `plugin/.mcp.json` sets `"alwaysLoad": true` (verified; without
+   it 2.1.308 defers them), so role texts need no `ToolSearch` step.
 5. Agents exchange work through files in the run folder (section 3), never through
    retold figures: a figure crosses a hand-off as a claim id.
 6. The run ends when `finish_run` is accepted (section 6).
@@ -130,7 +141,16 @@ Unicode code points in the stored text.
   `sha256`, `receipt_id`, offsets, a short snippet (FTS5: porter for words, trigram
   for exact strings such as figures).
 - `check_quote(receipt_id, quote)` → found or not, with offsets; exact match after a
-  documented normalisation of whitespace and quotation marks. B's register calls the
+  documented normalisation of whitespace and quotation marks, never matching from or
+  to the middle of a number. It also reports whether the match lies in a region the
+  extractor marked as not visible to a reader (hidden HTML, invisible or white PDF
+  text) or in a table the converter may have misaligned (merged cells): a warning for
+  the checker, never a refusal.
+- **The extractor never deletes or joins.** Hidden and invisible text stays in the
+  stored text, its ranges recorded on the receipt; elements whose text would run
+  together (superscripts, subscripts, adjacent blocks) are separated so no two
+  figures fuse into one.
+- B's register calls the
   same function through `stemma.evidence.api.check_quote(run_dir, receipt_id, quote)`;
   `stemma.evidence.api.read_text(run_dir, receipt_id)` returns the stored text.
 - `tables(sha256)` → Docling's table view, a derived view never used for quoting
@@ -202,12 +222,25 @@ from the harness), `created_at`, each code check's result, `supersedes`,
     `in_progress` (`find_more` with the method named, `analyse`, `bound`), or
     `waiting_user` (`ask_user`). The driver sets `stopped_by_limit` when a recorded
     resource limit is reached.
+  - **A branch waiting on the user.** The driver puts the question on the status
+    page. If no answer arrives (always so in a headless run, where the task package's
+    intake answers are all the user will say), the lead calls
+    `proceed_on_assumption(branch_id, assumption)`: the node returns to
+    `in_progress` with the assumption recorded, and the branch reviewer may later
+    close it `gap_accepted` with gap type `user_held`. The deliverable lists each
+    such question with the assumption taken. `finish_run` refuses while a node is
+    `waiting_user`.
   - **Branch verdict:** `{branch_id, verdict: answered | find_more | analyse | bound |
     ask_user | accept_gap, reason, method (for find_more), record_digest}`.
 - **Tools** (B may refine names, then records them here): `file_claim`,
   `record_claim_verdict`, `get_claim`, `find_claims`, `echo_candidates`,
   `entity_review`, `tree_upsert`, `propose_branch_done`, `record_branch_verdict`,
-  `request_frame_critique`, `submit_draft`, `await_checks`, `finish_run`.
+  `request_frame_critique`, `record_frame` and `record_review` (accepted only from the
+  session the driver launched for that role, id, version and round), `submit_draft`,
+  `await_checks` (accepts claim ids, branch ids and draft versions),
+  `proceed_on_assumption`, `get_tree`, `claim_dependents`, `finish_run(version)`
+  (which copies the frozen, reviewed draft into `deliverable/` and writes
+  `answer.reader.md` from the same bytes), and part D's `query_data(sql)`.
 - **Tags.** In drafts and the deliverable each figure is followed by `[[c:<first 12
   hex of claim_id>]]`; a number that is not a figure (a date used as a date, a label,
   a slide number) by `[[nc:<why>]]`. A *segment* is a sentence, list item, table cell
@@ -217,29 +250,67 @@ from the harness), `created_at`, each code check's result, `supersedes`,
   whether each tag covers each number is the evidence auditor's judgment, and the
   `nc` tags are the mechanical reader's.
 
+## 5a. The data layer (D)
+- Evidence-derived tables (receipts, claims and verdicts, as-filed SEC facts, tables
+  extracted from captures) are synced into Zetaris as one semantic layer, through a
+  route Zetaris can reach; `datalayer/` in the run folder is tool-only.
+- `query_data(sql)`: read-only SQL over those tables for agents' analysis, through
+  Zetaris when configured and SQLite otherwise; every query logged with its text,
+  backend and row count. Rows carry the receipt or claim ids they came from; a figure
+  taken from a row is still filed as a claim with its own support.
+- Derivation inputs on re-run: with `STEMMA_DATALAYER=zetaris`, the register resolves
+  each input id itself, then reads the number through Zetaris (logged). A number that
+  differs from the register's by a single bit refuses the claim (`input_mismatch`).
+  Zetaris unreachable: the register's own number is used and `datalayer_unavailable`
+  is logged loudly on the run; the research path never stops or changes for it.
+- SAMPLE_MODE needs neither Zetaris nor Nightshift.
+
 ## 6. What code guarantees, and who produces what it reads
 Each guard has a producer in the live path, or it would block every run.
-- **Every guard hook fails closed** (`onFailure: "block"`, *B verifies*): a crashed
-  guard stops the tool; it never lets it through.
+- **Every guard hook fails closed** (`onFailure: "block"`, verified): a crashed or
+  timed-out guard stops the tool. A hook that exits 0 with unreadable output counts
+  as allow, so every guard catches its own errors and denies (exit 2 or deny JSON);
+  a test feeds each guard malformed input.
 - **Bash runs sandboxed** with no network and no write access to tool-only paths
-  (`store/`, `register/`, `tree.json`, `verdicts/`, `events.jsonl`, `run.json`),
-  *B verifies*. Write and Edit to those paths are denied by permission rules. The MCP
-  server runs outside the sandbox. WebFetch is denied.
-- **Subagents:** forks denied (`Agent(fork)`, *B verifies*); built-in agent types
+  (`store/`, `register/`, `tree.json`, `verdicts/`, `events.jsonl`, `run.json`, and
+  `$STEMMA_CACHE`, whose entries a later run would be served, and the run folder's
+  `CLAUDE.md`, `.claude/`, `.stemma/`, `task/`, `deliverable/`, `reviews/`,
+  `framer/own-frame.md`, `framer/critique.md`, `tree.md`, `datalayer/` and every
+  temporary file), verified, including refusal of a
+  request to run unsandboxed. Write and Edit to those paths are denied by permission
+  rules. The MCP server runs outside the sandbox, so **every host write is
+  path-contained and follows no symlink** (each component opened without following
+  links; temporary files inside a tool-only folder; atomic rename). WebFetch is denied.
+- **Subagents:** forks denied (`Agent(fork)`, verified); built-in agent types
   (general-purpose, Explore, Plan and any other) denied, so only plugin roles start;
   only approved models allowed (`availableModels`: Opus 5.5, Fable 5.1); model and
-  effort arguments on an Agent call stripped or refused by a hook;
+  effort arguments on an Agent call stripped by a hook (verified: an effort argument
+  is otherwise obeyed);
   `CLAUDE_CODE_EFFORT_LEVEL` never set in a run's environment. MCP tools the role
   needs are allowed explicitly (headless runs deny what is not allowed).
-- **Identity comes from the harness, never from a tool argument.** A hook stamps the
-  caller's `agent_type` onto every register write and every file-write event. Only a
+- **Only the host starts checking roles.** Run settings deny
+  `Agent(stemma:<each checking role>)` and `Agent(stemma:lead)` to every session, and
+  the register accepts a claim or branch verdict only from a session the driver
+  itself launched for that role and that id (the driver records each such session
+  id). A worker that starts a checker of its own gets no verdict recorded.
+- **Identity comes from the harness, never from a tool argument.** A PreToolUse hook
+  records the caller's `agent_type` keyed by the tool use id, which the MCP request
+  also carries in its `_meta`; the register reads identity from that stamp, never
+  from an argument the model wrote (verified feasible). Only a
   `stemma:claim-checker` session records claim verdicts; only a
   `stemma:branch-reviewer` session records branch verdicts.
+- **Every session reads only its own run.** Read is allowed only inside the run
+  folder and the run's plugin folder (a guard on Read, deny by default); Bash's
+  sandbox denies reads of the home folder, the repository and every other run, except
+  what the interpreter itself needs. So no role, checker or worker can read this
+  repository (test answer keys included), the design record, another run's store, or
+  anything else of the owner's. A test proves a checker cannot read each of these.
 - **Blind roles stay blind:** the claim checker cannot read `branches/*/record.md`,
   `order.md`, `frame.md` or drafts; the decider's-eye reviewer reads only `task/`,
   `intake.md` and the draft under review; the blind framer cannot read `frame.md`,
-  `tree.json` or `branches/` until `framer/own-frame.md` exists. Enforced on Read,
-  Grep, Glob and Bash (sandbox read denials per session), *B verifies*.
+  `tree.json` or `branches/` until `framer/own-frame.md` exists. Enforced on Read
+  and Bash (Grep and Glob are not tools in 2.1.308) by each session's own settings,
+  verified.
 - **A branch reaches `answered` or `gap_accepted` only by a branch verdict saying so.**
   Producer: the branch-reviewer session the driver starts on `propose_branch_done`.
 - **`finish_run` refuses** unless:
@@ -259,17 +330,27 @@ Each guard has a producer in the live path, or it would block every run.
 - **Refusals** name what failed and nothing else: no hint of a way around.
 
 ## 7. Switches (in `run.json`; design section 5)
-- `s1_method`: `decomposition` | `placebo` | `none`. The driver copies one method
-  skill, or neither, into the run's plugin folder; a skill not copied cannot load.
-- `s2_shape`: `team` | `single_loop` (one author, no workers; checks unchanged).
-- `s3_hypothesis_in_briefs`: true | false.
+- `s1_method`: `decomposition` | `placebo` | `none`. Design arm 1 is the method for
+  the lead and the question-type cards for workers; arm 2 puts neutral text of the
+  same length in place of both; arm 3 has neither. So the driver copies into the
+  run's plugin folder: for `decomposition`, `decomposition-method/` and the real
+  cards; for `placebo`, `placebo-method/` and the placebo cards; for `none`, no
+  method and no cards. A skill not copied cannot load. Real and placebo versions
+  share file names, frontmatter (`name`, `description`) and length, and differ only
+  in body, so the lead selects and loads them in identical words in both arms; the
+  `decomposition` and `placebo` lead fragments are identical.
+- `s2_shape`: `team` | `single_loop` (one author, no workers; checks unchanged). In
+  `single_loop` the run settings deny `Agent` to the lead.
+- `s3_hypothesis_in_briefs`: true | false; it needs workers, so with `single_loop`
+  the driver records it `not_applicable` and loads no S3 fragment.
 - `s4_orientation`: `frame_first` | `basic_facts` | `primary_record`.
 - `s5_models`: model and effort per role (defaults: Opus 5.5; highest effort for the
   lead and the final reviewers, high for the rest; never Haiku).
 - `s6_cross_family`: `off` | `during` | `final` (wired later).
 - **Assembly:** the lead's text is `plugin/lead/base.md` followed by one fragment per
   switch, `plugin/lead/<switch>.<value>.md` (an empty file where a value adds
-  nothing), concatenated in the order listed above into the run's
+  nothing; `s5_models` is configuration and has no fragment), concatenated in the
+  order listed above into the run's
   `agents/lead.md`. Worker texts follow the same pattern if a switch touches them
   (`plugin/agents/worker.base.md` plus fragments). The driver records each digest.
   No text branches on a switch inside itself.
@@ -291,20 +372,27 @@ Each guard has a producer in the live path, or it would block every run.
   told. The owner reads it before the first real run.
 
 ## 9. The driver (B)
+- It drives the pinned Claude Code CLI headless, not the Agent SDK: the SDK passed the
+  parent's environment through to the session, which broke the sign-in (B's probe
+  runs, 26 Oct). Launch flags live in one function, `stemma.driver.clean.clean_launch`,
+  with `check_canary`, used by the driver and by every other runner (baselines,
+  sealed runs). `--strict-mcp-config` drops the plugin's own server and
+  `--disable-slash-commands` drops the method skills, so Stemma runs use neither.
 - Input: `task.json` with `question`, optional `intake` answers, `attachments`,
   optional `as_of`, optional `switches`. The sealed side adapts its task package to
   this; the driver never reads benchmark material itself.
 - It launches the lead and every checking session, verifies the resolved model and
-  effort of each (for the lead's subagents, from their transcripts in the run's
-  config folder), waits, records artifact-landed events, keeps `status.json` and
+  effort of each (for the lead's subagents, from their transcripts, which land in
+  the clean config's `projects/<cwd-slug>/`; a copied config folder is not signed
+  in), waits, records artifact-landed events, keeps `status.json` and
   `status.html`, and resumes a stopped run.
 - It runs the system under test only through the isolated runner configuration, and
   reads only transcripts of sessions it launched.
 
 ## 10. Open questions each builder answers in their report
-- B: every *B verifies* item above, each shown by a run; whether a PreToolUse hook can
-  add a key absent from an MCP tool's schema (if not, how identity reaches the
-  register); nesting depth available to workers.
+- B: answered by run on 26 Oct (probe notes and kit in B's branch). Nesting: the
+  lead is depth 0 and a depth-3 agent has no Agent tool, so a worker may have two
+  levels below it. `alwaysLoad` loads MCP tools at start. Sandbox denials held against case variants, `..`, symlinks, renames, not-yet-existing paths and `**` globs.
 - A: which archive service gives a copy before a date, and how reliably.
 - C: which lines depend on the pending E6a reviewer study (reviewers stay goal-only
   until it reports).
