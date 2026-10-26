@@ -643,10 +643,10 @@ class Register:
                 receipts = ", ".join(s["receipt_id"] for s in rec["support"]) or rec["tier"]
                 refs.append(f"{order[short]}. {rec['statement']} [{rec['tier']}; {receipts}]{mark}")
             rec_unchecked = refs[order[short] - 1].endswith("(not checked)")
-            return f" [{order[short]}{', not checked' if rec_unchecked else ''}]"
+            return f"[{order[short]}{', not checked' if rec_unchecked else ''}]"
 
         body = tags.C_TAG.sub(ref, text)
-        body = tags.NC_TAG.sub("", body)
+        body = re.sub(r"[ \t]?" + tags.NC_TAG.pattern, "", body)
         out = body.rstrip() + "\n\n## References\n\n" + "\n".join(refs) + "\n"
         (self.run_dir / "deliverable" / "answer.reader.md").write_text(out, encoding="utf-8")
 

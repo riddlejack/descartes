@@ -1,0 +1,27 @@
+{
+  "nodes": [
+    {
+      "id": "n1",
+      "parent": null,
+      "doubt": null,
+      "settles_by": null,
+      "flip_point": null,
+      "crux": true,
+      "branch_id": "b1",
+      "status": "answered",
+      "kind": "condition",
+      "statement": "Unit sales are large enough.",
+      "branch_verdict": {
+        "branch_id": "b1",
+        "verdict": "answered",
+        "reason": "Placeholder review.",
+        "method": null,
+        "record_digest": "e7a320b48d5dae2db0f15f26269f6af4a3f2d80f33258bd21e1283b647fea016",
+        "by": "stemma:branch-reviewer",
+        "session": "bcc635c2-88af-4a3d-8daa-3b4138c5ee6f",
+        "at": "2026-10-26T04:36:10.636Z"
+      }
+    }
+  ],
+  "log_tx": 9
+}

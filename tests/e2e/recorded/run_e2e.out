@@ -1,0 +1,70 @@
+run folder: <SCRATCH>
+{
+ "driver_exit": 0,
+ "denials": [
+  "Refused: finish_run: the tree has no nodes; framer/critique.md does not exist; framer/lead-response.md does not exist; no draft was submitted; claim 197b37675a64 has verdict none."
+ ],
+ "launches": [],
+ "event_kinds": [
+  "artifact_changed",
+  "artifact_landed",
+  "canary_passed",
+  "denied",
+  "driver_finished",
+  "file_write",
+  "register_read",
+  "register_write",
+  "resolved_model_effort",
+  "run_started",
+  "session_ended",
+  "session_launched"
+ ],
+ "checks": {
+  "frame:own (blind-framer)": [
+   "ended",
+   "completed"
+  ],
+  "claim:197b37675a64f0650f35ef20b3f300ae1bbffc532b053a19701e408d310adf09 (claim-checker)": [
+   "ended",
+   "completed"
+  ],
+  "branch:b1 (branch-reviewer)": [
+   "ended",
+   "completed"
+  ],
+  "frame:critique (blind-framer)": [
+   "ended",
+   "completed"
+  ],
+  "draft:1 (deciders-eye-reviewer)": [
+   "ended",
+   "completed"
+  ],
+  "draft:1 (evidence-auditor)": [
+   "ended",
+   "completed"
+  ],
+  "draft:1 (mechanical-reader)": [
+   "ended",
+   "completed"
+  ],
+  "retro:run (retrospective-writer)": [
+   "ended",
+   "completed"
+  ]
+ },
+ "claims": [
+  {
+   "tag": "[[c:197b37675a64]]",
+   "verdict": "holds",
+   "author": "stemma:lead"
+  }
+ ],
+ "finished": [
+  {
+   "at": "2026-10-26T04:36:38.935Z"
+  }
+ ],
+ "reader_exists": true
+}
+exit 0
