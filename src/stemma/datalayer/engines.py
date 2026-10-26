@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -66,6 +66,39 @@ class SqliteEngine:
         self.log.write(**entry, ok=True, rows=len(rows),
                        ms=round((time.monotonic() - start) * 1000))
         return cols, rows
+
+    def query_many(self, sqls: Sequence[str], limit: int, purpose: str = "query",
+                   between: Callable[[int], None] | None = None
+                   ) -> list[list[tuple[Any, ...]]]:
+        """Several reads inside one read transaction, so they see one state of the file.
+
+        A writer cannot commit while the transaction is open (it waits, up to the
+        connection's time limit), so every result comes from the same sync."""
+        path = self.resolved()
+        if not path.is_file():
+            self.log.write(engine=self.name, purpose=purpose, ok=False, error="no SQLite file")
+            raise QueryError(f"no evidence tables at {path}; sync the run first")
+        out: list[list[tuple[Any, ...]]] = []
+        try:
+            con = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30,
+                                  isolation_level=None)
+            try:
+                con.execute("BEGIN")
+                for i, sql in enumerate(sqls):
+                    start = time.monotonic()
+                    rows = [tuple(r) for r in con.execute(sql).fetchmany(limit)]
+                    self.log.write(engine=self.name, purpose=purpose, sql=sql, ok=True,
+                                   rows=len(rows), ms=round((time.monotonic() - start) * 1000))
+                    out.append(rows)
+                    if between is not None:
+                        between(i)
+                con.execute("COMMIT")
+            finally:
+                con.close()
+        except sqlite3.Error as exc:
+            self.log.write(engine=self.name, purpose=purpose, ok=False, error=str(exc))
+            raise QueryError(f"SQLite: {exc}") from exc
+        return out
 
     def query(self, sql: str, columns: Sequence[str]) -> list[tuple[Any, ...]]:
         _, rows = self.query_page(sql, ROW_LIMIT)

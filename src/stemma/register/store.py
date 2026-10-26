@@ -226,6 +226,16 @@ class Register:
             raise Refused(f"Refused: derivation input {given} has no number.")
         return cid, float(number)
 
+    def claims_snapshot(self) -> tuple[int, list[dict[str, Any]]]:
+        """Every claim record at one log position, under the writers' lock (D, 5a)."""
+        with jsonl.exclusive(self._lock):
+            self.wm.refresh()
+            log = self.dir / "log.jsonl"
+            position = log.stat().st_size if log.exists() else 0
+            ids = sorted(e["externalKey"]["id"] for e in self.wm.view("graph").query(
+                {"type": "claim"}))
+            return position, [self._claim_record(cid) for cid in ids]
+
     def _inputs(self) -> Callable[[str], tuple[str, float]]:
         """Derivation inputs; through the data layer when STEMMA_DATALAYER=zetaris (5a)."""
         if os.environ.get("STEMMA_DATALAYER") != "zetaris":

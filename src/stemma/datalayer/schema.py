@@ -54,6 +54,11 @@ def _c(name: str, type_: str = "text", required: bool = False) -> Column:
 RUN = _c("run_id", required=True)
 
 TABLES: tuple[Table, ...] = (
+    Table("sync_state", "Which sync the rows come from: one generation per sync, and the "
+          "register log position it read.", (
+        RUN, _c("generation", required=True), _c("register_position", "int"),
+        _c("synced_at"),
+    ), ("run_id",)),
     Table("capture", "The capture manifest: one row per receipt, failures included.", (
         RUN, _c("receipt_id", required=True), _c("created_at"), _c("kind"), _c("reason"),
         _c("status"), _c("detail"), _c("url"), _c("sha256"), _c("bytes_len", "int"),

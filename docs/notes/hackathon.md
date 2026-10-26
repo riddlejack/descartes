@@ -242,3 +242,39 @@ the direct path returns is missing, renamed or changed in type, and the model is
 Each has a test that fails on 5892002 and passes now. Suite: 994 passed, 5 skipped.
 Per-run Zetaris identities (a Zetaris user per run) were not needed for isolation once
 no agent text reaches Zetaris; noted as an option, not built.
+
+## Cross-family recheck of 1e2df45 (26 Oct), fixed by principle
+
+1. **One snapshot.** The export reads every claim through the register's new
+   `claims_snapshot()` (one log position, under the writers' lock); every table of a
+   sync, with a fresh generation in `sync_state`, is written in one transaction. SQLite
+   loads for `query_data` happen in one read transaction; Zetaris loads are accepted only
+   if the generation read before and after agree (five attempts, then a typed error).
+   Tests race a sync between table reads on both paths.
+2. **Nothing from a response body, keys included,** goes into an exception or log:
+   errors carry what was expected, the status, length and hash. (Reproduced on 1e2df45:
+   the key leaked; now it does not.)
+3. **Provisioning decides by structured state:** the run's own record of completed steps
+   (`datalayer/provisioned.json`) and the rows of `SHOW DATASOURCES`, never error text;
+   `QueryError` carries the HTTP status. Tests: twice is a no-op, a half-done provision
+   resumes without repeating, an existing datasource is found by listing, an "already
+   exists" message is not swallowed.
+4. **NaN and infinities refuse** outright; finite values compare by text and bits.
+   (Reproduced on 1e2df45: `(nan, "nan")` passed.)
+5. **A fresh role per run** (`stemma_ro_<key>`), SELECT on that run's schema only, never
+   reused (a pre-existing role of that name refuses), and checked before Zetaris gets it:
+   no superuser, createrole, createdb, replication, bypassrls or inherit; no membership;
+   no ownership; no write, truncate, reference or trigger privilege on any table; no
+   SELECT outside its schema; no CREATE in any schema; no CREATE or TEMPORARY in, or
+   CONNECT to, any other database; no sequence update. Live against the container: the
+   role reads its schema and is refused reading another run's schema, every write,
+   create, alter and temp table, also after `SET default_transaction_read_only = off`;
+   six planted grants are each found. The live check found two real gaps, both closed:
+   the container's `postgres` database let PUBLIC connect and make temp tables (now
+   revoked on every database), and a sequence check that errored on non-sequences.
+   `pg_catalog.pg_settings` is excluded from the write check by name: it is SET's
+   interface, not stored data.
+
+Each run now has its own datasource and semantic layer in Zetaris instead of one shared
+model; the old shared reader role and public tables from earlier tests were dropped.
+Suite: 1017 passed, 5 skipped (Zetaris and web live tests); ruff and mypy clean.

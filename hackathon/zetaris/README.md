@@ -60,11 +60,14 @@ REST smoke test:
 python -m stemma.datalayer check-zetaris
 ```
 
-Then register the datasource and the semantic layer, and run the live tests:
+Each run is provisioned in Zetaris on its first Zetaris-mode sync (its own read-only
+Postgres role, datasource and semantic layer); to do it by hand for one run folder:
 
 ```bash
-python -m stemma.datalayer setup-zetaris
+python -m stemma.datalayer provision <run_dir>
 ```
+
+Then run the live tests:
 
 ```bash
 python -m pytest tests/datalayer/test_live.py -v
@@ -72,9 +75,11 @@ python -m pytest tests/datalayer/test_live.py -v
 
 ## The semantic layer
 
-One USL model, `lightning.metastore.stemma.evidence`, with nine tables: `capture`,
-`claim`, `claim_support`, `claim_input`, `claim_entity`, `claim_verdict`,
-`claim_supersession`, `sec_fact` and `doc_table_cell`. The definitions come from
+One USL model per run, `lightning.metastore.stemma.evidence_<run key>`, with ten tables:
+`sync_state`, `capture`, `claim`, `claim_support`, `claim_input`, `claim_entity`,
+`claim_verdict`, `claim_supersession`, `sec_fact` and `doc_table_cell`. Each run's rows
+live in their own Postgres schema, read by a fresh role that can read that schema and
+nothing else (checked before Zetaris is given it, and on every sync). The definitions come from
 `src/stemma/datalayer/schema.py`, the one place they are written. Each foreign key
 becomes a Zetaris data-quality rule; for example, every support row must cite a
 receipt in the capture manifest.

@@ -55,28 +55,32 @@ class ZetarisConfig:
         return f"ZetarisConfig(rest_url={self.rest_url!r}, org_id={self.org_id!r})"
 
 
-def rows_of(answer: Any, columns: Sequence[str] | None) -> list[tuple[Any, ...]]:
-    """The rows of an answer, as tuples in `columns` order when rows come as objects."""
+def rows_of(answer: Any, columns: Sequence[str] | None,
+            about: str = "") -> list[tuple[Any, ...]]:
+    """The rows of an answer, as tuples in `columns` order when rows come as objects.
+
+    Nothing from the answer goes into an error, keys included: only what was expected,
+    and `about` (its length and hash)."""
     data = answer.get("data") if isinstance(answer, dict) else None
     if data is None and isinstance(answer, dict) and "rows" in answer:
         data = answer["rows"]
     if not isinstance(data, list):
-        keys = sorted(str(k) for k in answer)[:10] if isinstance(answer, dict) else []
-        raise QueryError(f"the answer has no row list ({type(answer).__name__}, keys {keys})")
+        raise QueryError(f"the answer has no row list ({about})")
     out: list[tuple[Any, ...]] = []
     for row in data:
         if isinstance(row, list):
             out.append(tuple(row))
         elif isinstance(row, dict):
             if columns is None:
-                raise QueryError("rows came as objects and no column order was given")
+                out.append(tuple(row.values()))
+                continue
             lowered = {str(k).lower(): v for k, v in row.items()}
             missing = [c for c in columns if c.lower() not in lowered]
             if missing:
-                raise QueryError(f"row lacks columns {missing}: {sorted(lowered)}")
+                raise QueryError(f"a row lacks the expected columns {missing} ({about})")
             out.append(tuple(lowered[c.lower()] for c in columns))
         else:
-            raise QueryError(f"a row is neither a list nor an object ({type(row).__name__})")
+            raise QueryError(f"a row is neither a list nor an object ({about})")
     return out
 
 
@@ -92,19 +96,19 @@ class ZetarisClient:
         return {"Authorization": f"Bearer {self.config.api_key}", "X-Org-ID": self.config.org_id,
                 "X-Request-ID": request_id, "Content-Type": "application/json"}
 
-    def call(self, path: str, body: dict[str, Any] | None) -> Any:
+    def call(self, path: str, body: dict[str, Any] | None) -> tuple[Any, bytes]:
         request_id = str(uuid.uuid4())
         url = self.config.rest_url.rstrip("/") + path
         payload = None if body is None else json.dumps(body).encode("utf-8")
         status, raw = self.transport(url, payload, self._headers(request_id), TIMEOUT_S)
         if status in (401, 403):
-            raise ZetarisUnavailable(f"HTTP {status}: Zetaris refused the API key")
+            raise ZetarisUnavailable(f"HTTP {status}: Zetaris refused the API key", status)
         if status >= 400:
-            raise QueryError(f"HTTP {status} ({digest(raw)})")
+            raise QueryError(f"HTTP {status} ({digest(raw)})", status)
         try:
-            return json.loads(raw.decode("utf-8") or "null")
+            return json.loads(raw.decode("utf-8") or "null"), raw
         except ValueError as exc:
-            raise QueryError(f"the answer is not JSON ({digest(raw)})") from exc
+            raise QueryError(f"the answer is not JSON ({digest(raw)})", status) from exc
 
     def _send(self, sql: str, purpose: str, columns: Sequence[str] | None, parse: bool,
               limit: int = ROW_LIMIT, **extra: Any
@@ -114,10 +118,10 @@ class ZetarisClient:
         entry: dict[str, Any] = {"engine": "zetaris", "purpose": purpose, "query_id": query_id,
                                  "sql": sql, **extra}
         try:
-            answer = self.call("/sql-editor/sqls/run", {"queryId": query_id, "sql": sql,
-                                                         "source": "SqlEditor",
-                                                         "limit": limit})
-            rows = rows_of(answer, columns) if parse else None
+            answer, raw = self.call("/sql-editor/sqls/run", {"queryId": query_id, "sql": sql,
+                                                              "source": "SqlEditor",
+                                                              "limit": limit})
+            rows = rows_of(answer, columns, digest(raw)) if parse else None
         except QueryError as exc:
             self.log.write(**entry, ok=False, error=str(exc),
                            ms=round((time.monotonic() - start) * 1000))
@@ -145,5 +149,10 @@ class ZetarisClient:
         answer, _ = self._send(sql, "statement", None, False)
         return answer
 
+    def cells(self, sql: str) -> list[list[str]]:
+        """Every value of every row of a listing, as text (for structured checks)."""
+        rows = self.run_page(sql, None, ROW_LIMIT, purpose="listing")
+        return [["" if v is None else str(v) for v in r] for r in rows]
+
     def datasources(self) -> Any:
-        return self.call("/datasource/datasources", None)
+        return self.call("/datasource/datasources", None)[0]

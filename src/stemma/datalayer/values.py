@@ -13,6 +13,7 @@ not faithful and the read fails, never rounds.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Sequence
 
@@ -80,6 +81,9 @@ class EvidenceValues:
                 stored = float(number)
             except (TypeError, ValueError) as exc:
                 raise ValueMismatch(f"claim {given}: unreadable number {number!r}") from exc
+            if not (math.isfinite(exact) and math.isfinite(stored)):
+                raise ValueMismatch(f"claim {given}: the copy holds a value that is not a "
+                                    "finite number")
             # Exact: the text is the canonical form it was filed in, and the double has the
             # same bits (so -0.0 is not 0.0); never numeric equality.
             if repr(exact) != str(number_repr) or exact.hex() != stored.hex():

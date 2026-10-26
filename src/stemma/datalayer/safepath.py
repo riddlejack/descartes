@@ -102,3 +102,50 @@ def check_sqlite_file(root: Path, rel: str | PurePosixPath) -> Path:
         if not stat.S_ISREG(mode):
             raise UnsafePath(f"{candidate.name} is not a plain file")
     return path
+
+
+def write_file(root: Path, rel: str | PurePosixPath, data: bytes) -> None:
+    """Atomically replace root/rel with `data`, following no symlink."""
+    import secrets
+
+    parts = _parts(rel)
+    fd_dir = _open_dir(root, parts[:-1], create=True)
+    try:
+        tmp = f".{parts[-1]}.{secrets.token_hex(8)}.tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                     dir_fd=fd_dir)
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, parts[-1], src_dir_fd=fd_dir, dst_dir_fd=fd_dir)
+    finally:
+        os.close(fd_dir)
+
+
+def read_file(root: Path, rel: str | PurePosixPath) -> bytes | None:
+    """root/rel's bytes, opened without following a link; None if it does not exist."""
+    parts = _parts(rel)
+    try:
+        fd_dir = _open_dir(root, parts[:-1], create=False)
+    except FileNotFoundError:
+        return None
+    try:
+        try:
+            fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd_dir)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise UnsafePath(f"{rel} cannot be opened without following a link") from exc
+        try:
+            chunks = []
+            while chunk := os.read(fd, 1 << 16):
+                chunks.append(chunk)
+            return b"".join(chunks)
+        finally:
+            os.close(fd)
+    finally:
+        os.close(fd_dir)

@@ -26,9 +26,14 @@ class SinkError(DataLayerError):
 
 
 class QueryError(DataLayerError):
-    """A query failed, or its answer had an unexpected shape."""
+    """A query failed, or its answer had an unexpected shape. `status` is the HTTP status
+    when there was one: code decides on it, never on the message."""
 
     code = "query_failed"
+
+    def __init__(self, detail: str, status: int | None = None) -> None:
+        super().__init__(detail)
+        self.status = status
 
 
 class ZetarisUnavailable(QueryError):

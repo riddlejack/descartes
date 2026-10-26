@@ -2,7 +2,8 @@
 
 Reads only what parts A and B wrote, by their contracted layouts and interfaces:
 - receipts from `store/receipts/*.json` (CONTRACTS section 4);
-- claims through the register's `find_claims` and `get_claim` (section 5);
+- claims through the register's `claims_snapshot`: every record read at one log
+  position under the register's lock, so verdicts, histories and corrections agree;
 - as-filed SEC facts by re-reading the stored bytes of each `sec_api` receipt, keeping
   only facts filed before the run's `as_of` date, as the evidence service does;
 - table cells from Docling's derived view, `store/derived/<sha256>.tables.json`.
@@ -14,8 +15,10 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -28,11 +31,10 @@ Row = dict[str, Any]
 class ClaimSource(Protocol):
     """The part of the register this module reads (part B's `Register` satisfies it)."""
 
-    def find_claims(self, text: str | None = None, branch_id: str | None = None,
-                    tier: str | None = None, entity: str | None = None,
-                    include_superseded: bool = False) -> list[dict[str, Any]]: ...
-
-    def get_claim(self, given: str) -> dict[str, Any]: ...
+    def claims_snapshot(self) -> tuple[int, list[dict[str, Any]]]:
+        """Every claim record, superseded ones included, read at one log position under
+        the register's lock; with that position."""
+        ...
 
 
 @dataclass
@@ -43,6 +45,10 @@ class Export:
 
     def counts(self) -> dict[str, int]:
         return {name: len(rows) for name, rows in self.rows.items()}
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _num_repr(value: Any) -> tuple[float | None, str | None]:
@@ -247,9 +253,13 @@ def export_run(run_dir: Path, claims: ClaimSource | None = None,
     _table_rows(run_dir, run_id, out)
     source = claims if claims is not None else (
         default_claim_source(run_dir) if use_default_register else None)
+    position: int | None = None
     if source is not None:
-        for c in source.find_claims(include_superseded=True):
-            claim_rows(run_id, source.get_claim(c["claim_id"]), out)
+        position, records = source.claims_snapshot()
+        for rec in records:
+            claim_rows(run_id, rec, out)
+    out.rows["sync_state"].append({"run_id": run_id, "generation": uuid.uuid4().hex,
+                                   "register_position": position, "synced_at": _now()})
     _check_shape(out)
     return out
 

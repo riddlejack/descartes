@@ -32,7 +32,7 @@ def test_export_counts_every_table(run_dir: Path, register: FakeRegister) -> Non
     ex = export_run(run_dir, register)
     assert ex.counts() == {"capture": 3, "claim": 5, "claim_support": 4, "claim_input": 2,
                            "claim_entity": 5, "claim_verdict": 2, "claim_supersession": 1,
-                           "sec_fact": 2, "doc_table_cell": 6}
+                           "sec_fact": 2, "doc_table_cell": 6, "sync_state": 1}
     assert ex.warnings == []
 
 

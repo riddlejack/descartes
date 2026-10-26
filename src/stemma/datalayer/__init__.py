@@ -14,11 +14,10 @@ Settings (environment; names only in `.env.example`, values never in the repo):
 - `STEMMA_DATALAYER`: `sqlite` (default) or `zetaris`;
 - `STEMMA_DATALAYER_FALLBACK`: `sqlite` (default; logged) or `none`;
 - `ZETARIS_REST_URL`, `ZETARIS_API_KEY`, `ZETARIS_ORG_ID`;
-- `STEMMA_ZETARIS_NAMESPACE`, `STEMMA_ZETARIS_MODEL`, `STEMMA_ZETARIS_DATASOURCE`;
+- `STEMMA_ZETARIS_NAMESPACE` (each run's datasource and model are named from its id);
 - `STEMMA_PG_HOST`, `STEMMA_PG_PORT`, `STEMMA_PG_DB`, `STEMMA_PG_USER`,
-  `STEMMA_PG_PASSWORD`, `STEMMA_PG_JDBC_HOST` (the host name as Zetaris sees it), and
-  `STEMMA_PG_READER_USER`, `STEMMA_PG_READER_PASSWORD` (the read-only role Zetaris's
-  datasource connects as).
+  `STEMMA_PG_PASSWORD` (the owning role; each run gets its own read-only role), and
+  `STEMMA_PG_JDBC_HOST` (the host name as Zetaris sees it).
 """
 
 from __future__ import annotations
@@ -32,13 +31,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from stemma.datalayer import setup
 from stemma.datalayer.engines import Engine, SqliteEngine, ZetarisEngine
 from stemma.datalayer.errors import DataLayerError, ValueMismatch
 from stemma.datalayer.export import ClaimSource, export_run, read_run
 from stemma.datalayer.querylog import QueryLog, scrub
+from stemma.datalayer.runspace import RunSpace
 from stemma.datalayer.sinks import PostgresConfig, PostgresSink, SqliteSink
 from stemma.datalayer.values import EvidenceValues, FallbackValues
-from stemma.datalayer.zetaris import DEFAULT_REST_URL, ZetarisClient, ZetarisConfig
+from stemma.datalayer.zetaris import DEFAULT_REST_URL, Transport, ZetarisClient, ZetarisConfig
 
 __all__ = ["DataLayerError", "InputMismatch", "Settings", "input_lookup", "query_log",
            "sqlite_path", "sync", "values_backend"]
@@ -65,10 +66,7 @@ class Settings:
     fallback: str
     zetaris: ZetarisConfig | None
     postgres: PostgresConfig | None
-    reader: PostgresConfig | None
     namespace: str
-    model: str
-    datasource: str
     jdbc_host: str
 
     @classmethod
@@ -91,26 +89,21 @@ class Settings:
                                   int(e.get("STEMMA_PG_PORT", "5544")),
                                   e.get("STEMMA_PG_DB", "stemma"),
                                   e.get("STEMMA_PG_USER", "stemma"), e["STEMMA_PG_PASSWORD"])
-        rcfg = None
-        if pcfg is not None and e.get("STEMMA_PG_READER_PASSWORD"):
-            rcfg = PostgresConfig(pcfg.host, pcfg.port, pcfg.database,
-                                  e.get("STEMMA_PG_READER_USER", "stemma_reader"),
-                                  e["STEMMA_PG_READER_PASSWORD"], pcfg.schema)
         if mode == "zetaris" and (zcfg is None or pcfg is None):
             raise DataLayerError("STEMMA_DATALAYER=zetaris needs ZETARIS_API_KEY and "
                                  "STEMMA_PG_PASSWORD")
-        return cls(mode, fallback, zcfg, pcfg, rcfg,
+        return cls(mode, fallback, zcfg, pcfg,
                    e.get("STEMMA_ZETARIS_NAMESPACE", "lightning.metastore.stemma"),
-                   e.get("STEMMA_ZETARIS_MODEL", "evidence"),
-                   e.get("STEMMA_ZETARIS_DATASOURCE", "stemma_pg"),
                    e.get("STEMMA_PG_JDBC_HOST", "stemma-evidence-pg"))
 
 
 def sync(run_dir: Path, settings: Settings | None = None,
-         claims: ClaimSource | None = None) -> dict[str, dict[str, int]]:
-    """Copy the run's evidence records into SQLite, and into Postgres in Zetaris mode.
+         claims: ClaimSource | None = None,
+         transport: Transport | None = None) -> dict[str, dict[str, int]]:
+    """Copy the run's evidence records into SQLite, and in Zetaris mode into the run's own
+    Postgres schema, provisioning the run in Zetaris on its first sync.
 
-    `claims` defaults to the run's own register."""
+    `claims` defaults to the run's own register; `transport` to real HTTP."""
     s = settings or Settings.from_env()
     log = query_log(run_dir)
     export = export_run(run_dir, claims)
@@ -118,8 +111,13 @@ def sync(run_dir: Path, settings: Settings | None = None,
         log.write(engine="export", purpose="warning", run_id=export.run_id, warning=w)
     out = {"sqlite": SqliteSink(SQLITE_REL, log, root=run_dir).write(export)}
     if s.mode == "zetaris":
-        assert s.postgres is not None  # logical invariant: checked in Settings.from_env
-        out["postgres"] = PostgresSink(s.postgres, log).write(export)
+        assert s.postgres is not None and s.zetaris is not None  # checked in from_env
+        sink = PostgresSink(s.postgres, log)
+        out["postgres"] = sink.write(export)
+        client = (ZetarisClient(s.zetaris, log) if transport is None
+                  else ZetarisClient(s.zetaris, log, transport))
+        setup.provision(run_dir, export.run_id, sink, client, s.namespace, s.jdbc_host,
+                        s.postgres.database)
     return out
 
 
@@ -133,8 +131,8 @@ def values_backend(run_dir: Path, settings: Settings | None = None
     if s.mode == "sqlite":
         return local
     assert s.zetaris is not None  # logical invariant: checked in Settings.from_env
-    remote = EvidenceValues(ZetarisEngine(ZetarisClient(s.zetaris, log), s.namespace, s.model),
-                            run_id)
+    remote = EvidenceValues(ZetarisEngine(ZetarisClient(s.zetaris, log), s.namespace,
+                                          RunSpace(run_id).model), run_id)
     return remote if s.fallback == "none" else FallbackValues(remote, local, log)
 
 
@@ -203,7 +201,7 @@ def input_lookup(run_dir: Path, register_lookup: InputLookup,
             if s.mode == "zetaris":
                 assert s.zetaris is not None  # logical invariant: checked in from_env
                 engine: Engine = ZetarisEngine(ZetarisClient(s.zetaris, log), s.namespace,
-                                               s.model)
+                                               RunSpace(run_id).model)
             else:
                 engine = SqliteEngine(SQLITE_REL, log, root=run_dir)
             state["backend"] = EvidenceValues(engine, run_id)

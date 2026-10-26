@@ -13,6 +13,7 @@ import stemma.datalayer as dl
 from stemma.datalayer import Settings, query_log, sqlite_path
 from stemma.datalayer import query as q
 from stemma.datalayer.query import QueryRefused, check, run_query
+from stemma.datalayer.runspace import RunSpace
 from stemma.datalayer.tools import TOOLS, query_data, register_tools
 
 from .conftest import C_NEW, C_PASSENGERS, C_REVENUE, RUN_ID, FakeRegister
@@ -112,7 +113,7 @@ ZENV = {"STEMMA_DATALAYER": "zetaris", "ZETARIS_API_KEY": "key-not-real",
 
 
 def _sqlite_only_sync(run_dir: Path, settings: Settings | None = None,
-                      claims: Any = None) -> dict[str, dict[str, int]]:
+                      claims: Any = None, transport: Any = None) -> dict[str, dict[str, int]]:
     return {"sqlite": dl.SqliteSink(dl.SQLITE_REL, query_log(run_dir), root=run_dir).write(
         dl.export_run(run_dir, claims))}
 
@@ -141,10 +142,11 @@ def test_no_text_reaches_another_runs_rows_on_zetaris(tmp_path: Path, run_dir: P
     assert out["backend"] == "zetaris" and {r[0] for r in out["rows"]} == {RUN_ID}
     assert out["row_count"] == 5
     sent = [c["body"]["sql"] for c in fake.calls]
+    usl = f"lightning.metastore.stemma.{RunSpace(RUN_ID).model}"
+    gen = f"SELECT generation FROM {usl}.sync_state WHERE run_id = '{RUN_ID}'"
     expected = (f"SELECT {', '.join(dl.schema.BY_NAME['claim'].column_names)} FROM "
-                f"lightning.metastore.stemma.evidence.claim WHERE run_id = '{RUN_ID}' "
-                "ORDER BY run_id, claim_id")
-    assert sent == [expected]  # only code-written text reaches Zetaris
+                f"{usl}.claim WHERE run_id = '{RUN_ID}' ORDER BY run_id, claim_id")
+    assert sent == [gen, expected, gen]  # only code-written text reaches Zetaris
 
 
 def test_no_text_reaches_another_runs_rows_on_sqlite(run_dir: Path,
@@ -166,9 +168,15 @@ def test_zetaris_text_values_keep_their_types(run_dir: Path, register: FakeRegis
     cols = dl.schema.BY_NAME["claim"].column_names
     row = {c: None for c in cols} | {"run_id": RUN_ID, "claim_id": C_NEW, "number": "8.0",
                                      "number_repr": "8.0", "value_kind": "count"}
-    body = json.dumps({"data": [row]}).encode()
+
+    def answer(url: str, body: bytes | None, headers: dict[str, str],
+               timeout: float) -> tuple[int, bytes]:
+        sql = json.loads(body or b"{}")["sql"]
+        data = [{"generation": "g1"}] if sql.startswith("SELECT generation") else [row]
+        return 200, json.dumps({"data": data}).encode()
+
     out = run_query(run_dir, "SELECT claim_id, number FROM claim WHERE number > 7.5",
-                    Settings.from_env(ZENV), register, FakeZetaris(body=body))
+                    Settings.from_env(ZENV), register, answer)
     assert out["rows"] == [[C_NEW, 8.0]]
 
 

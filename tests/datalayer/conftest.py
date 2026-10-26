@@ -44,6 +44,10 @@ class FakeRegister:
     def get_claim(self, given: str) -> dict[str, Any]:
         return self.records[given]
 
+    def claims_snapshot(self) -> tuple[int, list[dict[str, Any]]]:
+        self.snapshots = getattr(self, "snapshots", 0) + 1
+        return 4096, [self.records[c] for c in sorted(self.records)]
+
 
 def _claim(cid: str, statement: str, number: float | None, tier: str = "observed",
            support: list[dict[str, str]] | None = None, **extra: Any) -> dict[str, Any]:

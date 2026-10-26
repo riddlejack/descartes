@@ -20,13 +20,14 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from stemma.datalayer import schema
 from stemma.datalayer.engines import SqliteEngine, ZetarisEngine
-from stemma.datalayer.errors import DataLayerError, QueryError, SinkError, ZetarisUnavailable
+from stemma.datalayer.errors import DataLayerError, QueryError, ZetarisUnavailable
 from stemma.datalayer.export import ClaimSource
 from stemma.datalayer.zetaris import Transport, ZetarisClient
 
@@ -38,6 +39,8 @@ if TYPE_CHECKING:
 QUERY_ROWS = 500
 MAX_SQL_CHARS = 20_000
 LOAD_ROWS = 200_000
+# Resource limit: attempts to read a run's tables from one sync before giving up.
+SNAPSHOT_TRIES = 5
 
 # Logical invariant: functions both engines have and that only compute on values.
 ALLOWED_FUNCTIONS = frozenset({
@@ -188,22 +191,59 @@ def _checked_load(name: str, data: list[tuple[Any, ...]]) -> list[tuple[Any, ...
     return data
 
 
+def _generation_sql(qualified: str, run_id: str) -> str:
+    if not _RUN_ID.fullmatch(run_id):
+        raise QueryRefused(f"{run_id!r} is not a run id")
+    return f"SELECT generation FROM {qualified} WHERE run_id = '{run_id}'"
+
+
+def _load_sqlite(local: SqliteEngine, names: list[str], run_id: str,
+                 between: Callable[[int], None] | None
+                 ) -> dict[str, list[tuple[Any, ...]]]:
+    """All tables in one read transaction: one state of the run's file."""
+    sqls = [load_sql(n, local.table(n), run_id) for n in names]
+    results = local.query_many(sqls, LOAD_ROWS + 1, purpose="query_data_load", between=between)
+    return {n: _checked_load(n, r) for n, r in zip(names, results, strict=True)}
+
+
+def _load_zetaris(client: ZetarisClient, engine: ZetarisEngine, names: list[str],
+                  run_id: str) -> dict[str, list[tuple[Any, ...]]]:
+    """All tables from one sync: the generation read before and after must agree.
+
+    Every sync replaces all of a run's tables and its generation in one transaction, and
+    each generation is new, so an unchanged generation means no sync landed between."""
+    gen_sql = _generation_sql(engine.table("sync_state"), run_id)
+    for _ in range(SNAPSHOT_TRIES):
+        before = client.run_page(gen_sql, ("generation",), 2, purpose="query_data_load")
+        rows = {n: _checked_load(n, client.run_page(
+            load_sql(n, engine.table(n), run_id), schema.BY_NAME[n].column_names,
+            LOAD_ROWS + 1, purpose="query_data_load")) for n in names}
+        after = client.run_page(gen_sql, ("generation",), 2, purpose="query_data_load")
+        if len(before) == 1 and before == after:
+            return rows
+    raise QueryError(f"the run's tables changed during each of {SNAPSHOT_TRIES} attempts to "
+                     "read them together")
+
+
 def run_query(run_dir: Path, sql: str, settings: Settings | None = None,
-              claims: ClaimSource | None = None,
-              transport: Transport | None = None) -> dict[str, Any]:
-    """`claims` defaults to the run's register; `transport` to real HTTP (tests pass fakes)."""
+              claims: ClaimSource | None = None, transport: Transport | None = None,
+              between: Callable[[int], None] | None = None) -> dict[str, Any]:
+    """`claims` defaults to the run's register; `transport` to real HTTP and `between` to
+    nothing (tests pass fakes, and a hook that runs between SQLite table reads)."""
     from stemma.datalayer import SQLITE_REL, Settings, query_log, sync
     from stemma.datalayer.export import read_run
+    from stemma.datalayer.runspace import RunSpace
 
     s = settings or Settings.from_env()
     log = query_log(run_dir)
     checked = check(sql)
     run_id, _ = read_run(run_dir)
     local = SqliteEngine(SQLITE_REL, log, root=run_dir)
+    names = sorted(checked.tables)
     try:
-        sync(run_dir, s, claims)
+        sync(run_dir, s, claims, transport)
         use_zetaris = s.mode == "zetaris"
-    except (SinkError, ZetarisUnavailable) as exc:
+    except DataLayerError as exc:
         if s.mode != "zetaris":
             raise
         log.write(engine="zetaris", purpose="fallback", fallback_to="sqlite", level="loud",
@@ -215,23 +255,15 @@ def run_query(run_dir: Path, sql: str, settings: Settings | None = None,
         assert s.zetaris is not None  # logical invariant: checked in Settings.from_env
         client = (ZetarisClient(s.zetaris, log) if transport is None
                   else ZetarisClient(s.zetaris, log, transport))
-        engine = ZetarisEngine(client, s.namespace, s.model)
+        engine = ZetarisEngine(client, s.namespace, RunSpace(run_id).model)
         try:
-            for name in sorted(checked.tables):
-                cols = schema.BY_NAME[name].column_names
-                rows[name] = _checked_load(name, client.run_page(
-                    load_sql(name, engine.table(name), run_id), cols, LOAD_ROWS + 1,
-                    purpose="query_data_load"))
+            rows = _load_zetaris(client, engine, names, run_id)
             backend = "zetaris"
         except ZetarisUnavailable as exc:
             log.write(engine="zetaris", purpose="fallback", fallback_to="sqlite",
                       level="loud", reason=str(exc))
-            rows = {}
     if backend == "sqlite":
-        for name in sorted(checked.tables):
-            _, data = local.query_page(load_sql(name, local.table(name), run_id),
-                                       LOAD_ROWS + 1, purpose="query_data_load")
-            rows[name] = _checked_load(name, data)
+        rows = _load_sqlite(local, names, run_id, between)
     cols_out, out = answer(checked, rows)
     log.write(engine="memory", purpose="query_data", backend=backend, sql=checked.sql,
               rows=min(len(out), QUERY_ROWS), loaded={k: len(v) for k, v in rows.items()})

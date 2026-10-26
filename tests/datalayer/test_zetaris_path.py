@@ -22,6 +22,7 @@ from stemma.datalayer.engines import ZetarisEngine
 from stemma.datalayer.errors import QueryError, ZetarisUnavailable
 from stemma.datalayer.export import column_values, export_run
 from stemma.datalayer.querylog import QueryLog, redact
+from stemma.datalayer.runspace import RunSpace
 from stemma.datalayer.sinks import PostgresConfig
 from stemma.datalayer.values import EvidenceValues, FallbackValues
 from stemma.datalayer.zetaris import ROW_LIMIT, ZetarisClient, ZetarisConfig
@@ -50,7 +51,8 @@ class FakeZetaris:
         if self.body is not None:
             return self.status, self.body
         assert body is not None and self.rows_db is not None
-        sql = re.sub(rf"{re.escape(NS)}\.{MODEL}\.", "main.", json.loads(body)["sql"])
+        sql = re.sub(rf"{re.escape(NS)}\.{MODEL}(_r[0-9a-f]{{16}})?\.", "main.",
+                     json.loads(body)["sql"])
         con = sqlite3.connect(self.rows_db)
         rows = [list(r) for r in con.execute(sql).fetchall()]
         con.close()
@@ -168,24 +170,27 @@ def test_fallback_only_when_unreachable_and_logged(tmp_path: Path, run_dir: Path
 
 
 def test_passwords_never_reach_the_log() -> None:
+    space = RunSpace(RUN_ID)
+    stmt = setup.datasource_sql(space, "stemma-evidence-pg", "stemma", "S3cretValue0123456789")
+    assert "S3cretValue0123456789" in stmt
+    assert "S3cretValue0123456789" not in redact(stmt) and 'password "***"' in redact(stmt)
     pg = PostgresConfig("h", 5432, "stemma", "stemma", "s3cret-Value!")
-    stmt = setup.statements(pg, "stemma-evidence-pg", "stemma_pg", NS, MODEL)[0].sql
-    assert "s3cret-Value!" in stmt
-    assert "s3cret-Value!" not in redact(stmt) and 'password "***"' in redact(stmt)
     assert "s3cret" not in repr(pg) and "key-not-real" not in repr(CFG)
 
 
 def test_semantic_layer_statements() -> None:
-    pg = PostgresConfig("h", 5432, "stemma", "stemma", "pw")
-    stmts = setup.statements(pg, "stemma-evidence-pg", "stemma_pg", NS, MODEL)
-    compile_ = next(s.sql for s in stmts if s.purpose == "usl_compile")
-    assert compile_.startswith(f"COMPILE USL IF NOT EXISTS {MODEL} DEPLOY NAMESPACE {NS} DDL")
+    space = RunSpace(RUN_ID)
+    steps = dict(setup.zetaris_steps(space, NS))
+    compile_ = steps["usl_compile"]
+    assert compile_.startswith(f"COMPILE USL IF NOT EXISTS {space.model} DEPLOY NAMESPACE {NS}")
     assert compile_.count("CREATE TABLE") == len(schema.TABLES)
     assert "FOREIGN KEY (run_id, receipt_id) REFERENCES capture(run_id, receipt_id)" in compile_
-    activates = [s.sql for s in stmts if s.purpose == "usl_activate"]
-    assert len(activates) == len(schema.TABLES)
-    assert activates[0].startswith(f"ACTIVATE USL TABLE {NS}.{MODEL}.capture AS SELECT run_id")
-    assert "jdbc:postgresql://stemma-evidence-pg:5432/stemma" in stmts[0].sql
+    assert steps["usl_activate:capture"].startswith(
+        f"ACTIVATE USL TABLE {NS}.{space.model}.capture AS SELECT run_id")
+    assert steps["usl_activate:capture"].endswith(f"FROM {space.datasource}.capture")
+    ds = setup.datasource_sql(space, "stemma-evidence-pg", "stemma", "x" * 32)
+    assert f"jdbc:postgresql://stemma-evidence-pg:5432/stemma?currentSchema={space.schema}" in ds
+    assert f'username "{space.role}"' in ds
 
 
 @pytest.mark.parametrize("number,text", [(0.0, "-0.0"), (-0.0, "0.0"), (8.0, "8"),
