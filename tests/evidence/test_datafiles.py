@@ -148,15 +148,15 @@ def test_xlsx_every_sheet_with_cell_references(make_service: Factory, run_dir: P
         200, [("Content-Type", "application/vnd.ms-excel")], body)})  # mislabelled, as servers do
     r = make_service(t).capture("https://stats.example.org/t.xlsx", "workbook")
     assert r["status"] == "ok" and r["content_type"] == XLSX_TYPE
-    assert r["extractor"]["name"] == "openpyxl" and r["format_details"]["sheets"] == 3
+    assert r["extractor"]["name"] == "stemma-xlsx-stream" and r["format_details"]["sheets"] == 3
     text = api.read_text(run_dir, r["receipt_id"])
     assert "## Sheet 1: Regional totals" in text and "## Sheet 3: Workings" in text
     assert "A1: Region\tB1: 2023\tC1: 2024\n" in text
     assert "A2: North\tB2: 10\tC2: 11.5\n" in text
-    assert "B3: 1250\tC3: 0.1234 [0.0%]" in text
+    assert "B3: 1250\tC3: 0.1234 [format 0.0%]" in text
     assert "A5: Note:\\tsee\\nannex" in text  # tab and line break written, not dropped
-    assert "B6: 2024-03-31" in text
-    assert "C7: [=B2+B3 no cached value]" in text
+    assert "B6: 45382 [format yyyy-mm-dd; date 2024-03-31]" in text  # serial kept, date beside
+    assert "C7: [no cached value] [formula =B2+B3]" in text
     assert [o["anchor"] for o in r["outline"]] == ["sheet-1", "sheet-2", "sheet-3"]
     section = EvidenceService(run_dir, cache_dir=None).read_section(r["text_id"], "sheet-2")
     assert "B2: Source: invented survey" in section["text"] and "Workings" not in section["text"]

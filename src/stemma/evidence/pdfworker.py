@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import math
 import sys
 from typing import Any
 
@@ -45,16 +46,18 @@ class _CharBudget:
             raise TooMuchText(f"text passed the limit of {self.limit} characters")
 
 
-# Extraction flags for raised markers (footnote numbers, superscripts): a glyph
-# whose baseline sits at least this share of the line's font size above the
-# line's baseline ...
-_RAISE_MIN = 0.2
-# ... and whose font is at most this share of the line's font size, or that sits
-# at least _RAISE_ALONE above the baseline whatever its size, is a raised marker.
-_SMALLER_MAX = 0.9
+# Extraction flags for raised markers (footnote numbers, superscripts), measured in
+# each glyph run's own direction: a glyph whose baseline sits at least this share
+# of the run's font size above the run's baseline ...
+_RAISE_MIN = 0.1
+# ... and whose font is at most this share of the run's font size, or that sits at
+# least _RAISE_ALONE above the baseline whatever its size, is a raised marker.
+_SMALLER_MAX = 0.85
 _RAISE_ALONE = 0.33
 # A glyph more than this many font sizes above the baseline is on another line.
 _SAME_LINE = 1.5
+# Radians of difference in glyph angle that start a new run (rotated text).
+_SAME_ANGLE = 0.05
 
 
 def _page(textpage: Any, raw: Any, budget: _CharBudget) -> tuple[
@@ -68,7 +71,8 @@ def _page(textpage: Any, raw: Any, budget: _CharBudget) -> tuple[
     marks: list[str | None] = []
     r, g, b, a = (ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint())
     ox, oy = ctypes.c_double(), ctypes.c_double()
-    base: tuple[float, float] | None = None  # (baseline y, font size) of the line's text
+    # The run's last ordinary glyph: origin x, origin y, font size, angle.
+    base: tuple[float, float, float, float] | None = None
     in_marker = False
     index = 0
     while index < count:
@@ -96,13 +100,20 @@ def _page(textpage: Any, raw: Any, budget: _CharBudget) -> tuple[
             base = None
         elif not char.isspace() and raw.FPDFText_GetCharOrigin(textpage.raw, index, ox, oy):
             size = float(raw.FPDFText_GetFontSize(textpage.raw, index))
-            if base is not None and base[1] > 0:
-                lift = (oy.value - base[0]) / base[1]
+            angle = float(raw.FPDFText_GetCharAngle(textpage.raw, index))
+            if base is not None and abs(angle - base[3]) > _SAME_ANGLE:
+                base = None  # another direction: another run, measured on its own
+            if base is not None and base[2] > 0:
+                # Height above the run's baseline, in the run's own direction. PDFium
+                # measures the angle clockwise, so the direction is at -angle.
+                dx, dy = ox.value - base[0], oy.value - base[1]
+                phi = -base[3]
+                lift = (-dx * math.sin(phi) + dy * math.cos(phi)) / base[2]
                 raised = lift < _SAME_LINE and (
-                    (lift >= _RAISE_MIN and size <= _SMALLER_MAX * base[1])
+                    (lift >= _RAISE_MIN and size <= _SMALLER_MAX * base[2])
                     or lift >= _RAISE_ALONE)
             if not raised:
-                base = (oy.value, size)
+                base = (ox.value, oy.value, size, angle)
         entering = raised and not in_marker and bool(chars) and not chars[-1].isspace()
         leaving = in_marker and not raised and not char.isspace()
         if entering or leaving:

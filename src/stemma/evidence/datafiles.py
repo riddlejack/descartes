@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from typing import Any
 
 from stemma.evidence import limits
@@ -68,38 +69,57 @@ def _string(value: str) -> str:
         return json.dumps(value, ensure_ascii=True)
 
 
-def _emit(value: Any, level: int, out: list[str]) -> None:
+class _TooLong(Exception):
+    pass
+
+
+class _Out:
+    """The pretty text as it is written, stopped at the recorded limit."""
+
+    def __init__(self, limit: int) -> None:
+        self.parts: list[str] = []
+        self.length = 0
+        self.limit = limit
+
+    def add(self, piece: str) -> None:
+        self.length += len(piece)
+        if self.length > self.limit:
+            raise _TooLong
+        self.parts.append(piece)
+
+
+def _emit(value: Any, level: int, out: _Out) -> None:
     pad = "  " * (level + 1)
     if isinstance(value, _Pairs):
         if not value:
-            out.append("{}")
+            out.add("{}")
             return
-        out.append("{\n")
+        out.add("{\n")
         for index, (key, item) in enumerate(value):
-            out.append(pad + _string(key) + ": ")
+            out.add(pad + _string(key) + ": ")
             _emit(item, level + 1, out)
-            out.append(",\n" if index < len(value) - 1 else "\n")
-        out.append("  " * level + "}")
+            out.add(",\n" if index < len(value) - 1 else "\n")
+        out.add("  " * level + "}")
     elif isinstance(value, list):
         if not value:
-            out.append("[]")
+            out.add("[]")
             return
-        out.append("[\n")
+        out.add("[\n")
         for index, item in enumerate(value):
-            out.append(pad)
+            out.add(pad)
             _emit(item, level + 1, out)
-            out.append(",\n" if index < len(value) - 1 else "\n")
-        out.append("  " * level + "]")
+            out.add(",\n" if index < len(value) - 1 else "\n")
+        out.add("  " * level + "]")
     elif isinstance(value, _Raw):
-        out.append(str(value))
+        out.add(str(value))
     elif isinstance(value, str):
-        out.append(_string(value))
+        out.add(_string(value))
     elif value is True:
-        out.append("true")
+        out.add("true")
     elif value is False:
-        out.append("false")
+        out.add("false")
     elif value is None:
-        out.append("null")
+        out.add("null")
     else:  # pragma: no cover - the parser yields only the types above
         raise TypeError(type(value).__name__)
 
@@ -116,31 +136,64 @@ def json_text(decoded: str) -> tuple[str, dict[str, Any], list[str]]:
     except (ValueError, RecursionError) as exc:
         return decoded, {"pretty_printed": False}, [
             f"json_not_pretty_printed: not valid JSON ({str(exc)[:120]}); kept verbatim"]
-    out: list[str] = []
-    _emit(parsed, 0, out)
-    text = "".join(out) + "\n"
-    if len(text) > limits.DATA_MAX_TEXT_CHARS:
+    # Indentation can grow a small, deep document a great deal: the output is
+    # bounded while it is written, never measured after.
+    limit = min(limits.DATA_MAX_TEXT_CHARS,
+                limits.JSON_MAX_OUTPUT_FACTOR * len(decoded) + limits.JSON_OUTPUT_ALLOWANCE)
+    out = _Out(limit)
+    try:
+        _emit(parsed, 0, out)
+    except _TooLong:
         return decoded, {"pretty_printed": False}, [
-            "json_not_pretty_printed: pretty text over the size limit; kept verbatim"]
+            (f"json_not_pretty_printed: pretty text passed the size limit of {limit} "
+            "characters; kept verbatim")]
+    text = "".join(out.parts) + "\n"
     return text, {"pretty_printed": True, "depth": depth, "rules": JSON_RULES_VERSION}, []
 
 
+_CANDIDATES = (",", ";", "\t", "|")
+
+
+def _consistent_width(rows: list[list[str]]) -> int | None:
+    """The column count every non-empty row shares, if more than one."""
+    widths = {len(row) for row in rows if any(cell.strip() for cell in row)}
+    return widths.pop() if len(widths) == 1 and next(iter(widths), 0) > 1 else None
+
+
 def csv_dialect(text: str, declared_tsv: bool) -> tuple[dict[str, Any], list[str]]:
-    """The detected dialect, recorded on the receipt. Detection failing is said."""
-    sample = text[: limits.CSV_SNIFF_CHARS]
-    delimiters = "\t" if declared_tsv else ",;\t|"
-    try:
-        dialect = csv.Sniffer().sniff(sample, delimiters=delimiters)
-    except csv.Error:
+    """The delimiter whose split gives every row the same number of columns. Where
+    several do, a comma that only ever sits between digits is a decimal comma and
+    the semicolon wins; anything else is recorded as ambiguous, never guessed."""
+    sample_lines = text[: limits.CSV_SNIFF_CHARS].splitlines()
+    if len(text) > limits.CSV_SNIFF_CHARS and len(sample_lines) > 1:
+        sample_lines = sample_lines[:-1]  # the last sampled line may be cut short
+    candidates = ("\t",) if declared_tsv else _CANDIDATES
+    consistent: dict[str, int] = {}
+    for delimiter in candidates:
+        try:
+            rows = list(csv.reader(sample_lines, delimiter=delimiter, quotechar='"'))
+        except csv.Error:
+            continue
+        width = _consistent_width(rows)
+        if width is not None:
+            consistent[delimiter] = width
+    chosen: str | None = None
+    if len(consistent) == 1:
+        chosen = next(iter(consistent))
+    elif set(consistent) >= {",", ";"} and not set(consistent) - {",", ";"}:
+        unquoted = re.sub(r'"[^"]*"', "", "\n".join(sample_lines))
+        if all(m.group(0)[0].isdigit() and m.group(0)[2].isdigit()
+               for m in re.finditer(r".,.", unquoted)):
+            chosen = ";"  # every comma is a decimal comma between digits
+    if chosen is None:
+        if consistent:
+            return ({"delimiter": None, "candidates": sorted(consistent)},
+                    [(f"csv_dialect_ambiguous: {sorted(consistent)} each split every row "
+                     "evenly; text kept as written")])
         return {"delimiter": None}, ["csv_dialect_not_detected: text kept as written"]
-    rows = 0
-    widest = 0
     try:
-        for row in csv.reader(text.splitlines(), dialect):
-            rows += 1
-            widest = max(widest, len(row))
+        rows = list(csv.reader(text.splitlines(), delimiter=chosen, quotechar='"'))
     except csv.Error as exc:
-        return ({"delimiter": dialect.delimiter, "quotechar": dialect.quotechar},
-                [f"csv_rows_not_counted: {exc}"])
-    return {"delimiter": dialect.delimiter, "quotechar": dialect.quotechar,
-            "doublequote": bool(dialect.doublequote), "rows": rows, "columns_max": widest}, []
+        return {"delimiter": chosen, "quotechar": '"'}, [f"csv_rows_not_counted: {exc}"]
+    return {"delimiter": chosen, "quotechar": '"', "rows": len(rows),
+            "columns_max": max((len(r) for r in rows), default=0)}, []

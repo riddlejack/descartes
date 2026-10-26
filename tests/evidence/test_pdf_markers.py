@@ -29,7 +29,8 @@ def test_marker_after_period_is_set_apart_and_sentence_quotable() -> None:
     text, flagged = _extract()
     assert "2025. 18" in text and "December 31, 2025.18" not in text
     sentence = find_quote(text, "The total available as of December 31, 2025.", flagged)
-    assert sentence["found"] and sentence["warnings"] == []
+    # Found, and the checker is told it ends at a recorded split.
+    assert sentence["found"] and any("recorded split" in w for w in sentence["warnings"])
     assert not find_quote(text, "December 31, 2025.18", flagged)["found"]
     marker = find_quote(text, "18", flagged)
     assert any("superscript" in m["regions"] for m in marker["matches"])

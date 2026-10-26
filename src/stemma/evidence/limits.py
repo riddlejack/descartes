@@ -59,6 +59,10 @@ PDF_MAX_STDERR_BYTES = 256 * 1024
 DATA_MAX_TEXT_CHARS = 50_000_000
 # Resource limit: JSON nesting depth that is pretty-printed (deeper is kept verbatim).
 JSON_MAX_DEPTH = 256
+# Resource limit: a pretty-printed JSON text may be at most this many times its
+# source's length, plus JSON_OUTPUT_ALLOWANCE characters; past it, kept verbatim.
+JSON_MAX_OUTPUT_FACTOR = 8
+JSON_OUTPUT_ALLOWANCE = 65_536
 # Resource limit: characters of a CSV read to detect its dialect.
 CSV_SNIFF_CHARS = 65_536
 # Resource limit: seconds the spreadsheet extraction child process may run.

@@ -348,7 +348,8 @@ def extract(body: bytes, declared_type: str | None, name_hint: str = "") -> Extr
     if content_type in (XLSX_TYPE, XLS_TYPE):
         kind = "xlsx" if content_type == XLSX_TYPE else "xls"
         library = "openpyxl" if kind == "xlsx" else "xlrd"
-        extractor = {"name": library, "version": _version(library),
+        extractor = {"name": "stemma-xlsx-stream" if kind == "xlsx" else library,
+                     "version": _version(library),
                      "rules": EXTRACT_RULES_VERSION}
         try:
             sheets = spreadsheet_to_text(kind, body)

@@ -259,6 +259,13 @@ def _prepare(soup: Any, xml: bool) -> _Markers:
         if name == "mfrac" and len(children) == 2:
             children[1].insert_before(ours_string("/"))
     if xml:
+        # Never delete: in XML, attributes carry data (an observation's value).
+        for tag in soup.find_all(True):
+            pairs = [(k, " ".join(v) if isinstance(v, list) else str(v))
+                     for k, v in tag.attrs.items() if k != "xmlns" and not k.startswith("xmlns:")]
+            if pairs:
+                shown = " ".join(f'{k}="{v}"' for k, v in pairs)
+                tag.insert(0, ours_string(f"[{shown}] "))
         _separate_xml(soup, ours_string)
     _split_boundaries(soup, markers.split, ours)
     for tag in soup.find_all(True):
