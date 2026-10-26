@@ -426,3 +426,21 @@ def test_await_checks_accepts_bare_branch_ids_and_draft_versions(reg: Register) 
     (reg.run_dir / "branches/b1").mkdir(parents=True)
     out = reg.await_checks(["b1", 1, "2"], 0)
     assert [w["id"] for w in out["not_landed"]] == ["branch:b1", "draft:1", "draft:2"]
+
+
+def test_await_checks_waits_for_a_check_not_yet_requested(reg: Register) -> None:
+    import threading
+    import time as _time
+
+    def land_later() -> None:
+        _time.sleep(1.0)
+        (reg.run_dir / "framer").mkdir(parents=True, exist_ok=True)
+        (reg.run_dir / "framer/own-frame.md").write_text("x")
+
+    t = threading.Thread(target=land_later)
+    t.start()
+    started = _time.monotonic()
+    out = reg.await_checks(["frame:own"], 20)
+    t.join()
+    assert "frame:own" in out["landed"]
+    assert _time.monotonic() - started < 15

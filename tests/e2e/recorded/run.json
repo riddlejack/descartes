@@ -1,6 +1,7 @@
 {
  "as_of": null,
- "created_at": "2026-10-26T04:35:49Z",
+ "created_at": "2026-10-26T04:44:00Z",
+ "evidence_stub": true,
  "harness": {
   "binary": "<HOME>/.private/runs/tools/claude-code-2.1.308/node_modules/.bin/claude",
   "config_dir": "<HOME>/.private/runs/tools/claude-clean-config",
@@ -103,7 +104,7 @@
   ],
   "standing_rules_sha256": "bbf2e65bc7ad0e7506299e933fe37b8d0b70fadc9c2497b9e3c535ed37090ccf"
  },
- "run_id": "20261026-043549-60adb0",
+ "run_id": "20261026-044400-e99681",
  "switches": {
   "s1_method": "decomposition",
   "s2_shape": "team",

@@ -16,12 +16,13 @@
         "verdict": "answered",
         "reason": "Placeholder review.",
         "method": null,
-        "record_digest": "e7a320b48d5dae2db0f15f26269f6af4a3f2d80f33258bd21e1283b647fea016",
+        "gap_type": null,
+        "record_digest": "5ec1072e9d53d1cca2338ffdcdb4a7b85bcb9dc3fd77713f36b1a4860298c312",
         "by": "stemma:branch-reviewer",
-        "session": "bcc635c2-88af-4a3d-8daa-3b4138c5ee6f",
-        "at": "2026-10-26T04:36:10.636Z"
+        "session": "1e19ec7b-36a1-4b17-8c3a-45d78a843201",
+        "at": "2026-10-26T04:44:20.774Z"
       }
     }
   ],
-  "log_tx": 9
+  "log_tx": 10
 }

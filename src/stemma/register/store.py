@@ -765,7 +765,8 @@ class Register:
                     if s.status == "ended":
                         entry["outcome"] = f"ended without a verdict ({s.outcome})"
                     waiting.append(entry)
-            open_ = [w for w in waiting if w["status"] in ("pending", "running")]
+            # Not yet requested counts as open: the caller asked to wait for it.
+            open_ = [w for w in waiting if w["status"] in ("pending", "running", "not_requested")]
             if not open_ or time.monotonic() >= deadline:
                 return {"landed": landed, "not_landed": waiting}
             time.sleep(AWAIT_POLL_S)

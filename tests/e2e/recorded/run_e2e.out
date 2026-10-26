@@ -4,13 +4,69 @@ run folder: <SCRATCH>
  "denials": [
   "Refused: finish_run: the tree has no nodes; framer/critique.md does not exist; framer/lead-response.md does not exist; no draft was submitted; claim 197b37675a64 has verdict none."
  ],
- "launches": [],
+ "launches": [
+  {
+   "role": "lead",
+   "prompt": "run:20261026-044400-e99681",
+   "model": "claude-opus-5-5",
+   "effort": "low"
+  },
+  {
+   "role": "blind-framer",
+   "prompt": "frame:own",
+   "model": "claude-opus-5-5",
+   "effort": "low"
+  },
+  {
+   "role": "claim-checker",
+   "prompt": "claim:197b37675a64f0650f35ef20b3f300ae1bbffc532b053a19701e408d310adf09",
+   "model": "claude-opus-5-5",
+   "effort": "low"
+  },
+  {
+   "role": "branch-reviewer",
+   "prompt": "branch:b1",
+   "model": "claude-opus-5-5",
+   "effort": "low"
+  },
+  {
+   "role": "blind-framer",
+   "prompt": "frame:critique",
+   "model": "claude-opus-5-5",
+   "effort": "low"
+  },
+  {
+   "role": "deciders-eye-reviewer",
+   "prompt": "draft:1",
+   "model": "claude-opus-5-5",
+   "effort": "low"
+  },
+  {
+   "role": "evidence-auditor",
+   "prompt": "draft:1",
+   "model": "claude-opus-5-5",
+   "effort": "low"
+  },
+  {
+   "role": "mechanical-reader",
+   "prompt": "draft:1",
+   "model": "claude-opus-5-5",
+   "effort": "low"
+  },
+  {
+   "role": "retrospective-writer",
+   "prompt": "retro:run",
+   "model": "claude-opus-5-5",
+   "effort": "low"
+  }
+ ],
  "event_kinds": [
   "artifact_changed",
   "artifact_landed",
   "canary_passed",
   "denied",
   "driver_finished",
+  "evidence_stub_on",
   "file_write",
   "register_read",
   "register_write",
@@ -62,7 +118,7 @@ run folder: <SCRATCH>
  ],
  "finished": [
   {
-   "at": "2026-10-26T04:36:38.935Z"
+   "at": "2026-10-26T04:44:37.325Z"
   }
  ],
  "reader_exists": true

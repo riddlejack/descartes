@@ -1,5 +1,5 @@
 # Answer
-Northwind Traders sold 3,400 units  [1] in the year .
+Northwind Traders sold 3,400 units [1] in the year.
 
 ## References
 
