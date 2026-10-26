@@ -15,7 +15,7 @@ LOUD = frozenset({
     "canary_failed", "launch_failed", "model_effort_mismatch", "unexpected_subagent",
     "session_stopped_by_limit", "stream_unparsed", "invalid_check_request",
     "transcript_missing", "check_revoked", "revoke_failed",
-    "check_given_up",
+    "check_given_up", "usage_not_recorded", "usage_write_deferred", "usage_records_skipped",
 })
 
 

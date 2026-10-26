@@ -16,12 +16,20 @@ Cost: the harness's own estimate, `total_cost_usd` and `modelUsage[*].costUSD` f
 session's result, at the harness's `costBasis` (list prices). It is an estimate, labelled
 so; a subagent's cost is inside its parent session's and is never apportioned here.
 Phases are cut at milestone times in `events.jsonl` (see PHASES).
+
+Accounting observes the run and never stops, slows or changes it. A bad field is
+skipped and named (`anomalies`). A bad or torn line of usage.jsonl is skipped and
+counted. The file's lock is waited on for at most LOCK_WAIT_S, and on timeout the
+caller keeps the records and writes them later.
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import re
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -31,6 +39,7 @@ from typing import Any, Final
 
 from stemma.driver import hostio
 from stemma.driver.verify import SYNTHETIC_MODEL
+from stemma.register import jsonl
 
 USAGE_FILE: Final = "usage.jsonl"
 USAGE_MD: Final = "usage.md"
@@ -47,6 +56,9 @@ PHASES: Final = (("framing", "request_frame_critique"), ("research", "submit_dra
 # slack at its start: a launch's messages are written after it starts, on the same
 # clock, so a resumed lead never counts the previous launch's messages again.
 END_SLACK_S: Final = 5.0
+# Resource limit: seconds the driver waits for usage.jsonl's lock before it keeps the
+# records and writes them on a later pass (accounting never holds up scheduling).
+LOCK_WAIT_S: Final = 2.0
 COST_NOTE: Final = ("the harness's own estimate (result total_cost_usd, modelUsage costUSD) "
                     "at its costBasis; an estimate, not a bill")
 _BRANCH_IN_BRIEF = re.compile(r"branches/([A-Za-z0-9][A-Za-z0-9_.-]{0,63})/")
@@ -59,6 +71,23 @@ class Message:
     effort: str | None
     at: float  # POSIX seconds, from the entry's timestamp
     tokens: dict[str, int]
+    anomalies: tuple[str, ...] = ()  # fields skipped because they were not counts
+
+
+def _tokens(usage: dict[str, Any], mid: str) -> tuple[dict[str, int], tuple[str, ...]]:
+    """The four counts; a value that is not a whole number is skipped and named."""
+    out: dict[str, int] = {}
+    bad: list[str] = []
+    for k in TOKEN_KEYS:
+        v = usage.get(k)
+        if v is None:
+            out[k] = 0
+        elif isinstance(v, int) and not isinstance(v, bool) and v >= 0:
+            out[k] = v
+        else:
+            out[k] = 0
+            bad.append(f"message {mid}: {k} is {str(v)[:40]!r}, not a count; skipped")
+    return out, tuple(bad)
 
 
 def _ts(value: Any) -> float | None:
@@ -101,11 +130,11 @@ def read_messages(path: Path) -> list[Message]:
             at = _ts(rec.get("timestamp"))
             if not isinstance(mid, str) or at is None:
                 continue
-            tokens = {k: int(usage.get(k) or 0) for k in TOKEN_KEYS}
+            tokens, bad = _tokens(usage, mid)
             effort = rec.get("effort")
             # The last entry of a message carries its final usage.
             by_id[mid] = Message(mid, model, effort if isinstance(effort, str) else None,
-                                 by_id[mid].at if mid in by_id else at, tokens)
+                                 by_id[mid].at if mid in by_id else at, tokens, bad)
     return sorted(by_id.values(), key=lambda m: m.at)
 
 
@@ -192,7 +221,9 @@ def tally(messages: list[Message], starts: list[tuple[str, float]]) -> dict[str,
     by_model: dict[str, dict[str, int]] = {}
     by_phase: dict[str, dict[str, int]] = {}
     efforts: set[str] = set()
+    anomalies: list[str] = []
     for m in messages:
+        anomalies += m.anomalies
         _add(tokens, m.tokens)
         _add(by_model.setdefault(m.model, _zero()), m.tokens)
         _add(by_phase.setdefault(phase_of(m.at, starts), _zero()), m.tokens)
@@ -200,6 +231,7 @@ def tally(messages: list[Message], starts: list[tuple[str, float]]) -> dict[str,
             efforts.add(m.effort)
     return {"messages": len(messages), "tokens": tokens, "by_model": by_model,
             "by_phase": by_phase, "models": sorted(by_model), "efforts": sorted(efforts),
+            "anomalies": anomalies,
             "first_at": iso(messages[0].at) if messages else None,
             "last_at": iso(messages[-1].at) if messages else None}
 
@@ -245,15 +277,75 @@ def branch_from_brief(path: Path) -> str | None:
 
 # ----- the run's summary ---------------------------------------------------------------
 
-def read_records(run_dir: Path) -> list[dict[str, Any]]:
+@dataclass(frozen=True)
+class Loaded:
+    records: list[dict[str, Any]]
+    skipped: int  # complete lines that are not records (a torn tail is not counted)
+
+
+_REQUIRED = {"kind": str, "role": str, "session": str, "tokens": dict}
+
+
+def _is_record(r: Any) -> bool:
+    return isinstance(r, dict) and all(isinstance(r.get(k), t) for k, t in _REQUIRED.items())
+
+
+def load(run_dir: Path) -> Loaded:
+    """The records of usage.jsonl. A complete line that is not a record is skipped and
+    counted; a torn last line (a writer that died mid-line) is left, as the register's
+    readers leave it, and the next append moves it to usage.jsonl.torn."""
     p = run_dir / USAGE_FILE
-    if not p.is_file():
-        return []
-    out = []
-    for line in p.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            out.append(json.loads(line))
-    return out
+    try:
+        fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return Loaded([], 0)
+    with os.fdopen(fd, "rb") as f:
+        data = f.read()
+    end = data.rfind(b"\n")
+    records: list[dict[str, Any]] = []
+    skipped = 0
+    for raw in data[: end + 1].splitlines() if end >= 0 else []:
+        if not raw.strip():
+            continue
+        try:
+            rec = json.loads(raw)
+        except json.JSONDecodeError:
+            skipped += 1
+            continue
+        if _is_record(rec):
+            records.append(rec)
+        else:
+            skipped += 1
+    return Loaded(records, skipped)
+
+
+def read_records(run_dir: Path) -> list[dict[str, Any]]:
+    return load(run_dir).records
+
+
+def append_bounded(run_dir: Path, records: list[dict[str, Any]],
+                   wait_s: float = LOCK_WAIT_S) -> bool:
+    """Append under usage.jsonl's lock if it can be had within `wait_s`; False if not
+    (the caller keeps the records and tries again later)."""
+    log = run_dir / USAGE_FILE
+    fd = os.open(jsonl.lock_path(log), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    try:
+        deadline = time.monotonic() + wait_s
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(0.05)  # resource limit: seconds between tries for the lock
+        try:
+            jsonl.append_unlocked(log, records)  # moves a torn tail aside first
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        return True
+    finally:
+        os.close(fd)
 
 
 def summary(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -262,23 +354,16 @@ def summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     total = _zero()
     cost = 0.0
     no_cost: list[str] = []
+    skipped = 0
     for r in records:
-        role = r["role"] if r["kind"] == "session" else f"{r['role']} (subagent)"
-        row = by_role.setdefault(role, {"sessions": 0, "tokens": _zero(),
-                                        "cost_estimate_usd": 0.0, "wall_s": 0.0})
-        row["sessions"] += 1
-        _add(row["tokens"], r["tokens"])
-        _add(total, r["tokens"])
-        row["wall_s"] += float(r.get("wall_s") or 0.0)
-        for ph, t in r.get("by_phase", {}).items():
-            _add(by_phase.setdefault(ph, _zero()), t)
-        if r["kind"] == "session":
-            c = (r.get("harness") or {}).get("cost_estimate_usd")
-            if isinstance(c, int | float):
-                row["cost_estimate_usd"] += float(c)
-                cost += float(c)
-            else:
-                no_cost.append(r["session"])
+        try:
+            _summarise_one(r, by_role, by_phase, total, no_cost)
+        except (KeyError, TypeError, ValueError, AttributeError):
+            skipped += 1  # a record of an unexpected shape: counted, never fatal
+            continue
+        c = (r.get("harness") or {}).get("cost_estimate_usd") if r["kind"] == "session" else None
+        if isinstance(c, int | float) and not isinstance(c, bool):
+            cost += float(c)
     for row in by_role.values():
         row["cost_estimate_usd"] = round(row["cost_estimate_usd"], 4)
         row["wall_s"] = round(row["wall_s"], 1)
@@ -287,8 +372,36 @@ def summary(records: list[dict[str, Any]]) -> dict[str, Any]:
             "phase_note": "cut at the first request_frame_critique, submit_draft and "
                           "finish_run",
             "tokens": total, "cost_estimate_usd": round(cost, 4),
-            "sessions_without_cost": no_cost, "by_role": by_role,
+            "sessions_without_cost": no_cost, "skipped_records": skipped,
+            "anomalies": sum(len(r.get("anomalies") or []) for r in records
+                             if isinstance(r, dict)),
+            "by_role": by_role,
             "by_phase": {ph: by_phase[ph] for ph, _m in PHASES if ph in by_phase}}
+
+
+def _summarise_one(r: dict[str, Any], by_role: dict[str, dict[str, Any]],
+                   by_phase: dict[str, dict[str, int]], total: dict[str, int],
+                   no_cost: list[str]) -> None:
+    role = r["role"] if r["kind"] == "session" else f"{r['role']} (subagent)"
+    tokens = {k: int(r["tokens"].get(k, 0)) for k in TOKEN_KEYS}
+    phases = {ph: {k: int(t.get(k, 0)) for k in TOKEN_KEYS}
+              for ph, t in (r.get("by_phase") or {}).items()}
+    wall = float(r.get("wall_s") or 0.0)
+    c = (r.get("harness") or {}).get("cost_estimate_usd") if r["kind"] == "session" else None
+    # Every field is read before any is added, so a bad record adds nothing.
+    row = by_role.setdefault(role, {"sessions": 0, "tokens": _zero(),
+                                    "cost_estimate_usd": 0.0, "wall_s": 0.0})
+    row["sessions"] += 1
+    _add(row["tokens"], tokens)
+    _add(total, tokens)
+    row["wall_s"] += wall
+    for ph, t in phases.items():
+        _add(by_phase.setdefault(ph, _zero()), t)
+    if r["kind"] == "session":
+        if isinstance(c, int | float) and not isinstance(c, bool):
+            row["cost_estimate_usd"] += float(c)
+        else:
+            no_cost.append(r["session"])
 
 
 def _n(v: int) -> str:
