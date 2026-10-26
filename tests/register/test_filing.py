@@ -266,3 +266,22 @@ def test_tag_digits_are_not_number_tokens() -> None:
 def test_claim_tags_found() -> None:
     assert tags.claim_tags(DOC) == ["0123456789ab", "aaaaaaaaaaaa", "bbbbbbbbbbbb",
                                     "aaaaaaaaaaaa"]
+
+
+def test_as_written_found_across_line_breaks_in_the_quote(tmp_path: Path) -> None:
+    # Walking-skeleton run: a quote spanning PDF line breaks passed the quotation check
+    # but its as_written was refused by an exact substring test.
+    ev = FakeEvidence({"r1": "to \n220,000 by the end of calendar year \n2024 and"})
+    raw = observed(value={"number": 220000, "kind": "count",
+                          "as_written": "220,000 by the end of calendar year 2024"},
+                   support=[{"receipt_id": "r1",
+                             "quote": "220,000 by the end of calendar year \n2024"}])
+    assert run_checks(raw, tmp_path, ev, no_rerun, no_lookup).checks
+
+
+def test_as_written_never_matches_inside_a_larger_number(tmp_path: Path) -> None:
+    ev = FakeEvidence({"r1": "There were 1,250 jobs."})
+    raw = observed(value={"number": 250, "kind": "count", "as_written": "250"},
+                   support=[{"receipt_id": "r1", "quote": "1,250 jobs"}])
+    with pytest.raises(Refused, match="as_written does not appear"):
+        run_checks(raw, tmp_path, ev, no_rerun, no_lookup)

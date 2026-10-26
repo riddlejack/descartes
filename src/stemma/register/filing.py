@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from stemma.evidence.quotes import find_quote
 from stemma.register.derivation import DerivationError, RerunResult
 from stemma.register.evidence_port import Evidence, QuoteCheckFailed
 
@@ -165,7 +166,10 @@ def check_sourced(claim: dict[str, Any], run_dir: Path, evidence: Evidence,
         written = value.get("as_written")
         if not _str(written):
             raise Refused("Refused: value.as_written is empty.")
-        if not any(written in item["quote"] for item in support):
+        # The same normalisation and number-token edges as the quotation check itself
+        # (part A's find_quote): line breaks in a quote do not hide a figure, and "250"
+        # is not inside "1,250".
+        if not any(find_quote(item["quote"], written)["found"] for item in support):
             raise Refused("Refused: value.as_written does not appear inside any quotation.")
         result.checks.append({"check": "as_written_in_quote", "passed": True})
         warning = parse_warning(value)
