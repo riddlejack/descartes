@@ -17,6 +17,7 @@ from pathlib import Path
 from stemma.datalayer import Settings, setup, sync, values_backend
 from stemma.datalayer.errors import DataLayerError, QueryError
 from stemma.datalayer.querylog import QueryLog
+from stemma.datalayer.sinks import PostgresSink
 from stemma.datalayer.zetaris import ZetarisClient
 
 
@@ -48,10 +49,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "check-zetaris":
             print(_client(s, args.log).run("SELECT 1 AS one", ("one",)))
         else:
-            if s.postgres is None:
-                raise DataLayerError("STEMMA_PG_PASSWORD is not set")
+            if s.postgres is None or s.reader is None:
+                raise DataLayerError("STEMMA_PG_PASSWORD and STEMMA_PG_READER_PASSWORD "
+                                     "must be set")
             client = _client(s, args.log)
-            for st in setup.statements(s.postgres, s.jdbc_host, s.datasource, s.namespace,
+            PostgresSink(s.postgres, client.log).ensure_reader(s.reader)
+            for st in setup.statements(s.reader, s.jdbc_host, s.datasource, s.namespace,
                                        s.model):
                 try:
                     answer = client.execute(st.sql)

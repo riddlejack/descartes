@@ -85,3 +85,33 @@ def test_invented_run_reads_back_through_zetaris(run_dir: Path, register: FakeRe
     assert via_zetaris == local
     assert [v.hex() for v in via_zetaris.values()] == [v.hex() for v in local.values()]
     assert any(e.get("engine") == "zetaris" and e.get("rows") == 5 for e in log.entries)
+
+
+@pytest.mark.live_postgres
+@pytest.mark.skipif(not (os.environ.get("STEMMA_PG_PASSWORD")
+                         and os.environ.get("STEMMA_PG_READER_PASSWORD")),
+                    reason="no local Postgres")
+def test_the_reader_role_can_read_and_change_nothing(run_dir: Path,
+                                                     register: FakeRegister) -> None:
+    s = _settings("sqlite")
+    assert s.postgres is not None and s.reader is not None
+    writer = PostgresSink(s.postgres, query_log(run_dir))
+    writer.write(export_run(run_dir, register))
+    writer.ensure_reader(s.reader)
+    con = PostgresSink(s.reader, query_log(run_dir)).connect()
+    try:
+        cur = con.cursor()
+        cur.execute("SELECT count(*) FROM public.claim WHERE run_id = %s", (RUN_ID,))
+        assert cur.fetchall()[0][0] == 5
+        con.rollback()
+        for stmt in ("INSERT INTO public.claim (run_id, claim_id) VALUES ('x', 'y')",
+                     "UPDATE public.claim SET number = 0",
+                     "DELETE FROM public.claim",
+                     "CREATE TABLE public.planted (x int)",
+                     ("SET default_transaction_read_only = off; INSERT INTO public.claim "
+                      "(run_id, claim_id) VALUES ('x', 'y')")):
+            with pytest.raises(Exception, match="read-only|permission denied"):
+                cur.execute(stmt)
+            con.rollback()
+    finally:
+        con.close()

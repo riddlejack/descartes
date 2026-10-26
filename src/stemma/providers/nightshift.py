@@ -34,7 +34,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from stemma.datalayer.querylog import QueryLog
+from stemma.datalayer.querylog import QueryLog, digest, register_secret
 
 CONTRACT = "0.90.0"
 APP_ID = "stemma"
@@ -152,6 +152,7 @@ class NightshiftClient:
             raise NightshiftUnauthorized("the placeholder token rt-local is not a runtime token")
         self.base_url = normalise_base_url(base_url)
         self._token = token
+        register_secret(token)
         self.log = log
         self.transport = transport
         self.app_id = app_id
@@ -235,13 +236,13 @@ class NightshiftClient:
             if ans.status in (401, 403):
                 raise NightshiftUnauthorized(f"HTTP {ans.status}: the runtime refused the token")
             if ans.status != 200:
-                raise NightshiftError(f"HTTP {ans.status}: {ans.body[:300]!r}")
+                raise NightshiftError(f"HTTP {ans.status} ({digest(ans.body)})")
             try:
                 raw = json.loads(ans.body.decode("utf-8"))
                 choice = raw["choices"][0]
                 message = choice["message"]
             except (ValueError, KeyError, IndexError, TypeError) as exc:
-                raise NightshiftError(f"not a chat completion: {ans.body[:300]!r}") from exc
+                raise NightshiftError(f"not a chat completion ({digest(ans.body)})") from exc
         except NightshiftError as exc:
             self.log.write(**receipt, ok=False, error=str(exc))
             raise

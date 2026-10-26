@@ -9,6 +9,7 @@ Zetaris mode nothing changes. No network: "unreachable" is a closed loopback por
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -145,3 +146,40 @@ def test_matching_numbers_come_from_the_data_layer(
     reg.file_claim(WORKER, _estimated(a, b))
     assert calls == [[a], [b]] and rr.seen == [{a: 48.7e6, b: 1.92e6}]
     assert not [e for e in _events(reg) if e.get("event") == "datalayer_unavailable"]
+
+
+def test_an_unwritable_log_never_stops_a_filing(setup: tuple[Register, RecordingRerun, str, str],
+                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    reg, rr, a, b = setup
+    for k, v in ZETARIS_DOWN.items():
+        monkeypatch.setenv(k, v)
+    folder = reg.run_dir / "datalayer"
+    folder.mkdir(exist_ok=True)
+    (folder / "queries.jsonl").write_text("")
+    os.chmod(folder / "queries.jsonl", 0o400)  # the log cannot be written
+    os.chmod(folder, 0o500)
+    try:
+        out = reg.file_claim(WORKER, _estimated(a, b))
+    finally:
+        os.chmod(folder, 0o700)
+        os.chmod(folder / "queries.jsonl", 0o600)
+    assert any(c["check"] == "derivation_reproduces" for c in out["checks"])
+    assert rr.seen == [{a: 48.7e6, b: 1.92e6}]
+    loud = [e for e in _events(reg) if e.get("event") == "datalayer_unavailable"]
+    assert loud and all("log_error" in e for e in loud)
+
+
+def test_a_failing_alert_goes_to_stderr(tmp_path: Path, capsys: pytest.CaptureFixture[str],
+                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    run = tmp_path / "run-x"
+    run.mkdir()
+    (run / "run.json").write_text(json.dumps({"run_id": "run-x"}))
+
+    def boom(record: dict[str, Any]) -> None:
+        raise OSError("events.jsonl is gone")
+
+    monkeypatch.setattr(dl, "sync", lambda *a, **k: (_ for _ in ()).throw(OSError("down")))
+    lookup = dl.input_lookup(run, lambda g: ("a" * 64, 3.0), dl.Settings.from_env({}),
+                             alert=boom)
+    assert lookup("a" * 12) == ("a" * 64, 3.0)
+    assert "datalayer_unavailable" in capsys.readouterr().err

@@ -219,3 +219,26 @@ the direct path returns is missing, renamed or changed in type, and the model is
 - Docker on Colima (4 CPUs, 7.7 GiB visible to Docker, 30 GiB disk, aarch64, amd64 by
   emulation); Docker Compose 5.1.3 (Zetaris tested 5.5.1), exposed as a `docker compose`
   plugin by a link in `~/.docker/cli-plugins/`.
+
+## Cross-family review of 5892002 (26 Oct), fixed by principle
+
+1. **query_data isolation is structural now, not by parsing SQL.** The agent's SQL never
+   reaches Zetaris, Postgres or the run's SQLite file. Code-written SELECTs (the only text
+   Zetaris receives) fetch this run's rows of the tables the query reads into a fresh
+   in-memory SQLite database holding nothing else, `query_only` on; the agent's SQL runs
+   there. `SELECT ... FROM main.claim` and every other spelling can see only this run's
+   rows. The SQL checks stay as a second line. Zetaris's datasource connects as a
+   Postgres role that can only read (`ensure_reader`; shown live: insert, update,
+   delete, create all refused, even after `SET default_transaction_read_only = off`).
+2. **The fallback never raises.** A failed log write is recorded on the event
+   (`log_error`); a failed event write goes to stderr; the register's number is used.
+3. **No response body in any exception or log.** Errors keep the status, length and a
+   hash. Every string in a log entry is scrubbed of registered keys, tokens and
+   passwords (Zetaris key, Postgres passwords, Nightshift token), `password "..."`
+   options and bearer tokens.
+4. **Exact comparison.** A value read back must have the canonical text it was filed with
+   and the same bits; `+0.0` against `"-0.0"`, `8.0` against `"8"` all refuse.
+
+Each has a test that fails on 5892002 and passes now. Suite: 994 passed, 5 skipped.
+Per-run Zetaris identities (a Zetaris user per run) were not needed for isolation once
+no agent text reaches Zetaris; noted as an option, not built.

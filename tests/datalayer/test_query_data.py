@@ -15,7 +15,7 @@ from stemma.datalayer import query as q
 from stemma.datalayer.query import QueryRefused, check, run_query
 from stemma.datalayer.tools import TOOLS, query_data, register_tools
 
-from .conftest import C_NEW, C_OLD, C_PASSENGERS, C_REVENUE, RUN_ID, FakeRegister
+from .conftest import C_NEW, C_PASSENGERS, C_REVENUE, RUN_ID, FakeRegister
 from .test_zetaris_path import FakeZetaris, _fake_db
 
 SQLITE = Settings.from_env({})
@@ -50,8 +50,9 @@ def test_logged_with_text_backend_and_rows(run_dir: Path, register: FakeRegister
     _q(run_dir, register, "SELECT claim_id FROM claim")
     lines = [json.loads(x) for x in query_log(run_dir).file.read_text().splitlines()]  # type: ignore[union-attr]
     (e,) = [x for x in lines if x.get("purpose") == "query_data"]
-    assert e["backend"] == "sqlite" and e["rows"] == 5 and "FROM claim" in e["sql"]
-    assert f"run_id = '{RUN_ID}'" in e["sql"]
+    assert e["backend"] == "sqlite" and e["rows"] == 5 and e["sql"] == "SELECT claim_id FROM claim"
+    (load,) = [x for x in lines if x.get("purpose") == "query_data_load"]
+    assert f"run_id = '{RUN_ID}'" in load["sql"] and load["rows"] == 5
 
 
 def test_other_runs_rows_never_show(run_dir: Path, register: FakeRegister) -> None:
@@ -116,17 +117,59 @@ def _sqlite_only_sync(run_dir: Path, settings: Settings | None = None,
         dl.export_run(run_dir, claims))}
 
 
-def test_zetaris_path_is_scoped_and_labelled(tmp_path: Path, run_dir: Path,
-                                             register: FakeRegister,
-                                             monkeypatch: pytest.MonkeyPatch) -> None:
+def _plant_other_run(db: Path) -> None:
+    con = sqlite3.connect(db)
+    with con:
+        con.execute("INSERT INTO claim (run_id, claim_id, statement, number, number_repr) "
+                    "VALUES ('another-run', ?, 'secret of another run', 9.0, '9.0')", ("c" * 64,))
+    con.close()
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT run_id, claim_id FROM main.claim",
+    "SELECT run_id, claim_id FROM claim",
+    "SELECT c.run_id, c.claim_id FROM main.claim AS c WHERE c.run_id <> 'x'",
+])
+def test_no_text_reaches_another_runs_rows_on_zetaris(tmp_path: Path, run_dir: Path,
+                                                      register: FakeRegister, sql: str,
+                                                      monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dl, "sync", _sqlite_only_sync)
-    fake = FakeZetaris(_fake_db(tmp_path, run_dir, register))
-    out = run_query(run_dir, "SELECT claim_id, number FROM claim WHERE claim_id = "
-                    f"'{C_OLD}'", Settings.from_env(ZENV), register, fake)
-    assert out["backend"] == "zetaris" and out["rows"] == [[C_OLD, 7.0]]
-    sent = fake.calls[0]["body"]["sql"]
-    assert sent.startswith("WITH claim AS (SELECT * FROM lightning.metastore.stemma.evidence"
-                           f".claim WHERE run_id = '{RUN_ID}') SELECT")
+    db = _fake_db(tmp_path, run_dir, register)
+    _plant_other_run(db)
+    fake = FakeZetaris(db)
+    out = run_query(run_dir, sql, Settings.from_env(ZENV), register, fake)
+    assert out["backend"] == "zetaris" and {r[0] for r in out["rows"]} == {RUN_ID}
+    assert out["row_count"] == 5
+    sent = [c["body"]["sql"] for c in fake.calls]
+    expected = (f"SELECT {', '.join(dl.schema.BY_NAME['claim'].column_names)} FROM "
+                f"lightning.metastore.stemma.evidence.claim WHERE run_id = '{RUN_ID}' "
+                "ORDER BY run_id, claim_id")
+    assert sent == [expected]  # only code-written text reaches Zetaris
+
+
+def test_no_text_reaches_another_runs_rows_on_sqlite(run_dir: Path,
+                                                     register: FakeRegister) -> None:
+    _q(run_dir, register, "SELECT claim_id FROM claim")
+    _plant_other_run(sqlite_path(run_dir))
+    monkey_sync = dl.sync
+    try:
+        dl.sync = lambda *a, **k: {}  # type: ignore[assignment]  # keep the planted row
+        out = run_query(run_dir, "SELECT run_id, claim_id FROM main.claim", SQLITE, register)
+    finally:
+        dl.sync = monkey_sync
+    assert {r[0] for r in out["rows"]} == {RUN_ID} and out["row_count"] == 5
+
+
+def test_zetaris_text_values_keep_their_types(run_dir: Path, register: FakeRegister,
+                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(dl, "sync", _sqlite_only_sync)
+    cols = dl.schema.BY_NAME["claim"].column_names
+    row = {c: None for c in cols} | {"run_id": RUN_ID, "claim_id": C_NEW, "number": "8.0",
+                                     "number_repr": "8.0", "value_kind": "count"}
+    body = json.dumps({"data": [row]}).encode()
+    out = run_query(run_dir, "SELECT claim_id, number FROM claim WHERE number > 7.5",
+                    Settings.from_env(ZENV), register, FakeZetaris(body=body))
+    assert out["rows"] == [[C_NEW, 8.0]]
 
 
 def test_zetaris_unreachable_answers_from_sqlite_loudly(run_dir: Path, register: FakeRegister,

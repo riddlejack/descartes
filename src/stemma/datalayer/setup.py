@@ -31,6 +31,7 @@ def _parent(namespace: str) -> str:
 
 def statements(pg: PostgresConfig, jdbc_host: str, datasource: str, namespace: str,
                model: str) -> list[Statement]:
+    """`pg` is the read-only role: Zetaris reads the evidence tables and can change none."""
     url = f"jdbc:postgresql://{jdbc_host}:5432/{pg.database}"
     out = [
         Statement(f'CREATE DATASOURCE {datasource} DESCRIBE BY "Stemma evidence tables" '

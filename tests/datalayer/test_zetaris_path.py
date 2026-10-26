@@ -186,3 +186,31 @@ def test_semantic_layer_statements() -> None:
     assert len(activates) == len(schema.TABLES)
     assert activates[0].startswith(f"ACTIVATE USL TABLE {NS}.{MODEL}.capture AS SELECT run_id")
     assert "jdbc:postgresql://stemma-evidence-pg:5432/stemma" in stmts[0].sql
+
+
+@pytest.mark.parametrize("number,text", [(0.0, "-0.0"), (-0.0, "0.0"), (8.0, "8"),
+                                         (8.0, "8.00"), (8.0, "8.0 ")])
+def test_numbers_compare_exactly_never_numerically(number: float, text: str) -> None:
+    body = json.dumps({"data": [[C_NEW, number, text]]}).encode()
+    with pytest.raises(QueryError, match="filed as|unreadable"):
+        _zetaris_values(FakeZetaris(body=body), QueryLog()).values([C_NEW])
+
+
+def test_no_response_body_in_errors_or_logs(tmp_path: Path) -> None:
+    echo = b"engine crashed while running: Bearer key-not-real and prompt PRIVATE-PROMPT-TEXT"
+    log = QueryLog(tmp_path / "q.jsonl")
+    with pytest.raises(QueryError) as e:
+        _zetaris_values(FakeZetaris(status=500, body=echo), log).values([C_NEW])
+    text = str(e.value) + (tmp_path / "q.jsonl").read_text()
+    assert "PRIVATE-PROMPT-TEXT" not in text and "key-not-real" not in text
+    assert "bytes, sha256" in str(e.value)
+
+
+def test_registered_secrets_are_scrubbed_from_every_field(tmp_path: Path) -> None:
+    from stemma.datalayer.querylog import register_secret
+
+    register_secret("Sup3rSecretValue99")
+    log = QueryLog(tmp_path / "q.jsonl")
+    log.write(engine="x", error="login failed for Sup3rSecretValue99",
+              nested={"why": ["password 'Sup3rSecretValue99'"]})
+    assert "Sup3rSecretValue99" not in (tmp_path / "q.jsonl").read_text()

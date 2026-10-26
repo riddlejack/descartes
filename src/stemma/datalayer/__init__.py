@@ -16,13 +16,17 @@ Settings (environment; names only in `.env.example`, values never in the repo):
 - `ZETARIS_REST_URL`, `ZETARIS_API_KEY`, `ZETARIS_ORG_ID`;
 - `STEMMA_ZETARIS_NAMESPACE`, `STEMMA_ZETARIS_MODEL`, `STEMMA_ZETARIS_DATASOURCE`;
 - `STEMMA_PG_HOST`, `STEMMA_PG_PORT`, `STEMMA_PG_DB`, `STEMMA_PG_USER`,
-  `STEMMA_PG_PASSWORD`, and `STEMMA_PG_JDBC_HOST` (the host name as Zetaris sees it).
+  `STEMMA_PG_PASSWORD`, `STEMMA_PG_JDBC_HOST` (the host name as Zetaris sees it), and
+  `STEMMA_PG_READER_USER`, `STEMMA_PG_READER_PASSWORD` (the read-only role Zetaris's
+  datasource connects as).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,7 +35,7 @@ from typing import Any
 from stemma.datalayer.engines import Engine, SqliteEngine, ZetarisEngine
 from stemma.datalayer.errors import DataLayerError, ValueMismatch
 from stemma.datalayer.export import ClaimSource, export_run, read_run
-from stemma.datalayer.querylog import QueryLog
+from stemma.datalayer.querylog import QueryLog, scrub
 from stemma.datalayer.sinks import PostgresConfig, PostgresSink, SqliteSink
 from stemma.datalayer.values import EvidenceValues, FallbackValues
 from stemma.datalayer.zetaris import DEFAULT_REST_URL, ZetarisClient, ZetarisConfig
@@ -61,6 +65,7 @@ class Settings:
     fallback: str
     zetaris: ZetarisConfig | None
     postgres: PostgresConfig | None
+    reader: PostgresConfig | None
     namespace: str
     model: str
     datasource: str
@@ -86,10 +91,15 @@ class Settings:
                                   int(e.get("STEMMA_PG_PORT", "5544")),
                                   e.get("STEMMA_PG_DB", "stemma"),
                                   e.get("STEMMA_PG_USER", "stemma"), e["STEMMA_PG_PASSWORD"])
+        rcfg = None
+        if pcfg is not None and e.get("STEMMA_PG_READER_PASSWORD"):
+            rcfg = PostgresConfig(pcfg.host, pcfg.port, pcfg.database,
+                                  e.get("STEMMA_PG_READER_USER", "stemma_reader"),
+                                  e["STEMMA_PG_READER_PASSWORD"], pcfg.schema)
         if mode == "zetaris" and (zcfg is None or pcfg is None):
             raise DataLayerError("STEMMA_DATALAYER=zetaris needs ZETARIS_API_KEY and "
                                  "STEMMA_PG_PASSWORD")
-        return cls(mode, fallback, zcfg, pcfg,
+        return cls(mode, fallback, zcfg, pcfg, rcfg,
                    e.get("STEMMA_ZETARIS_NAMESPACE", "lightning.metastore.stemma"),
                    e.get("STEMMA_ZETARIS_MODEL", "evidence"),
                    e.get("STEMMA_ZETARIS_DATASOURCE", "stemma_pg"),
@@ -163,12 +173,27 @@ def input_lookup(run_dir: Path, register_lookup: InputLookup,
 
     def unavailable(cid: str, exc: Exception) -> None:
         mode = settings.mode if settings else os.environ.get("STEMMA_DATALAYER", "sqlite")
-        record = {"event": UNAVAILABLE, "claim_id": cid, "mode": mode,
-                  "error": f"{type(exc).__name__}: {exc}"}
-        log.write(engine="datalayer", purpose=UNAVAILABLE, level="loud", **record)
-        logger.error("%s", record)
-        if alert is not None:
-            alert(record)
+        record: dict[str, Any] = {"event": UNAVAILABLE, "claim_id": cid, "mode": mode,
+                                  "error": f"{type(exc).__name__}: {scrub(str(exc))}"}
+        # Never raises: a failure to log is itself recorded, through the run's events,
+        # and failing that on stderr; the register's number is used either way.
+        try:
+            log.write(engine="datalayer", purpose=UNAVAILABLE, level="loud", **record)
+        except Exception as log_exc:  # noqa: BLE001
+            record["log_error"] = f"{type(log_exc).__name__}: {scrub(str(log_exc))}"
+        try:
+            logger.error("%s", record)
+        except Exception:  # noqa: BLE001, S110 - logging must not stop the research path
+            pass
+        try:
+            if alert is not None:
+                alert(record)
+        except Exception as alert_exc:  # noqa: BLE001
+            record["alert_error"] = f"{type(alert_exc).__name__}: {scrub(str(alert_exc))}"
+            try:
+                sys.stderr.write(json.dumps(record, sort_keys=True) + "\n")
+            except Exception:  # noqa: BLE001, S110 - nowhere left to record it
+                pass
 
     def backend() -> EvidenceValues:
         if "backend" not in state:

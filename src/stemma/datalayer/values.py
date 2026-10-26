@@ -80,7 +80,9 @@ class EvidenceValues:
                 stored = float(number)
             except (TypeError, ValueError) as exc:
                 raise ValueMismatch(f"claim {given}: unreadable number {number!r}") from exc
-            if exact != stored:
+            # Exact: the text is the canonical form it was filed in, and the double has the
+            # same bits (so -0.0 is not 0.0); never numeric equality.
+            if repr(exact) != str(number_repr) or exact.hex() != stored.hex():
                 raise ValueMismatch(f"claim {given}: the engine gave {stored!r}, the claim "
                                     f"was filed as {number_repr}")
             out[given] = exact

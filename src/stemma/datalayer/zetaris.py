@@ -19,7 +19,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from stemma.datalayer.errors import QueryError, ZetarisUnavailable
-from stemma.datalayer.querylog import QueryLog
+from stemma.datalayer.querylog import QueryLog, digest, register_secret
 
 DEFAULT_REST_URL = "http://localhost:8888/api/v1.0"
 # Resource limit: seconds one REST call may take (a cold Spark query on emulated amd64
@@ -55,17 +55,14 @@ class ZetarisConfig:
         return f"ZetarisConfig(rest_url={self.rest_url!r}, org_id={self.org_id!r})"
 
 
-def _short(raw: bytes, n: int = 300) -> str:
-    return raw[:n].decode("utf-8", errors="replace")
-
-
 def rows_of(answer: Any, columns: Sequence[str] | None) -> list[tuple[Any, ...]]:
     """The rows of an answer, as tuples in `columns` order when rows come as objects."""
     data = answer.get("data") if isinstance(answer, dict) else None
     if data is None and isinstance(answer, dict) and "rows" in answer:
         data = answer["rows"]
     if not isinstance(data, list):
-        raise QueryError(f"the answer has no row list: {str(answer)[:300]}")
+        keys = sorted(str(k) for k in answer)[:10] if isinstance(answer, dict) else []
+        raise QueryError(f"the answer has no row list ({type(answer).__name__}, keys {keys})")
     out: list[tuple[Any, ...]] = []
     for row in data:
         if isinstance(row, list):
@@ -79,7 +76,7 @@ def rows_of(answer: Any, columns: Sequence[str] | None) -> list[tuple[Any, ...]]
                 raise QueryError(f"row lacks columns {missing}: {sorted(lowered)}")
             out.append(tuple(lowered[c.lower()] for c in columns))
         else:
-            raise QueryError(f"a row is neither a list nor an object: {row!r}")
+            raise QueryError(f"a row is neither a list nor an object ({type(row).__name__})")
     return out
 
 
@@ -89,6 +86,7 @@ class ZetarisClient:
         self.config = config
         self.log = log
         self.transport = transport
+        register_secret(config.api_key)
 
     def _headers(self, request_id: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.config.api_key}", "X-Org-ID": self.config.org_id,
@@ -102,11 +100,11 @@ class ZetarisClient:
         if status in (401, 403):
             raise ZetarisUnavailable(f"HTTP {status}: Zetaris refused the API key")
         if status >= 400:
-            raise QueryError(f"HTTP {status}: {_short(raw)}")
+            raise QueryError(f"HTTP {status} ({digest(raw)})")
         try:
             return json.loads(raw.decode("utf-8") or "null")
         except ValueError as exc:
-            raise QueryError(f"the answer is not JSON: {_short(raw)}") from exc
+            raise QueryError(f"the answer is not JSON ({digest(raw)})") from exc
 
     def _send(self, sql: str, purpose: str, columns: Sequence[str] | None, parse: bool,
               limit: int = ROW_LIMIT, **extra: Any

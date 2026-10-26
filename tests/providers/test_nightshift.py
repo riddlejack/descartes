@@ -239,3 +239,15 @@ def test_against_a_loopback_fake_runtime(server: str) -> None:
     assert out.served_model == "served-by-fast" and out.text == "Forty-two."
     assert log.entries[-1]["runtime_headers"] == {"meterless-lane": "deep"}
     assert NightshiftClient(server, "wrong-token", log).status().state == "unauthorized"
+
+
+def test_no_response_body_in_errors_or_logs(tmp_path: Path) -> None:
+    echo = f"lane failed; you sent Bearer {TOKEN} and PRIVATE-PROMPT-TEXT".encode()
+    log = QueryLog(tmp_path / "p.jsonl")
+    client = NightshiftClient("h:1", TOKEN, log,
+                              Fake({"/chat/completions": HttpAnswer(500, {}, echo)}))
+    with pytest.raises(NightshiftError) as e:
+        client.chat([{"role": "user", "content": "PRIVATE-PROMPT-TEXT"}])
+    text = str(e.value) + (tmp_path / "p.jsonl").read_text()
+    assert "PRIVATE-PROMPT-TEXT" not in text and TOKEN not in text
+    assert "bytes, sha256" in str(e.value)
