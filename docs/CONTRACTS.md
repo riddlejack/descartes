@@ -1,4 +1,4 @@
-# Contracts between the parts (v0.2.4)
+# Contracts between the parts (v0.2.7)
 
 These are the interfaces the parts agree on, so they can be built in parallel. The
 design (`DESIGN-v1.md`, cited as "step n") says what the system does; this file says
@@ -22,7 +22,10 @@ part B proves each with a tiny run before anything depends on it.
   dependencies only to its own extras group in `pyproject.toml` (A: `evidence`; B:
   `server`, `register`, `driver`); the orchestrator resolves any merge there.
 - **Orchestrator:** this file, `AGENTS.md`, `plugin/.claude-plugin/plugin.json`.
-- Later: **D. Hackathon adapters** (`hackathon/`, `run.py`, `Dockerfile`), and the
+- **D. Hackathon adapters:** `src/stemma/datalayer/`, `src/stemma/providers/`,
+  `hackathon/`, `run.py`, `Dockerfile`, their tests; at merge, the six-line hook in
+  B's `register/store.py` that routes derivation inputs through the data layer.
+- Later: **E. Checker tests** (`tests/checkers/`), and the
   paid search service the design names (one chosen by a small test; needs the
   owner's account). Until then, discovery is Claude Code's WebSearch.
 
@@ -138,7 +141,16 @@ Unicode code points in the stored text.
   `sha256`, `receipt_id`, offsets, a short snippet (FTS5: porter for words, trigram
   for exact strings such as figures).
 - `check_quote(receipt_id, quote)` → found or not, with offsets; exact match after a
-  documented normalisation of whitespace and quotation marks. B's register calls the
+  documented normalisation of whitespace and quotation marks, never matching from or
+  to the middle of a number. It also reports whether the match lies in a region the
+  extractor marked as not visible to a reader (hidden HTML, invisible or white PDF
+  text) or in a table the converter may have misaligned (merged cells): a warning for
+  the checker, never a refusal.
+- **The extractor never deletes or joins.** Hidden and invisible text stays in the
+  stored text, its ranges recorded on the receipt; elements whose text would run
+  together (superscripts, subscripts, adjacent blocks) are separated so no two
+  figures fuse into one.
+- B's register calls the
   same function through `stemma.evidence.api.check_quote(run_dir, receipt_id, quote)`;
   `stemma.evidence.api.read_text(run_dir, receipt_id)` returns the stored text.
 - `tables(sha256)` → Docling's table view, a derived view never used for quoting
@@ -223,8 +235,12 @@ from the harness), `created_at`, each code check's result, `supersedes`,
 - **Tools** (B may refine names, then records them here): `file_claim`,
   `record_claim_verdict`, `get_claim`, `find_claims`, `echo_candidates`,
   `entity_review`, `tree_upsert`, `propose_branch_done`, `record_branch_verdict`,
-  `request_frame_critique`, `submit_draft`, `await_checks` (accepts claim ids,
-  branch ids and draft versions), `proceed_on_assumption`, `finish_run`.
+  `request_frame_critique`, `record_frame` and `record_review` (accepted only from the
+  session the driver launched for that role, id, version and round), `submit_draft`,
+  `await_checks` (accepts claim ids, branch ids and draft versions),
+  `proceed_on_assumption`, `get_tree`, `claim_dependents`, `finish_run(version)`
+  (which copies the frozen, reviewed draft into `deliverable/` and writes
+  `answer.reader.md` from the same bytes), and part D's `query_data(sql)`.
 - **Tags.** In drafts and the deliverable each figure is followed by `[[c:<first 12
   hex of claim_id>]]`; a number that is not a figure (a date used as a date, a label,
   a slide number) by `[[nc:<why>]]`. A *segment* is a sentence, list item, table cell
@@ -234,6 +250,21 @@ from the harness), `created_at`, each code check's result, `supersedes`,
   whether each tag covers each number is the evidence auditor's judgment, and the
   `nc` tags are the mechanical reader's.
 
+## 5a. The data layer (D)
+- Evidence-derived tables (receipts, claims and verdicts, as-filed SEC facts, tables
+  extracted from captures) are synced into Zetaris as one semantic layer, through a
+  route Zetaris can reach; `datalayer/` in the run folder is tool-only.
+- `query_data(sql)`: read-only SQL over those tables for agents' analysis, through
+  Zetaris when configured and SQLite otherwise; every query logged with its text,
+  backend and row count. Rows carry the receipt or claim ids they came from; a figure
+  taken from a row is still filed as a claim with its own support.
+- Derivation inputs on re-run: with `STEMMA_DATALAYER=zetaris`, the register resolves
+  each input id itself, then reads the number through Zetaris (logged). A number that
+  differs from the register's by a single bit refuses the claim (`input_mismatch`).
+  Zetaris unreachable: the register's own number is used and `datalayer_unavailable`
+  is logged loudly on the run; the research path never stops or changes for it.
+- SAMPLE_MODE needs neither Zetaris nor Nightshift.
+
 ## 6. What code guarantees, and who produces what it reads
 Each guard has a producer in the live path, or it would block every run.
 - **Every guard hook fails closed** (`onFailure: "block"`, verified): a crashed or
@@ -242,9 +273,14 @@ Each guard has a producer in the live path, or it would block every run.
   a test feeds each guard malformed input.
 - **Bash runs sandboxed** with no network and no write access to tool-only paths
   (`store/`, `register/`, `tree.json`, `verdicts/`, `events.jsonl`, `run.json`, and
-  `$STEMMA_CACHE`, whose entries a later run would be served),
-  verified, including refusal of a request to run unsandboxed. Write and Edit to those paths are denied by permission rules. The MCP
-  server runs outside the sandbox. WebFetch is denied.
+  `$STEMMA_CACHE`, whose entries a later run would be served, and the run folder's
+  `CLAUDE.md`, `.claude/`, `.stemma/`, `task/`, `deliverable/`, `reviews/`,
+  `framer/own-frame.md`, `framer/critique.md`, `tree.md`, `datalayer/` and every
+  temporary file), verified, including refusal of a
+  request to run unsandboxed. Write and Edit to those paths are denied by permission
+  rules. The MCP server runs outside the sandbox, so **every host write is
+  path-contained and follows no symlink** (each component opened without following
+  links; temporary files inside a tool-only folder; atomic rename). WebFetch is denied.
 - **Subagents:** forks denied (`Agent(fork)`, verified); built-in agent types
   (general-purpose, Explore, Plan and any other) denied, so only plugin roles start;
   only approved models allowed (`availableModels`: Opus 5.5, Fable 5.1); model and
@@ -330,6 +366,12 @@ Each guard has a producer in the live path, or it would block every run.
   told. The owner reads it before the first real run.
 
 ## 9. The driver (B)
+- It drives the pinned Claude Code CLI headless, not the Agent SDK: the SDK passed the
+  parent's environment through to the session, which broke the sign-in (B's probe
+  runs, 26 Oct). Launch flags live in one function, `stemma.driver.clean.clean_launch`,
+  with `check_canary`, used by the driver and by every other runner (baselines,
+  sealed runs). `--strict-mcp-config` drops the plugin's own server and
+  `--disable-slash-commands` drops the method skills, so Stemma runs use neither.
 - Input: `task.json` with `question`, optional `intake` answers, `attachments`,
   optional `as_of`, optional `switches`. The sealed side adapts its task package to
   this; the driver never reads benchmark material itself.
