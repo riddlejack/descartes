@@ -161,6 +161,15 @@ class Driver:
     def _save_state(self) -> None:
         write_json_atomic(self.run_dir / STATE_FILE, self.state)
 
+    def note_evidence_stub(self) -> None:
+        """Record when sessions get the evidence stub, and loudly if run.json says otherwise."""
+        on = self.cfg.evidence_stub is not None
+        if on:
+            events.emit(self.run_dir, "evidence_stub_on", value=self.cfg.evidence_stub)
+        if on != bool(self.run.get("evidence_stub", False)):
+            events.emit(self.run_dir, "evidence_stub_mismatch", run_json=self.run.get(
+                "evidence_stub"), sessions=on)
+
     # ----- launching ---------------------------------------------------------------
     def _check_plugin(self) -> None:
         digest, _ = folder_digest(self.plugin_dir)
@@ -471,6 +480,7 @@ def start(cfg: DriverConfig, run_dir: Path, api: ChecksApi | None = None,
         d = Driver(cfg, run_dir, api, limits)
         events.emit(d.run_dir, "run_started", run_id=d.run_id,
                     plugin_digest=d.run["plugin"]["digest"], harness=d.version)
+        d.note_evidence_stub()
         d.api.request_check(d.run_dir, "blind-framer", "frame:own", "run_start")
         d.start_lead(resume=False)
         return d.watch() if watch else 0
@@ -482,6 +492,7 @@ def resume(cfg: DriverConfig, run_dir: Path, api: ChecksApi | None = None,
         d = Driver(cfg, run_dir, api, limits)
         events.emit(d.run_dir, "run_resumed", run_id=d.run_id,
                     lead_session_id=d.state["lead"].get("session_id"))
+        d.note_evidence_stub()
         d.start_lead(resume=True)
         d.relaunch_unended_checks()
         return d.watch()

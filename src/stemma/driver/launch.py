@@ -5,14 +5,13 @@ The Claude Agent SDK (0.2.174) is not used to launch: its transport starts the c
 binary "Not logged in"), and always adds `--input-format stream-json` and other flags, so
 it cannot give `-p <prompt>` with exactly the probe-proven flags. The driver starts the
 CLI itself with an environment built from nothing (`tests/driver/test_sdk_finding.py`
-shows the SDK's leak).
+shows the SDK's leak). Every launch goes through `stemma.driver.clean.clean_launch`.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import pwd
 import signal
 import subprocess
 import threading
@@ -20,42 +19,31 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO, Any, Final
+from typing import IO, Any
 
-from stemma.driver import canary, events
-from stemma.driver.config import (
-    SCRUBBED_LANG,
-    SCRUBBED_PATH,
-    SESSIONS_DIR,
-    SETTINGS_DIR,
-    DriverConfig,
-)
+from stemma.driver import canary, clean, events
+from stemma.driver.config import SESSIONS_DIR, SETTINGS_DIR, DriverConfig
 from stemma.driver.errors import HarnessError
-from stemma.driver.settings import ToolSets, build_settings
-
-# Never set in a run's environment (invariant: section 6; it overrides --effort).
-FORBIDDEN_ENV: Final = frozenset({"CLAUDE_CODE_EFFORT_LEVEL"})
+from stemma.driver.settings import ToolSets, stemma_settings_extra
 
 
-def scrubbed_env(cfg: DriverConfig, run_dir: Path) -> dict[str, str]:
-    """The whole environment of a session, built from nothing (no inherited variable)."""
-    pw = pwd.getpwuid(os.getuid())
-    env = {
-        "HOME": pw.pw_dir,
-        "USER": pw.pw_name,
-        "PATH": SCRUBBED_PATH,
-        "LANG": SCRUBBED_LANG,
-        "CLAUDE_CONFIG_DIR": str(cfg.claude_config),
+def driver_env(cfg: DriverConfig, run_dir: Path) -> dict[str, str]:
+    """What Stemma adds to the clean environment of each of its sessions."""
+    extra = {
         "STEMMA_RUN_DIR": str(run_dir),
         "STEMMA_PYTHON": str(cfg.python),
         "CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS": "1",
     }
     if cfg.cache_dir is not None:
-        env["STEMMA_CACHE"] = str(cfg.cache_dir)  # the evidence service's fetch cache
+        extra["STEMMA_CACHE"] = str(cfg.cache_dir)  # the evidence service's fetch cache
     if cfg.evidence_stub is not None:
-        env["STEMMA_EVIDENCE_STUB"] = cfg.evidence_stub  # evidence service stub mode (tests)
-    assert not FORBIDDEN_ENV & env.keys()  # invariant
-    return env
+        extra["STEMMA_EVIDENCE_STUB"] = cfg.evidence_stub  # evidence service stub mode (tests)
+    return extra
+
+
+def scrubbed_env(cfg: DriverConfig, run_dir: Path) -> dict[str, str]:
+    """The whole environment of a Stemma session, built from nothing."""
+    return clean.scrubbed_env(cfg.claude_config, driver_env(cfg, run_dir))
 
 
 def harness_version(cfg: DriverConfig) -> str:
@@ -91,25 +79,6 @@ class LaunchSpec:
     resume: bool
     tools: ToolSets
     request_id: str | None = None  # set for checking sessions
-
-
-def build_argv(cfg: DriverConfig, plugin_dir: Path, settings_path: Path,
-               spec: LaunchSpec) -> list[str]:
-    if spec.prompt.startswith("-") or not spec.prompt:
-        raise HarnessError(f"prompt must not be empty or start with '-': {spec.prompt!r}")
-    argv = [
-        str(cfg.claude_bin), "-p", spec.prompt,
-        "--output-format", "stream-json", "--verbose",
-        "--agent", f"stemma:{spec.role}",
-        "--model", spec.model,
-        "--effort", spec.effort,
-        "--plugin-dir", str(plugin_dir),
-        "--settings", str(settings_path),
-        "--tools", ",".join(spec.tools.builtin),
-    ]
-    # Equals form: the value can never be read as a separate flag.
-    argv.append(f"--resume={spec.session_id}" if spec.resume else f"--session-id={spec.session_id}")
-    return argv
 
 
 @dataclass
@@ -216,16 +185,21 @@ def launch(cfg: DriverConfig, run_dir: Path, plugin_dir: Path, spec: LaunchSpec,
     sessions_dir = run_dir / SESSIONS_DIR
     settings_dir.mkdir(parents=True, exist_ok=True)
     sessions_dir.mkdir(parents=True, exist_ok=True)
-    settings = build_settings(run_dir, spec.role, spec.prompt, spec.tools, cfg.claude_config)
-    settings_path = settings_dir / f"{spec.name}.json"
-    settings_path.write_text(json.dumps(settings, indent=1, sort_keys=True), encoding="utf-8")
-    argv = build_argv(cfg, plugin_dir, settings_path, spec)
+    cl = clean.clean_launch(
+        cfg.claude_bin, cfg.claude_config, spec.prompt, cwd=run_dir, model=spec.model,
+        effort=spec.effort, tools=spec.tools.builtin,
+        settings_path=settings_dir / f"{spec.name}.json", plugin_dir=plugin_dir,
+        agent=f"stemma:{spec.role}",
+        settings_extra=stemma_settings_extra(run_dir, spec.role, spec.prompt, spec.tools,
+                                             cfg.claude_config),
+        env_extra=driver_env(cfg, run_dir), session_id=spec.session_id, resume=spec.resume)
+    argv = cl.argv
     stream_path = sessions_dir / f"{spec.name}.stream.jsonl"
     stderr_path = sessions_dir / f"{spec.name}.stderr"
     with open(stderr_path, "ab") as err:
         try:
             proc = subprocess.Popen(
-                argv, cwd=run_dir, env=scrubbed_env(cfg, run_dir), stdin=subprocess.DEVNULL,
+                argv, cwd=run_dir, env=cl.env, stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=err, start_new_session=True,
             )
         except OSError as exc:
@@ -240,8 +214,7 @@ def launch(cfg: DriverConfig, run_dir: Path, plugin_dir: Path, spec: LaunchSpec,
 
 def expectation(run_dir: Path, plugin_dir: Path, agents: list[str], skills: list[str],
                 spec: LaunchSpec, version: str) -> canary.Expectation:
-    return canary.Expectation(
-        cwd=run_dir, plugin_dir=plugin_dir, agents=frozenset(agents), skills=frozenset(skills),
-        builtin_tools=frozenset(spec.tools.main), harness_version=bare_version(version),
-        session_id=None if spec.resume else spec.session_id,
-    )
+    return clean.stemma_expectation(
+        cwd=run_dir, plugin_dir=plugin_dir, agents=agents, skills=skills,
+        main_tools=spec.tools.main, harness_version=version,
+        session_id=None if spec.resume else spec.session_id)

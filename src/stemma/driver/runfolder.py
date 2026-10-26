@@ -78,6 +78,8 @@ def create_run(cfg: DriverConfig, task_path: Path, limits: Limits | None = None,
                     "config_dir": str(cfg.claude_config)},
         "plugin": assembly.to_json(),
         "limits": lim.to_json(),
+        # Whether the evidence service ran as a stub (STEMMA_EVIDENCE_STUB) for this run.
+        "evidence_stub": cfg.evidence_stub is not None,
     }
     write_json_atomic(run_dir / RUN_JSON, run)
     return run_dir

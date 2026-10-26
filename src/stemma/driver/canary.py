@@ -1,7 +1,8 @@
-"""The canary: the stream-json init message must show exactly the run plugin and nothing else.
+"""The canary: the stream-json init message must show exactly what was meant to load.
 
-Exact facts only: plugin list, agent list, MCP servers, skills, tools, working folder,
-harness version, session id. Any difference stops that session (CONTRACTS section 2.1).
+Exact facts only: plugin list, agent list, MCP servers and tools, skills, built-in tools,
+working folder, harness version, session id. Any difference stops that session
+(CONTRACTS section 2.1). Runners use it through `stemma.driver.clean.check_canary`.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from typing import Any, Final
 
 from stemma.register import roles
 
+PLUGIN: Final = roles.PLUGIN
 MCP_SERVER: Final = "plugin:stemma:stemma"  # invariant: plugin "stemma", server "stemma"
 # The init message lists the Agent tool under its older name (probe p1, p6).
 INIT_TOOL_ALIASES: Final = {"Task": "Agent"}
@@ -20,12 +22,13 @@ INIT_TOOL_ALIASES: Final = {"Task": "Agent"}
 @dataclass(frozen=True)
 class Expectation:
     cwd: Path
-    plugin_dir: Path
-    agents: frozenset[str]  # short names
-    skills: frozenset[str]
+    plugin_dir: Path | None  # the stemma plugin; None for a bare session (no plugin)
+    agents: frozenset[str]  # full names as init lists them, e.g. "stemma:lead"
+    skills: frozenset[str]  # names; a plugin skill may be listed as "stemma:<name>"
     builtin_tools: frozenset[str]
     harness_version: str  # the bare version, e.g. "2.1.308"
     session_id: str | None  # None when resuming (the harness may report its own)
+    mcp_servers: tuple[str, ...] = (MCP_SERVER,)
 
 
 def _names(xs: Any) -> list[str] | None:
@@ -43,7 +46,7 @@ def _names(xs: Any) -> list[str] | None:
 
 
 def _skill_name(s: str) -> str:
-    return s[len(roles.PLUGIN) + 1:] if s.startswith(roles.PLUGIN + ":") else s
+    return s[len(PLUGIN) + 1:] if s.startswith(PLUGIN + ":") else s
 
 
 def check(init: dict[str, Any], exp: Expectation) -> list[str]:
@@ -53,37 +56,38 @@ def check(init: dict[str, Any], exp: Expectation) -> list[str]:
         return ["first stream message is not the system init message"]
 
     plugins = init.get("plugins")
-    if not isinstance(plugins, list) or [p.get("name") for p in plugins
-                                         if isinstance(p, dict)] != [roles.PLUGIN] \
-            or len(plugins) != 1:
-        problems.append(f"plugins are {_names(plugins)}, expected exactly ['stemma']")
-    elif plugins[0].get("path") != str(exp.plugin_dir):
+    want_plugins = [PLUGIN] if exp.plugin_dir is not None else []
+    if not isinstance(plugins, list) or _names(plugins) != want_plugins:
+        problems.append(f"plugins are {_names(plugins)}, expected exactly {want_plugins}")
+    elif exp.plugin_dir is not None and plugins[0].get("path") != str(exp.plugin_dir):
         problems.append(f"plugin path is {plugins[0].get('path')!r}, expected the run plugin "
                         f"{str(exp.plugin_dir)!r}")
 
     agents = _names(init.get("agents"))
-    want_agents = sorted(f"{roles.PLUGIN}:{a}" for a in exp.agents)
     if agents is None:
         problems.append("init has no agent list")
     else:
-        foreign = sorted(a for a in agents if not a.startswith(roles.PLUGIN + ":"))
-        if foreign:
-            problems.append(f"agents outside the plugin loaded: {foreign}")
-        if sorted(agents) != want_agents:
-            problems.append(f"agents are {sorted(agents)}, expected {want_agents}")
+        if exp.plugin_dir is not None:
+            foreign = sorted(a for a in agents if not a.startswith(PLUGIN + ":"))
+            if foreign:
+                problems.append(f"agents outside the plugin loaded: {foreign}")
+        if sorted(agents) != sorted(exp.agents):
+            problems.append(f"agents are {sorted(agents)}, expected {sorted(exp.agents)}")
 
     servers = init.get("mcp_servers")
-    if not isinstance(servers, list) or len(servers) != 1 or not isinstance(servers[0], dict) \
-            or servers[0].get("name") != MCP_SERVER:
-        problems.append(f"MCP servers are {_names(servers)}, expected exactly [{MCP_SERVER!r}]")
-    elif servers[0].get("status") != "connected":
-        problems.append(f"MCP server {MCP_SERVER} status is {servers[0].get('status')!r}")
+    names = _names(servers)
+    if names is None or sorted(names) != sorted(exp.mcp_servers):
+        problems.append(f"MCP servers are {names}, expected exactly {list(exp.mcp_servers)}")
+    else:
+        for srv in servers if isinstance(servers, list) else []:
+            if isinstance(srv, dict) and srv.get("status") != "connected":
+                problems.append(f"MCP server {srv.get('name')} status is {srv.get('status')!r}")
 
     skills = _names(init.get("skills"))
     if skills is None:
         problems.append("init has no skill list")
     else:
-        if any(":" in s and not s.startswith(roles.PLUGIN + ":") for s in skills):
+        if any(":" in s and not s.startswith(PLUGIN + ":") for s in skills):
             problems.append(f"skills outside the plugin loaded: {sorted(skills)}")
         got = sorted(_skill_name(s) for s in skills)
         if got != sorted(exp.skills):
@@ -97,9 +101,12 @@ def check(init: dict[str, Any], exp: Expectation) -> list[str]:
         mcp = sorted(t for t in tools if t.startswith("mcp__"))
         if builtin != sorted(exp.builtin_tools):
             problems.append(f"built-in tools are {builtin}, expected {sorted(exp.builtin_tools)}")
-        foreign_mcp = [t for t in mcp if not t.startswith(roles.MCP_PREFIX)]
-        if foreign_mcp:
-            problems.append(f"MCP tools outside the stemma server: {foreign_mcp}")
+        if exp.mcp_servers:
+            foreign_mcp = [t for t in mcp if not t.startswith(roles.MCP_PREFIX)]
+            if foreign_mcp:
+                problems.append(f"MCP tools outside the stemma server: {foreign_mcp}")
+        elif mcp:
+            problems.append(f"MCP tools loaded in a session with no MCP server: {mcp}")
 
     if init.get("cwd") != str(exp.cwd):
         problems.append(f"working folder is {init.get('cwd')!r}, expected {str(exp.cwd)!r}")

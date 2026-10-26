@@ -136,7 +136,7 @@ def test_lead_session_covers_worker_tools() -> None:
 # ----- canary -------------------------------------------------------------------------
 
 EXP = canary.Expectation(
-    cwd=RUN, plugin_dir=RUN / ".stemma/plugin", agents=frozenset({"lead", "worker"}),
+    cwd=RUN, plugin_dir=RUN / ".stemma/plugin", agents=frozenset({"stemma:lead", "stemma:worker"}),
     skills=frozenset({"decomposition-method"}),
     builtin_tools=frozenset({"Agent", "Read", "ToolSearch"}), harness_version="2.1.308",
     session_id="s1")

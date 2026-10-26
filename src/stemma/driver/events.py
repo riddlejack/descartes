@@ -14,7 +14,7 @@ EVENTS = "events.jsonl"
 LOUD = frozenset({
     "canary_failed", "launch_failed", "model_effort_mismatch", "unexpected_subagent",
     "session_stopped_by_limit", "stream_unparsed", "invalid_check_request",
-    "transcript_missing",
+    "transcript_missing", "evidence_stub_mismatch",
 })
 
 

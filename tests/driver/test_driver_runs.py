@@ -273,6 +273,9 @@ def test_status_and_cli(cfg: DriverConfig, tmp: Path, fake: Fake, limits: Limits
     assert main(["--plugin-src", str(cfg.plugin_src), "start", str(task)]) == 0
     run = Path(capsys.readouterr().out.strip().splitlines()[0])
     assert all(c["env"]["STEMMA_EVIDENCE_STUB"] == "1" for c in fake.calls())
+    assert json.loads((run / "run.json").read_text())["evidence_stub"] is True
+    assert kinds(run, "evidence_stub_on")[0]["value"] == "1"
+    assert not kinds(run, "evidence_stub_mismatch")
     (run / "tree.json").write_text(json.dumps({"nodes": [
         {"id": "n1", "status": "waiting_user", "statement": "Which region counts?"},
         {"id": "n2", "status": "answered", "statement": "x"}]}))

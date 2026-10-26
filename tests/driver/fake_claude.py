@@ -63,7 +63,8 @@ def main() -> int:
         sys.stdout.write("this is not json\n")
         return 1
 
-    plugin = Path(opt(argv, "--plugin-dir") or "/nonexistent")
+    plugin_arg = opt(argv, "--plugin-dir")
+    plugin = Path(plugin_arg or "/nonexistent")
     tools = [t for t in (opt(argv, "--tools") or "").split(",") if t]
     # Like the harness under --agent: the agent's own frontmatter tools within --tools.
     own: list[str] = []
@@ -73,6 +74,8 @@ def main() -> int:
             if line.startswith("tools:"):
                 own = [t.strip() for t in line[len("tools:"):].split(",") if t.strip()]
     own_names = {t.split("(", 1)[0] for t in own}
+    if not agent:
+        own_names = set(tools)  # no --agent: the whole --tools list
     shown = ["Task" if t == "Agent" else t for t in tools if t in own_names]
     shown += [t for t in own if t.startswith("mcp__")]
     agents = sorted(f"stemma:{p.stem}" for p in (plugin / "agents").glob("*.md"))
@@ -91,6 +94,8 @@ def main() -> int:
         "plugins": [{"name": "stemma", "path": str(plugin), "source": "stemma@inline"}],
         "memory_paths": {"auto": str(proj / "memory") + "/"},
     }
+    if plugin_arg is None:  # a bare session: nothing from a plugin
+        init.update({"plugins": [], "mcp_servers": [], "agents": [], "skills": []})
     init.update(cfg.get("init_overrides", {}))
     out(init)
 

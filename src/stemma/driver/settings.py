@@ -15,32 +15,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
-from stemma.driver.config import AVAILABLE_MODELS, SESSIONS_DIR, TOOL_ONLY
+from stemma.driver.clean import merge_settings
+from stemma.driver.config import SESSIONS_DIR, TOOL_ONLY
 from stemma.driver.errors import AgentFileInvalid
 from stemma.register import roles
 
 MCP_PREFIX: Final = roles.MCP_PREFIX
-# MCP tools load deferred, so every session needs ToolSearch (probe p1).
+# Kept in --tools and allowed for every session: harmless now that the plugin's MCP server
+# sets alwaysLoad (probe p11), and the canary expects only the agent's own tools.
 ALWAYS_TOOLS: Final = ("ToolSearch",)
 # Built-in agent types that must never start (invariant: section 6).
 DENIED_AGENT_TYPES: Final = (
     "fork", "general-purpose", "Explore", "Plan", "claude", "statusline-setup",
     "claude-code-guide",
 )
-CANARY_SETTINGS: Final[dict[str, Any]] = {
-    "syncClaudeAiPlugins": False,
-    "syncClaudeAiSkills": False,
-    "disableClaudeAiConnectors": True,
-    "disableBundledSkills": True,
-    # Two bundled skills survive disableBundledSkills (probe p5).
-    "skillOverrides": {"design": "off", "doctor": "off"},
-    "enabledPlugins": {
-        "cc-plugin-agents-md@builtin": False,
-        "cc-plugin-telemetry@builtin": False,
-        "cc-plugin-plugin-authoring@builtin": False,
-    },
-}
-
 _TOOL = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\(.*\))?$")
 
 # What the blind roles may not read (section 6), as run-relative patterns. A trailing "/"
@@ -168,7 +156,14 @@ def _deciders_eye_denials(run_dir: Path, prompt: str) -> list[str]:
 
 def build_settings(run_dir: Path, role: str, prompt: str, tools: ToolSets,
                    claude_config: Path) -> dict[str, Any]:
-    """The settings JSON for one session. `run_dir` must be the resolved real path."""
+    """The whole settings JSON of one session: the clean base plus Stemma's rules."""
+    return merge_settings(stemma_settings_extra(run_dir, role, prompt, tools, claude_config))
+
+
+def stemma_settings_extra(run_dir: Path, role: str, prompt: str, tools: ToolSets,
+                          claude_config: Path) -> dict[str, Any]:
+    """Stemma's rules on top of the clean base: permissions and the sandbox.
+    `run_dir` must be the resolved real path."""
     deny: list[str] = ["WebFetch"] + [f"Agent({a})" for a in DENIED_AGENT_TYPES]
     deny_write_abs: list[str] = []
     for pat in TOOL_ONLY:
@@ -189,9 +184,7 @@ def build_settings(run_dir: Path, role: str, prompt: str, tools: ToolSets,
         # deny rules cannot be overridden by an allow, so they enumerate (above).
         filesystem["denyRead"] = [str(run_dir), str(transcripts)]
         filesystem["allowRead"] = [_abs(run_dir, p) for p in _deciders_eye_reads(prompt)]
-    settings: dict[str, Any] = dict(CANARY_SETTINGS)
-    settings.update({
-        "availableModels": list(AVAILABLE_MODELS),
+    return {
         "permissions": {"deny": deny, "allow": list(tools.allow)},
         "sandbox": {
             "enabled": True,
@@ -201,5 +194,4 @@ def build_settings(run_dir: Path, role: str, prompt: str, tools: ToolSets,
             "network": {"allowedDomains": []},
             "filesystem": filesystem,
         },
-    })
-    return settings
+    }
