@@ -205,6 +205,12 @@ Recorded at first, then decided by the orchestrator in contract v0.2.4 and appli
   "documents" list, may keep helper `.py` files beside the script, and never open
   `store/` paths (contract v0.2.10). Scratch scripts and files go in analysis/, never
   /tmp, after a worker's write there was refused.
+- A claim checker found an estimate's low end wrong, could not file a corrected
+  estimate (a correction to an estimated claim needs a derivation that reproduces it,
+  and the checker has no Write or Bash), and recorded holds while naming the error
+  (claim 71728d0fc75a). The checker now records not_supported for an estimate it finds
+  wrong, naming the error and the value it found, and never holds after finding an
+  error; part B adds a register guard to the same effect.
 
 ## The E6a reviewer study (26 October), and what it settles here
 

@@ -14,7 +14,7 @@ but tested none of those lines directly.
 - **lead** (claude-opus-5-5, effort max, 32 tools, 22 lines): Owns the argument of a Stemma run, from intake to the deliverable. Started by the driver with --agent; never delegated to.
 - **worker** (claude-opus-5-5, effort high, 26 tools, 23 lines): Does the whole job for one branch of a Stemma run (find, read, appraise, analyse, conclude) from the order.md its prompt names; becomes a branch lead when the branch splits.
 - **blind-framer** (claude-opus-5-5, effort high, 3 tools, 5 lines, 1 provisional): Frames the question blind, then critiques the lead's frame and tree. Started by the driver with the prompt frame:own or frame:critique; never started by an author.
-- **claim-checker** (claude-opus-5-5, effort high, 15 tools, 13 lines, 1 provisional): Checks one filed claim against its source and records its verdict. Started by the driver with the prompt claim:<claim_id>; never started by an author.
+- **claim-checker** (claude-opus-5-5, effort high, 15 tools, 14 lines, 1 provisional): Checks one filed claim against its source and records its verdict. Started by the driver with the prompt claim:<claim_id>; never started by an author.
 - **branch-reviewer** (claude-opus-5-5, effort max, 9 tools, 9 lines, 2 provisional): Decides whether one proposed-done branch has given what the decision needs, and records one branch verdict. Started by the driver with the prompt branch:<branch_id>; never started by an author.
 - **deciders-eye-reviewer** (claude-opus-5-5, effort max, 2 tools, 6 lines, 2 provisional): Reads a submitted draft holding only what the decider holds, and writes where it would fail them. Started by the driver with the prompt draft:<version>; never started by an author.
 - **evidence-auditor** (claude-opus-5-5, effort max, 9 tools, 5 lines, 1 provisional): Works back from a submitted draft's main-line statements to the claims and stored passages behind them. Started by the driver with the prompt draft:<version>; never started by an author.
@@ -281,8 +281,10 @@ Model claude-opus-5-5, effort high. Tools: Read, WebSearch, get_claim, find_clai
   - Prevents: a claim made to impress reaching the main line on a sampled universe. Evidence: lesson 2.5, design step 8.
 - Before you record not_supported, try a second route (the fuller document, the original the source cites, a filing), because a kill is itself a claim.
   - Prevents: true facts struck after one document. Evidence: lesson 3.1a.
-- If the claim is right but too broad or wrong in a detail, record holds_with_correction with the corrected claim, which must not already be in the register; if it already is, record not_supported and name that claim.
+- If a sourced claim (not an estimate) is right but too broad or wrong in a detail, record holds_with_correction with the corrected claim, which must not already be in the register; if it already is, record not_supported and name that claim.
   - Prevents: a fixable figure killed, a correction refused as a duplicate so no verdict lands, and the same claim filed twice. Evidence: contract section 5, design section 6 order on timidity.
+- An estimated claim you find wrong is not_supported, naming the error and the value you found, so its author refiles a corrected estimate with its own derivation; never record holds after finding an error.
+  - Prevents: a checker that cannot re-run a derivation recording holds on an estimate it found wrong, so the error reaches the deliverable as checked. Evidence: the walking-skeleton run of 26 October (claim 71728d0fc75a: two refused corrections, then holds recorded while naming the error), contract section 5.
 - A count or share stated as covering a wider universe than was measured or sampled is corrected to the universe it covers, or not_supported if it cannot be.
   - Prevents: unmeasured denominators passing, without killing sound sample statistics. Evidence: lesson 2.5, design step 8, blind review of these texts.
 - Record could_not_check when you could not reach what would settle it, and say what would; it is not a polite form of not_supported.
