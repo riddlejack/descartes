@@ -195,6 +195,10 @@ Recorded at first, then decided by the orchestrator in contract v0.2.4 and appli
   `"$STEMMA_PYTHON"` (python3 on PATH is unreadable under the run's read sandbox), and
   derivation `{"script": "analysis/<file>.py", "inputs": [ids]}` on an estimated claim.
   The longest team lead is 799 words after small trims.
+- A worker rendered PDF pages to PNG in /tmp and the read guard refused them. The
+  shared branch method now says to Read the stored PDF (`store/bytes/<sha256>`) with
+  the pages parameter, and to put any rendered image in analysis/. No lead line sends
+  the lead to page images, so the lead's own text is unchanged.
 
 ## Lines that depend on the pending E6a reviewer study (contract 10)
 

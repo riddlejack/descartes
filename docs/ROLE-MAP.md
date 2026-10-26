@@ -11,7 +11,7 @@ reviewer study E6a.
 ## At a glance
 
 - **lead** (claude-opus-5-5, effort max, 32 tools, 21 lines): Owns the argument of a Stemma run, from intake to the deliverable. Started by the driver with --agent; never delegated to.
-- **worker** (claude-opus-5-5, effort high, 26 tools, 21 lines): Does the whole job for one branch of a Stemma run (find, read, appraise, analyse, conclude) from the order.md its prompt names; becomes a branch lead when the branch splits.
+- **worker** (claude-opus-5-5, effort high, 26 tools, 22 lines): Does the whole job for one branch of a Stemma run (find, read, appraise, analyse, conclude) from the order.md its prompt names; becomes a branch lead when the branch splits.
 - **blind-framer** (claude-opus-5-5, effort high, 3 tools, 5 lines, 1 provisional on E6a): Frames the question blind, then critiques the lead's frame and tree. Started by the driver with the prompt frame:own or frame:critique; never started by an author.
 - **claim-checker** (claude-opus-5-5, effort high, 15 tools, 13 lines, 1 provisional on E6a): Checks one filed claim against its source and records its verdict. Started by the driver with the prompt claim:<claim_id>; never started by an author.
 - **branch-reviewer** (claude-opus-5-5, effort high, 9 tools, 9 lines, 2 provisional on E6a): Decides whether one proposed-done branch has given what the decision needs, and records one branch verdict. Started by the driver with the prompt branch:<branch_id>; never started by an author.
@@ -21,7 +21,7 @@ reviewer study E6a.
 - **retrospective-writer** (claude-opus-5-5, effort high, 3 tools, 4 lines): After a run finishes, writes proposals for changing the system from the run's record. Started by the driver when finish_run is accepted; never started by an author.
 
 Every role also reads the four standing rules. The lead's text is base.md plus
-one fragment per switch: at most 800 words with workers, against a page of 800, and at most 1160 when it works every branch itself and so also carries the worker's method.
+one fragment per switch: at most 800 words with workers, against a page of 800, and at most 1193 when it works every branch itself and so also carries the worker's method.
 
 ## Standing rules (every role, as the run folder's CLAUDE.md)
 
@@ -122,6 +122,8 @@ Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Sk
   - Prevents: searching in place of thinking. Evidence: design step 7.
 - Read the whole document behind any figure you rely on, in parts through outline and read, not only the first layer that looks authoritative.
   - Prevents: a headline used without its method, and corrections made against an incomplete primary. Evidence: lesson 2.1, P3 failure kind 1a.
+- To see a PDF page as laid out (a table, a chart), Read the stored PDF at store/bytes/<sha256> with the pages parameter, and put any image you render in analysis/, never in /tmp.
+  - Prevents: pages rendered to images in /tmp that the run's read guard then refuses, losing the table or chart the branch needed. Evidence: the walking-skeleton run of 26 October (a worker's refused reads of PNG pages in /tmp), contract section 6 sandbox.
 - Call a source "not retrieved" only after other routes (another fetch, an archived copy, a bulk dataset, a filing, a syndicated copy), and never call it "does not exist".
   - Prevents: a tool failure recorded as a fact about the world. Evidence: lesson 2.3.
 - File every figure your conclusion rests on with file_claim, tiered as its source warrants; a count or share states the universe it was measured or sampled on.
@@ -206,6 +208,8 @@ Model claude-opus-5-5, effort high. Tools: Read, Write, Edit, Bash, WebSearch, S
   - Prevents: searching in place of thinking. Evidence: design step 7.
 - Read the whole document behind any figure you rely on, in parts through outline and read, not only the first layer that looks authoritative.
   - Prevents: a headline used without its method, and corrections made against an incomplete primary. Evidence: lesson 2.1, P3 failure kind 1a.
+- To see a PDF page as laid out (a table, a chart), Read the stored PDF at store/bytes/<sha256> with the pages parameter, and put any image you render in analysis/, never in /tmp.
+  - Prevents: pages rendered to images in /tmp that the run's read guard then refuses, losing the table or chart the branch needed. Evidence: the walking-skeleton run of 26 October (a worker's refused reads of PNG pages in /tmp), contract section 6 sandbox.
 - Call a source "not retrieved" only after other routes (another fetch, an archived copy, a bulk dataset, a filing, a syndicated copy), and never call it "does not exist".
   - Prevents: a tool failure recorded as a fact about the world. Evidence: lesson 2.3.
 - File every figure your conclusion rests on with file_claim, tiered as its source warrants; a count or share states the universe it was measured or sampled on.
