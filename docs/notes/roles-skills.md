@@ -211,6 +211,19 @@ Recorded at first, then decided by the orchestrator in contract v0.2.4 and appli
   (claim 71728d0fc75a). The checker now records not_supported for an estimate it finds
   wrong, naming the error and the value it found, and never holds after finding an
   error; part B adds a register guard to the same effect.
+- **The run never released** (`docs/notes/walking-skeleton.md` on branch
+  claude/walking-skeleton; contract v0.3). The lead was told to call finish_run only
+  when a round changed nothing material; every round changed something, so it wrote 11
+  drafts in 10 rounds (1,865 to 4,765 words) and never read the gate. Now it calls
+  finish_run after every review round, fixes exactly what the refusal lists, revises
+  only what a reviewer marked material (the three final reviewers now mark each point
+  material or minor), grows the text only with a stated reason, and at the run's
+  max_review_rounds lists unresolved criticisms in the completion statement. Seven
+  nodes (five options, the open lane, one condition) had no branch and could never
+  close: every condition and rival now gets a branch, or one whose record says what was
+  not done and why; options close through their conditions; an empty open lane needs
+  nothing. Draft v11 had 77 untagged number segments, many of them labels and dates:
+  every number on the face now carries a c tag or an nc tag with its reason.
 
 ## The E6a reviewer study (26 October), and what it settles here
 

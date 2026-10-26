@@ -16,3 +16,4 @@ List terms used before they are defined or that mean something else in the reade
 Judge each [[nc:...]] tag: is that number truly not a figure? <!-- prevents: a figure escaping the claim check under a non-figure tag; evidence: contract section 5 -->
 Read the section titles alone, in order, and say whether they tell the argument. <!-- prevents: a storyline that exists only in the body text; evidence: design step 13, D1 principle 9 -->
 Quote each segment you list and give the fix in a few words; a fix may shorten the text, never lengthen it. <!-- prevents: a checking pass that makes the text grow; evidence: lesson 7 rule 18 -->
+Mark each point material (it would change the decision or mislead the reader) or minor. <!-- prevents: a lead that revises every point every round and never releases; evidence: the walking-skeleton run of 26 October (docs/notes/walking-skeleton.md: no release after 11 drafts in 10 review rounds), contract v0.3 section 6 -->

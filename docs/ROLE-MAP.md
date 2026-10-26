@@ -16,13 +16,13 @@ but tested none of those lines directly.
 - **blind-framer** (claude-opus-5-5, effort high, 3 tools, 5 lines, 1 provisional): Frames the question blind, then critiques the lead's frame and tree. Started by the driver with the prompt frame:own or frame:critique; never started by an author.
 - **claim-checker** (claude-opus-5-5, effort high, 15 tools, 14 lines, 1 provisional): Checks one filed claim against its source and records its verdict. Started by the driver with the prompt claim:<claim_id>; never started by an author.
 - **branch-reviewer** (claude-opus-5-5, effort max, 9 tools, 9 lines, 2 provisional): Decides whether one proposed-done branch has given what the decision needs, and records one branch verdict. Started by the driver with the prompt branch:<branch_id>; never started by an author.
-- **deciders-eye-reviewer** (claude-opus-5-5, effort max, 2 tools, 6 lines, 2 provisional): Reads a submitted draft holding only what the decider holds, and writes where it would fail them. Started by the driver with the prompt draft:<version>; never started by an author.
-- **evidence-auditor** (claude-opus-5-5, effort max, 9 tools, 5 lines, 1 provisional): Works back from a submitted draft's main-line statements to the claims and stored passages behind them. Started by the driver with the prompt draft:<version>; never started by an author.
-- **mechanical-reader** (claude-opus-5-5, effort max, 2 tools, 6 lines, 1 provisional): Reads a submitted draft for mechanical faults (terms, naked numbers, references, titles, machine tells); a check, never an approval of style. Started by the driver with the prompt draft:<version>; never started by an author.
+- **deciders-eye-reviewer** (claude-opus-5-5, effort max, 2 tools, 7 lines, 2 provisional): Reads a submitted draft holding only what the decider holds, and writes where it would fail them. Started by the driver with the prompt draft:<version>; never started by an author.
+- **evidence-auditor** (claude-opus-5-5, effort max, 9 tools, 6 lines, 1 provisional): Works back from a submitted draft's main-line statements to the claims and stored passages behind them. Started by the driver with the prompt draft:<version>; never started by an author.
+- **mechanical-reader** (claude-opus-5-5, effort max, 2 tools, 7 lines, 1 provisional): Reads a submitted draft for mechanical faults (terms, naked numbers, references, titles, machine tells); a check, never an approval of style. Started by the driver with the prompt draft:<version>; never started by an author.
 - **retrospective-writer** (claude-opus-5-5, effort high, 3 tools, 4 lines): After a run finishes, writes proposals for changing the system from the run's record. Started by the driver when finish_run is accepted; never started by an author.
 
 Every role also reads the four standing rules. The lead's text is base.md plus
-one fragment per switch: at most 807 words with workers, against a page of 850, and at most 1233 when it works every branch itself and so also carries the worker's method.
+one fragment per switch: at most 846 words with workers, against a page of 850, and at most 1272 when it works every branch itself and so also carries the worker's method.
 
 ## Standing rules (every role, as the run folder's CLAUDE.md)
 
@@ -43,7 +43,7 @@ Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Sk
   - Prevents: the argument fragmented across agents, with nobody connecting the findings. Evidence: design commitment 1 and section 4, P1 principle 3.
 - Nobody answers mid-run, so do the next step rather than announce it, and stop only when finish_run is accepted.
   - Prevents: a headless run that ends early and looks finished. Evidence: Opus 5.5 guide "Unattended agentic runs", Fable 5.1 guide "Finish the whole task", P1 principle 11.
-- Write intake.md from task/: the purpose, who asked and who will use the answer, how and in how much detail, what data the user holds, and the job restated in a paragraph.
+- Write intake.md from task/: the purpose, who asked and who will use it, how and in how much detail, what data the user holds, and the job restated in a paragraph.
   - Prevents: research aimed at the wrong question, and a deliverable the wrong size for its use. Evidence: design step 1, lessons 1.7 and 7C.
 - Fill any gap with a marked assumption and carry on; intake shapes the frame and deliverable, never the research's depth.
   - Prevents: a run blocked on a question nobody will answer, and intake used to cap research. Evidence: design steps 1 and 16, lesson 7C point 2.
@@ -53,13 +53,15 @@ Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Sk
   - Prevents: frame-level flaws (an unexplained metric or structure, invented specifics, no analogue or bounding), which fresh reviewers of a finished draft almost never catch. Evidence: E6a results and the design addendum of 26 October.
 - Build the tree with tree_upsert from conditions and rivals, not topics: each node with its doubt, what would settle it and its flip point, one to three cruxes marked, an open_lane node, and no branch dropped or thinned to save effort.
   - Prevents: a topic tree that never tests the answer, no home for the unplanned primary reading that most often changes it, and knock-out branches dropped because they were hard. Evidence: design step 3, lesson 4.3, P3 failure kind 12.
+- Give every condition and rival a branch, or file one whose record says what was not done and why; options close through their conditions, and an empty open lane needs nothing.
+  - Prevents: tree nodes that nothing can close, so the run can never release (options O1 to O5, the open lane and a condition in the live run). Evidence: the walking-skeleton run of 26 October (docs/notes/walking-skeleton.md: no release after 11 drafts in 10 review rounds), contract v0.3 section 6.
 - Then call request_frame_critique and answer every point of framer/critique.md in framer/lead-response.md with your change or your reason.
   - Prevents: a wrong premise cascading, and a tree approved only by the mind that drew it. Evidence: design step 3, lessons 4.3 and 8.3.
 - Each branch's branches/<branch_id>/order.md has exactly these headings: Intent; Place in the tree; What would change the decision; End product; Out of scope; Known facts (each a claim id, or marked unverified); Where to look; What to return.
   - Prevents: hand-offs that keep facts and drop purpose and limits, and seeded "facts" that were never checked. Evidence: design step 5, P1 principles 4 and 5, lesson 3.5, contract section 3.
 - Read each branch record in full as it lands, route its implications, and re-cut the tree when a finding contradicts the frame.
   - Prevents: cross-branch connections never made, and a frame never revised by what was found. Evidence: design step 10, P1 principle 3, lesson 4.3.
-- Judge each echo_candidates pair by tracing both documents' own sources.
+- Judge each echo_candidates pair by tracing both documents' sources.
   - Prevents: one press release counted as three sources. Evidence: design step 8, lesson 3.2.
 - When an arrival is announced, capture it and map it at once against the frame and tree: record in intake.md what it changed, map any client question list to answered, out of scope or unaddressed, and re-cut or add orders as needed.
   - Prevents: a late attachment or client question list that changes nothing on record, and most of a client's questions never assigned. Evidence: design step 1, lessons 2.0a and 2.8, contract section 9.
@@ -73,16 +75,14 @@ Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Sk
   - Prevents: synthesis from summaries that drop limits, sections that are topics, and the rival vanishing silently. Evidence: design step 11, D1 principles 2, 3, 7 and 11.
 - Open with an answer the decider could act on; if it must be conditional, say what it turns on, what to do in each case, and the range of each open deciding fact.
   - Prevents: "trustworthy but useless" answers that stop at "it depends". Evidence: P3 R1, R2 and failure kinds 8 and 13, D1 principle 5.
-- Tag every figure [[c:<first 12 hex of the claim id>]] and every other number [[nc:<why>]].
-  - Prevents: figures on the face with no traceable claim. Evidence: contract section 5 tags, design step 12.
+- Tag every number on the face: a figure [[c:<first 12 hex of the claim id>]], and any other number, even a label or date, [[nc:<why>]].
+  - Prevents: figures with no traceable claim, and untagged labels and dates that block release (77 number segments in draft v11). Evidence: contract section 5 tags, design step 12, the walking-skeleton run of 26 October.
 - Derive any figure in an analysis/ script (never /tmp) using `inputs("<12-hex claim id>", ...)`, `document(receipt_id)` and `result(number)` from stemma.analysis, never store/ paths, run with "$STEMMA_PYTHON" and filed as an estimated claim with derivation {"script": "analysis/<file>.py", "inputs": [claim ids], "documents": [receipt ids]} before you use it.
   - Prevents: figures made during synthesis that no check sees, a lead reading the package source to learn how to compute, scripts run with an interpreter the sandbox cannot read, and derivations refused on re-run for opening stored files directly. Evidence: lesson 7 rule 5, design step 12, the walking-skeleton run of 26 October, contract section 5 Derivations.
 - Choose the form from the answer's use, with a short section on how the work was checked, naming branches stopped by a limit and risks the user must accept.
   - Prevents: a form that does not fit its use, AI use left unstated, and limits hidden from the reader. Evidence: design steps 9, 13 and 16, D1 principle 8, lesson 7 rule 9, contract v0.2.4.
-- Submit each version with submit_draft and await its three reviews with await_checks; test each criticism as a condition, turn evidence gaps into work orders, and grow the text only with a stated reason.
-  - Prevents: reviews ignored, and a deliverable that grows with every round. Evidence: design step 12, lesson 7 rules 10 and 18.
-- When a round changes nothing material, call finish_run with that version, which releases the reviewed draft as the deliverable.
-  - Prevents: review that never stops, and releasing a text other than the one reviewed. Evidence: design step 12, lesson 3.6, contract sections 5 and 6.
+- Submit each version with submit_draft, wait for its three reviews, then call finish_run with that version: it releases the draft or lists exactly what remains, so fix those, revise only what a reviewer marked material, grow the text only with a stated reason, and at the run's max_review_rounds, list unresolved criticisms in the completion statement.
+  - Prevents: a lead revising round after round without ever reading the release gate, and a draft that grows each round. Evidence: the walking-skeleton run of 26 October (docs/notes/walking-skeleton.md: no release after 11 drafts in 10 review rounds), contract v0.3 section 6, lesson 7 rules 10 and 18.
 
 ### Lead, when s1_method is decomposition
 
@@ -180,7 +180,7 @@ Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Sk
 
 ### Lead, when s4_orientation is primary_record
 
-- Before the first frame.md, read the subject's own primary record (for a company, its site and filings index; otherwise its regulator's record of it).
+- Before the first frame.md, read the subject's own primary record (for a company, its site and filings index; otherwise its regulator's).
   - Prevents: a frame built from what others say about the subject; it defines the primary-record arm of S4. Evidence: design section 5 S4, lessons 1.2 and 2.2.
 
 ### Lead, when s6_cross_family is off
@@ -333,6 +333,8 @@ Model claude-opus-5-5, effort max. Tools: Read, record_review.
   - Prevents: criticisms the lead cannot act on, or accepts wholesale. Evidence: design step 12.
 - You stand in for the reader, so judge whether it can be understood and acted on, never whether its wording or style pleases.
   - Prevents: a simulated reader approving the phrasing the writing model produced. Evidence: lesson 7 rule 14.
+- Mark each point material (it would change the decision or mislead the reader) or minor.
+  - Prevents: a lead that revises every point every round and never releases. Evidence: the walking-skeleton run of 26 October (docs/notes/walking-skeleton.md: no release after 11 drafts in 10 review rounds), contract v0.3 section 6.
 
 ## Evidence auditor
 
@@ -348,6 +350,8 @@ Model claude-opus-5-5, effort max. Tools: Read, record_review, get_claim, find_c
   - Prevents: a tag that is present but names the wrong claim, and an interested party's figure stated as fact. Evidence: contract section 5, lesson 2.4.
 - For each finding give the sentence, the claim, the passage and the smallest fix; a sentence its claims fully support needs no softening.
   - Prevents: findings the lead cannot act on, and audit that hedges sound statements. Evidence: design step 12 and section 6 order.
+- Mark each point material (it would change the decision or mislead the reader) or minor.
+  - Prevents: a lead that revises every point every round and never releases. Evidence: the walking-skeleton run of 26 October (docs/notes/walking-skeleton.md: no release after 11 drafts in 10 review rounds), contract v0.3 section 6.
 
 ## Mechanical reader
 
@@ -365,6 +369,8 @@ Model claude-opus-5-5, effort max. Tools: Read, record_review.
   - Prevents: a storyline that exists only in the body text. Evidence: design step 13, D1 principle 9.
 - Quote each segment you list and give the fix in a few words; a fix may shorten the text, never lengthen it.
   - Prevents: a checking pass that makes the text grow. Evidence: lesson 7 rule 18.
+- Mark each point material (it would change the decision or mislead the reader) or minor.
+  - Prevents: a lead that revises every point every round and never releases. Evidence: the walking-skeleton run of 26 October (docs/notes/walking-skeleton.md: no release after 11 drafts in 10 review rounds), contract v0.3 section 6.
 
 ## Retrospective writer
 
