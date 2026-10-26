@@ -1,4 +1,4 @@
-# Contracts between the parts (v0.2.5)
+# Contracts between the parts (v0.2.6)
 
 These are the interfaces the parts agree on, so they can be built in parallel. The
 design (`DESIGN-v1.md`, cited as "step n") says what the system does; this file says
@@ -138,7 +138,16 @@ Unicode code points in the stored text.
   `sha256`, `receipt_id`, offsets, a short snippet (FTS5: porter for words, trigram
   for exact strings such as figures).
 - `check_quote(receipt_id, quote)` → found or not, with offsets; exact match after a
-  documented normalisation of whitespace and quotation marks. B's register calls the
+  documented normalisation of whitespace and quotation marks, never matching from or
+  to the middle of a number. It also reports whether the match lies in a region the
+  extractor marked as not visible to a reader (hidden HTML, invisible or white PDF
+  text) or in a table the converter may have misaligned (merged cells): a warning for
+  the checker, never a refusal.
+- **The extractor never deletes or joins.** Hidden and invisible text stays in the
+  stored text, its ranges recorded on the receipt; elements whose text would run
+  together (superscripts, subscripts, adjacent blocks) are separated so no two
+  figures fuse into one.
+- B's register calls the
   same function through `stemma.evidence.api.check_quote(run_dir, receipt_id, quote)`;
   `stemma.evidence.api.read_text(run_dir, receipt_id)` returns the stored text.
 - `tables(sha256)` → Docling's table view, a derived view never used for quoting
@@ -244,9 +253,11 @@ Each guard has a producer in the live path, or it would block every run.
 - **Bash runs sandboxed** with no network and no write access to tool-only paths
   (`store/`, `register/`, `tree.json`, `verdicts/`, `events.jsonl`, `run.json`, and
   `$STEMMA_CACHE`, whose entries a later run would be served, and the run folder's
-  `CLAUDE.md`, `.claude/` and `.stemma/`),
-  verified, including refusal of a request to run unsandboxed. Write and Edit to those paths are denied by permission rules. The MCP
-  server runs outside the sandbox. WebFetch is denied.
+  `CLAUDE.md`, `.claude/`, `.stemma/` and `task/`), verified, including refusal of a
+  request to run unsandboxed. Write and Edit to those paths are denied by permission
+  rules. The MCP server runs outside the sandbox, so **every host write is
+  path-contained and follows no symlink** (each component opened without following
+  links; temporary files inside a tool-only folder; atomic rename). WebFetch is denied.
 - **Subagents:** forks denied (`Agent(fork)`, verified); built-in agent types
   (general-purpose, Explore, Plan and any other) denied, so only plugin roles start;
   only approved models allowed (`availableModels`: Opus 5.5, Fable 5.1); model and
