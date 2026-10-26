@@ -109,7 +109,16 @@ class EvidenceService:
         assert checked is not None
         return checked
 
+    def _require_sec_identity(self) -> None:
+        """SEC tools never run without the configured identity; there is no default."""
+        if not self.sec_identity or "@" not in self.sec_identity:
+            raise EvidenceError(
+                "sec_identity_not_configured",
+                "SEC requires a contact identity; STEMMA_SEC_IDENTITY is not set",
+            )
+
     def _sec(self) -> SecBackend:
+        self._require_sec_identity()
         if self._sec_backend is None:
             # edgartools keeps its own lookup cache; keep it out of the home folder.
             base = self.cache.root if self.cache is not None else self.store.derived_dir
@@ -243,6 +252,8 @@ class EvidenceService:
             "content_encoding": fetched.content_encoding,
             "wire_sha256": fetched.wire_sha256,
             "limits": fetched.limits_record(),
+            # Whether SEC's required contact header went out; its value is never recorded.
+            "sec_identity_header_sent": fetched.sec_identity_sent,
         }
 
     # Fetch with the request cache ---------------------------------------------------
@@ -473,6 +484,7 @@ class EvidenceService:
         check_accession(accession)
         if document is not None:
             check_document(document)
+        self._require_sec_identity()
         ref = self._filing_ref(accession)
         receipt = self._base_receipt("sec", reason)
         receipt["sec"] = dict(ref.as_dict(), document=document or ref.primary_document)

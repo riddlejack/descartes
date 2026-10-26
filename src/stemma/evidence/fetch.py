@@ -58,6 +58,7 @@ class FetchResult:
     detail: str | None = None
     bytes_read: int = 0
     elapsed_s: float = 0.0
+    sec_identity_sent: bool = False
 
     def header(self, name: str) -> str | None:
         wanted = name.lower()
@@ -173,9 +174,12 @@ class Fetcher:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return fail(CaptureStatus.TIMEOUT, "total deadline reached before request")
+            headers = self._headers(url)
+            if self.sec_user_agent and headers["User-Agent"] == self.sec_user_agent:
+                result.sec_identity_sent = True
             try:
                 resp = self.transport.request(
-                    url, address, self._headers(url), min(limits.READ_TIMEOUT_S, remaining)
+                    url, address, headers, min(limits.READ_TIMEOUT_S, remaining)
                 )
             except TransportFailure as exc:
                 status = CaptureStatus.TIMEOUT if exc.code == "timeout" else (

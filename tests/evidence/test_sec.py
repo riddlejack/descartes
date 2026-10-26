@@ -165,8 +165,25 @@ def test_sec_bad_concept_and_company(sec_svc: tuple[EvidenceService, FakeTranspo
     assert info.value.code == "sec_company_not_found"
 
 
-def test_sec_needs_identity(make_service: Factory) -> None:
-    svc = make_service(FakeTransport(), sec_identity=None)
-    with pytest.raises(EvidenceError) as info:
-        svc.sec_filings("INVT")
-    assert info.value.code == "sec_identity_missing"
+def test_sec_needs_identity_and_never_falls_back(make_service: Factory, run_dir: Path) -> None:
+    t = FakeTransport(routes())
+    svc = make_service(t, sec_identity=None, sec_backend=FakeSec(FILINGS))
+    calls = (lambda: svc.sec_filings("INVT"),
+             lambda: svc.sec_capture("0000999999-24-000010"),
+             lambda: svc.sec_facts("INVT", "Revenues"))
+    for call in calls:
+        with pytest.raises(EvidenceError) as info:
+            call()
+        assert info.value.code == "sec_identity_not_configured"
+    assert t.calls == []  # nothing reached SEC under a default identity
+
+
+def test_receipt_records_identity_sent_not_value(
+        sec_svc: tuple[EvidenceService, FakeTransport], run_dir: Path) -> None:
+    svc, _ = sec_svc
+    svc.sec_filings("INVT")
+    r = svc.sec_capture("0000999999-24-000010")
+    assert r["http"]["sec_identity_header_sent"] is True
+    for path in (run_dir / "store").rglob("*"):
+        if path.is_file():
+            assert b"test@example.org" not in path.read_bytes(), path

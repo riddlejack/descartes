@@ -144,17 +144,27 @@ receipt of the filing's primary document, captured for the newest 12 distinct
 filings (a resource limit); facts from older filings get `null` and a warning
 saying to call `sec_capture`. Unit tests use an invented company whose fiscal-2022
 revenue is restated in the next filing. `STEMMA_SEC_IDENTITY` ("Name email") is
-required; without it the SEC tools fail `sec_identity_missing`. edgartools' own
+required; without it the SEC tools fail `sec_identity_not_configured`. edgartools' own
 lookup cache goes under `$STEMMA_CACHE/edgartools` (or the run's
 `store/derived/`), never the home folder.
 
-**Not yet shown live.** SEC requires a contact email in every request's User-Agent.
-I asked the orchestrator whether the live test may use the identity B1 records as
-owner-approved, passed only through `STEMMA_SEC_IDENTITY`; no answer yet, so
-`test_live_sec_filing_and_facts` has not run. The edgartools calls in
-`EdgarToolsBackend` were checked against the library's source, not against SEC.
-To run it: `STEMMA_LIVE=1 STEMMA_SEC_IDENTITY="<name> <email>" pytest -m live
-tests/evidence/test_live.py -k sec`.
+**Shown live once (26 October 2026)** with the owner-approved SEC contact
+identity, passed only through `STEMMA_SEC_IDENTITY` at run time (the orchestrator
+relayed the owner's ruling). The value is never committed or written to any file:
+receipts record only `sec_identity_header_sent: true`, and a search of the repo,
+its history, the live outputs and the run folder (edgartools' cache included)
+found it nowhere. With the variable unset, every SEC tool fails
+`sec_identity_not_configured` before any request; there is no default (tested).
+Results, in 6.5 s: `sec_filings("AAPL", form="10-K", filed_before="2025-01-01")`
+listed 31 filings, newest filed 1 November 2024; `sec_capture` stored its primary
+document (1,503,889 bytes, 269,262 characters, `ok`, 0.34 s);
+`sec_facts(..., "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+filed_before="2025-01-01", form="10-K")` returned 34 as-filed facts from 6
+filings, every one with its filing's receipt; 10 periods appear in more than one
+filing, each version kept as its own row. Gap: a 10-K's HTML has no heading tags,
+so its outline is empty; reading by offset and searching work, but there are no
+"Item 7" anchors. An outline built from SEC's Item headings would be a small
+addition.
 
 ## Docling table view (optional extra `evidence-tables`)
 `tables(sha256)` converts the stored bytes with Docling once, keeps the result in
@@ -219,7 +229,8 @@ and its separate DNS lookup remains a known gap.
 - Optional extras: I added `evidence-render` (Playwright) and `evidence-tables`
   (Docling) groups beside `evidence` in `pyproject.toml`, since the brief calls
   both optional. Playwright also needs `playwright install chromium-headless-shell`.
-- `.env.example` should gain `STEMMA_SEC_IDENTITY=` (I do not own that file).
+- `.env.example` should gain the name `STEMMA_SEC_IDENTITY=` with no value (I do not own
+  that file).
 - `$STEMMA_CACHE` must be tool-only (no Bash write, no Write or Edit), like
   `store/`. Section 6 does not list it today.
 - In `as_of` runs, part B may want to deny agents' Read of `store/bytes/` (raw

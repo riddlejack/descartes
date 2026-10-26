@@ -115,7 +115,7 @@ class EdgarToolsBackend:
     def __init__(self, identity: str, data_dir: Path) -> None:
         if not identity or "@" not in identity:
             raise EvidenceError(
-                "sec_identity_missing",
+                "sec_identity_not_configured",
                 "SEC requires a contact identity; set STEMMA_SEC_IDENTITY",
             )
         data_dir.mkdir(parents=True, exist_ok=True)
