@@ -5,8 +5,7 @@ model: claude-opus-5-5
 effort: high
 tools:
   - Read
-  - Grep
-  - Glob
+  - Bash
   - Write
 ---
 

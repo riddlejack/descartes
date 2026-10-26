@@ -32,6 +32,7 @@ def rm(tmp_path: Path) -> Iterator[ModuleType]:
     (tmp_path / "tools/roles").mkdir(parents=True)
     shutil.copy(REPO / "tools/roles/skill-evidence.md", tmp_path / "tools/roles")
     shutil.copy(REPO / "tools/roles/rolemap.py", tmp_path / "tools/roles")
+    shutil.copytree(REPO / "tools/roles/shared", tmp_path / "tools/roles/shared")
     (tmp_path / "docs").mkdir()
     shutil.copy(REPO / "docs/ROLE-MAP.md", tmp_path / "docs")
     module.set_root(tmp_path)
@@ -218,3 +219,49 @@ def test_retool_rewrites_every_name_and_the_constant(rm: ModuleType) -> None:
 def test_retool_refuses_a_malformed_prefix(rm: ModuleType) -> None:
     with pytest.raises(rm.RoleFileError, match="not an MCP tool prefix"):
         rm.retool("plugin_stemma")
+
+
+def test_grep_and_glob_are_not_tools(rm: ModuleType) -> None:
+    edit(rm.AGENTS_DIR / "branch-reviewer.md", "  - Read\n", "  - Read\n  - Grep\n")
+    assert "Grep is not an allowed harness tool" in errors_of(rm)
+
+
+def test_missing_toolsearch_line_fails(rm: ModuleType) -> None:
+    edit(rm.AGENTS_DIR / "claim-checker.md", rm.DEFERRED_TOOLS_LINE + "\n", "")
+    assert "needs the ToolSearch line exactly once" in errors_of(rm)
+
+
+def test_toolsearch_line_without_stemma_tools_fails(rm: ModuleType) -> None:
+    reviewer = rm.AGENTS_DIR / "mechanical-reader.md"
+    reviewer.write_text(reviewer.read_text() + rm.DEFERRED_TOOLS_LINE + "\n")
+    assert "does not need" in errors_of(rm)
+
+
+def test_shared_block_edited_in_one_role_fails(rm: ModuleType) -> None:
+    edit(rm.AGENTS_DIR / "worker.md", "primary first:", "primary or secondary first:")
+    assert "differs from its source" in errors_of(rm)
+
+
+def test_sync_restores_shared_blocks(rm: ModuleType) -> None:
+    edit(rm.AGENTS_DIR / "worker.md", "primary first:", "primary or secondary first:")
+    assert rm.AGENTS_DIR / "worker.md" in rm.sync()
+    assert rm.check_all() == []
+
+
+def test_single_loop_lead_carries_the_worker_method(rm: ModuleType) -> None:
+    choice = {
+        "s1_method": "none",
+        "s2_shape": "single_loop",
+        "s3_hypothesis_in_briefs": "false",
+        "s4_orientation": "frame_first",
+        "s6_cross_family": "off",
+    }
+    shared = (rm.SHARED_DIR / "branch-work.md").read_text()
+    assert shared in rm.assemble_lead(choice)
+
+
+def test_undefer_removes_every_toolsearch_line(rm: ModuleType) -> None:
+    rm.undefer()
+    for path in rm.role_texts():
+        assert rm.DEFERRED_TOOLS_LINE not in path.read_text()
+    assert "MCP_TOOLS_DEFERRED = False" in (rm.ROOT / "tools/roles/rolemap.py").read_text()

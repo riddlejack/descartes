@@ -6,7 +6,6 @@ effort: max
 tools:
   - Read
   - Write
-  - Glob
 ---
 
 # Decider's-eye reviewer

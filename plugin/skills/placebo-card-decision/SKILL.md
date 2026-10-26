@@ -19,4 +19,4 @@ For a long time the cello mainly played the bass line in church and chamber musi
 
 Luigi Boccherini, himself a cellist, wrote many concertos and sonatas for it. Later composers, from Dvořák to Elgar, wrote concertos that made it a favourite solo instrument.
 
-In the orchestra the cellos sit near the front, often at the conductor's right, and carry many of the long, singing tunes. A full section may number eight to twelve players, and the principal cellist plays the solos that composers write into symphonies and ballets. Cellos also appear widely outside classical music, in folk, rock and film scores.
+In the orchestra the cellos sit near the front, often at the conductor's right, and carry many of the long, singing tunes. A full section may number eight to twelve players, and the principal cellist plays the solos that composers write into symphonies and ballets. Cellos also appear widely outside classical music, in folk, rock and jazz groups and in film scores.

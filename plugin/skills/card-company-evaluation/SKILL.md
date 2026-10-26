@@ -1,6 +1,6 @@
 ---
 name: card-company-evaluation
-description: Question-type card for evaluating a company, for example finding insights for a pitch that show analytical value (not valuing the company). Load it when the question is about one company's position, prospects or a deal involving it.
+description: Question-type card for evaluating a company, including for a pitch. Load it when the question is about one company: its position, its prospects, or a deal involving it.
 ---
 
 # Card: evaluating a company
@@ -24,5 +24,5 @@ Record which lenses you ran, which returned something, and which you skipped and
 ## Before concluding
 
 Tier the company's description of itself as interested_party until a count or a primary source confirms it.
-Separate what you measured from what you suspect, and frame suspicions as questions the company's own data would answer.
+State an inference as a finding with its basis and confidence, separate from what was measured, and make it a question only where the evidence in hand cannot carry it.
 When the client's own questions are known, map each to answered, out of scope by agreement, or unaddressed.

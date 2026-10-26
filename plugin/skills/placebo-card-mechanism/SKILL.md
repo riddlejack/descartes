@@ -1,6 +1,6 @@
 ---
 name: card-mechanism
-description: Question-type card for a question about how something works or what a change would do, such as the effect of a price change. Load it when the answer turns on a mechanism that can be modelled with data.
+description: Question-type card for a question about how something works or what a change would do, such as the effect of a price change. Load it when the answer turns on how something works.
 ---
 
 # Card: rosin
@@ -15,4 +15,4 @@ Rosin comes from the resin of pine and other conifers, heated to drive off its l
 
 A new bow or a freshly rehaired one needs a good deal of rosin before it will sound at all. As the player bows, fine white dust gathers on the strings and on the top of the instrument and is wiped away after playing. Some makers add metals such as gold, silver or copper to their rosins, and players differ over whether the result can be heard.
 
-Rosin softens in heat and hardens in cold, so many players change brands with the seasons or when they travel. A cake that is dropped often shatters, and players keep the pieces or melt them down. Bow hair that carries too much rosin sounds scratchy, while hair with too little slides over the string and barely speaks. Cellists and violists often use the same kinds as violinists, though some prefer a slightly softer cake.
+Rosin softens in heat and hardens in cold, so many players change brands with the seasons or when they travel. Bow hair that carries too much rosin sounds scratchy, while hair with too little slides over the string and barely speaks.

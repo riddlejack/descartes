@@ -1,6 +1,6 @@
 ---
 name: card-company-evaluation
-description: Question-type card for evaluating a company, for example finding insights for a pitch that show analytical value (not valuing the company). Load it when the question is about one company's position, prospects or a deal involving it.
+description: Question-type card for evaluating a company, including for a pitch. Load it when the question is about one company: its position, its prospects, or a deal involving it.
 ---
 
 # Card: the viola
@@ -21,4 +21,4 @@ The nineteenth century gave the viola a few solo roles, among them Berlioz's Har
 
 ## In the orchestra
 
-In a modern symphony orchestra the violas usually sit between the second violins and the cellos, or on the outside to the conductor's right. A full orchestra may carry ten or twelve of them. Their part often doubles the cellos an octave higher or fills in the middle of the chords, and their darker tone blends easily with horns and clarinets. Composers from Brahms onward gave the section melodies of its own.
+In a modern symphony orchestra the violas usually sit between the second violins and the cellos, or on the outside to the conductor's right. A full orchestra may carry ten or twelve of them. Their part often doubles the cellos an octave higher or fills in the middle of the chords, and their darker tone blends easily with horns and clarinets. Composers from Brahms onward gave the section long melodies of its own, and some wrote solo passages for the principal violist.

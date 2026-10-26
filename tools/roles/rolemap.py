@@ -12,6 +12,8 @@ Usage (from the repository root):
   python tools/roles/rolemap.py map              write docs/ROLE-MAP.md
   python tools/roles/rolemap.py map --check      exit 1 if docs/ROLE-MAP.md is stale
   python tools/roles/rolemap.py retool PREFIX    rewrite the MCP tool prefix everywhere
+  python tools/roles/rolemap.py sync             copy each shared block into its roles
+  python tools/roles/rolemap.py undefer          drop the ToolSearch line from every role
   python tools/roles/rolemap.py assemble KEY=VALUE ...   print one assembled lead text
 """
 
@@ -31,12 +33,13 @@ SKILLS_DIR = PLUGIN / "skills"
 STANDING_RULES = PLUGIN / "STANDING-RULES.md"
 SKILL_EVIDENCE = ROOT / "tools" / "roles" / "skill-evidence.md"
 ROLE_MAP = ROOT / "docs" / "ROLE-MAP.md"
+SHARED_DIR = ROOT / "tools" / "roles" / "shared"
 
 
 def set_root(root: Path) -> None:
     """Point every path at another copy of the repository (used by the tests)."""
     global ROOT, PLUGIN, AGENTS_DIR, LEAD_DIR, SKILLS_DIR, STANDING_RULES
-    global SKILL_EVIDENCE, ROLE_MAP
+    global SKILL_EVIDENCE, ROLE_MAP, SHARED_DIR
     ROOT = root
     PLUGIN = root / "plugin"
     AGENTS_DIR = PLUGIN / "agents"
@@ -45,6 +48,7 @@ def set_root(root: Path) -> None:
     STANDING_RULES = PLUGIN / "STANDING-RULES.md"
     SKILL_EVIDENCE = root / "tools" / "roles" / "skill-evidence.md"
     ROLE_MAP = root / "docs" / "ROLE-MAP.md"
+    SHARED_DIR = root / "tools" / "roles" / "shared"
 
 
 # Logical invariant: the namespace the `stemma` MCP server's tools appear under
@@ -82,9 +86,21 @@ CONTRACT_TOOLS = frozenset(
     }
 )
 
-# Logical invariant: the harness tools a role may list (WebFetch is denied, contract 4).
+# Logical invariant: the harness tools a role may list. WebFetch is denied (contract
+# 4); Grep and Glob are not tools in the pinned 2.1.308 (contract 6).
 HARNESS_TOOLS = frozenset(
-    {"Read", "Write", "Edit", "Grep", "Glob", "Bash", "WebSearch", "Skill", "Agent"}
+    {"Read", "Write", "Edit", "Bash", "WebSearch", "Skill", "Agent", "ToolSearch"}
+)
+
+# Logical invariant: MCP tools load deferred in 2.1.308 (contract 2, item 4), so every
+# role with stemma tools carries this one line, identical everywhere. If part B finds
+# a setting that loads them at start, `undefer` removes the line and sets this False.
+MCP_TOOLS_DEFERRED = True
+DEFERRED_TOOLS_LINE = (
+    "Your stemma tools load on demand: before you first use any, load the ones you need "
+    "with ToolSearch, query select: followed by their full names joined by commas. "
+    "<!-- prevents: a call to a stemma tool failing because its schema has not loaded; "
+    "evidence: contract section 2 item 4, builder B's probe runs on 2.1.308 -->"
 )
 
 # Logical invariant: approved models (contract section 6, `availableModels`).
@@ -154,6 +170,7 @@ COMMENT = re.compile(
     r"^(?P<text>.+?)\s*<!--\s*prevents:\s*(?P<prevents>.+);\s*evidence:\s*"
     r"(?P<evidence>.+?)\s*-->\s*$"
 )
+SHARED_MARK = re.compile(r"^<!-- (?:shared: (?P<name>[a-z-]+)|end shared) -->$")
 SENTENCE_BREAK = re.compile(r"[.!?][\"”')\]]*\s+(?=[A-Z])")
 MCP_NAME = re.compile(r"mcp__[A-Za-z0-9_]+")
 
@@ -223,6 +240,8 @@ def parse_commented(path: Path, text: str) -> Doc:
         if line.startswith("#"):
             doc.headings.append(line.lstrip("#").strip())
             continue
+        if SHARED_MARK.match(line):
+            continue
         match = COMMENT.match(line)
         if match is None:
             raise RoleFileError(
@@ -264,11 +283,72 @@ def all_lead_choices() -> list[dict[str, str]]:
     return [dict(zip(names, combo)) for combo in itertools.product(*(v for _, v in SWITCHES))]
 
 
-def max_lead_words() -> int:
+def max_lead_words(shape: str) -> int:
     return max(
         words(parse_commented(LEAD_DIR / "base.md", assemble_lead(choice)))
         for choice in all_lead_choices()
+        if choice["s2_shape"] == shape
     )
+
+
+def lead_page_limit(choice: dict[str, str]) -> int:
+    """A page, plus the worker's shared branch method when the lead works every branch."""
+    if choice["s2_shape"] != "single_loop":
+        return PAGE_WORDS
+    shared = SHARED_DIR / "branch-work.md"
+    return PAGE_WORDS + words(parse_commented(shared, shared.read_text()))
+
+
+def shared_blocks(text: str) -> list[tuple[str, str]]:
+    """Each (name, content) between a `shared: name` marker and its `end shared`."""
+    blocks: list[tuple[str, str]] = []
+    lines: list[str] = []
+    name = ""
+    for raw in text.splitlines(keepends=True):
+        mark = SHARED_MARK.match(raw.strip())
+        if mark and mark["name"]:
+            name, lines = mark["name"], []
+        elif mark:
+            blocks.append((name, "".join(lines)))
+            name = ""
+        elif name:
+            lines.append(raw)
+    return blocks
+
+
+def role_texts() -> list[Path]:
+    return [*sorted(AGENTS_DIR.glob("*.md")), *sorted(LEAD_DIR.glob("*.md"))]
+
+
+def check_shared(errors: list[str]) -> None:
+    sources = {p.stem: p for p in SHARED_DIR.glob("*.md")} if SHARED_DIR.exists() else {}
+    used: set[str] = set()
+    for name, source in sources.items():
+        load_role(source, errors)
+    for path in role_texts():
+        for name, content in shared_blocks(path.read_text()):
+            used.add(name)
+            if name not in sources:
+                errors.append(f"{rel(path)}: shared block {name!r} has no source")
+            elif content != sources[name].read_text():
+                errors.append(
+                    f"{rel(path)}: shared block {name!r} differs from its source; run sync"
+                )
+    for name in sorted(set(sources) - used):
+        errors.append(f"{rel(sources[name])}: shared block used by no role")
+
+
+def check_deferred(doc: Doc, errors: list[str]) -> None:
+    tools = doc.meta.get("tools", [])
+    has_mcp = isinstance(tools, list) and any(t.startswith("mcp__") for t in tools)
+    count = doc.body.count(DEFERRED_TOOLS_LINE)
+    if has_mcp and MCP_TOOLS_DEFERRED:
+        if count != 1:
+            errors.append(f"{rel(doc.path)}: needs the ToolSearch line exactly once")
+        if isinstance(tools, list) and "ToolSearch" not in tools:
+            errors.append(f"{rel(doc.path)}: lists stemma tools but not ToolSearch")
+    elif count:
+        errors.append(f"{rel(doc.path)}: carries the ToolSearch line it does not need")
 
 
 def check_role_meta(doc: Doc, expected_name: str, errors: list[str]) -> None:
@@ -317,6 +397,7 @@ def check_roles(errors: list[str]) -> None:
         if doc is None:
             continue
         check_role_meta(doc, role, errors)
+        check_deferred(doc, errors)
         if words(doc) > PAGE_WORDS:
             errors.append(f"{rel(doc.path)}: {words(doc)} words, over a page ({PAGE_WORDS})")
     rules = load_role(STANDING_RULES, errors)
@@ -328,6 +409,7 @@ def check_lead(errors: list[str]) -> None:
     base = load_role(LEAD_DIR / "base.md", errors)
     if base is not None:
         check_role_meta(base, "lead", errors)
+        check_deferred(base, errors)
     expected = {"base.md"} | {f"{s}.{v}.md" for s, vs in SWITCHES for v in vs}
     present = {p.name for p in LEAD_DIR.iterdir() if p.is_file()}
     for name in sorted(expected - present):
@@ -350,16 +432,18 @@ def check_lead(errors: list[str]) -> None:
         errors.append("plugin/lead: the decomposition and placebo S1 fragments differ")
     if base is None:
         return
-    worst = 0
     for choice in all_lead_choices():
         try:
             doc = parse_commented(LEAD_DIR / "base.md", assemble_lead(choice))
         except RoleFileError as error:
             errors.append(f"assembled lead {choice}: {error}")
             continue
-        worst = max(worst, words(doc))
-    if worst > PAGE_WORDS:
-        errors.append(f"assembled lead: up to {worst} words, over a page ({PAGE_WORDS})")
+        if words(doc) > lead_page_limit(choice):
+            errors.append(
+                f"assembled lead {choice}: {words(doc)} words, over its limit "
+                f"({lead_page_limit(choice)})"
+            )
+            return
 
 
 def skill_body(path: Path) -> tuple[dict[str, str | list[str]], str]:
@@ -482,6 +566,7 @@ def check_all() -> list[str]:
     check_roles(errors)
     check_lead(errors)
     check_skills(errors)
+    check_shared(errors)
     return errors
 
 
@@ -536,8 +621,9 @@ def build_map() -> str:
     out += [
         "",
         "Every role also reads the four standing rules. The lead's text is base.md plus",
-        f"one fragment per switch; the worst case is {max_lead_words()} words "
-        + f"against a page of {PAGE_WORDS}.",
+        f"one fragment per switch: at most {max_lead_words('team')} words with workers, "
+        + f"against a page of {PAGE_WORDS}, and at most {max_lead_words('single_loop')} "
+        + "when it works every branch itself and so also carries the worker's method.",
         "",
         "## Standing rules (every role, as the run folder's CLAUDE.md)",
         "",
@@ -602,6 +688,47 @@ def retool(new_prefix: str) -> list[Path]:
     return changed
 
 
+def sync() -> list[Path]:
+    """Copy each shared source into every block that names it; return what changed."""
+    changed = []
+    for path in role_texts():
+        text = path.read_text()
+        out: list[str] = []
+        name = ""
+        for raw in text.splitlines(keepends=True):
+            mark = SHARED_MARK.match(raw.strip())
+            if mark and mark["name"]:
+                name = mark["name"]
+                out.append(raw)
+                out.append((SHARED_DIR / f"{name}.md").read_text())
+            elif mark:
+                name = ""
+                out.append(raw)
+            elif not name:
+                out.append(raw)
+        new = "".join(out)
+        if new != text:
+            path.write_text(new)
+            changed.append(path)
+    return changed
+
+
+def undefer() -> list[Path]:
+    """Remove the ToolSearch line from every role and record that tools load at start."""
+    changed = []
+    for path in role_texts():
+        text = path.read_text()
+        if DEFERRED_TOOLS_LINE in text:
+            path.write_text(text.replace(DEFERRED_TOOLS_LINE + "\n", ""))
+            changed.append(path)
+    module = ROOT / "tools/roles/rolemap.py"
+    if module.exists():
+        text = module.read_text()
+        module.write_text(text.replace("MCP_TOOLS_DEFERRED = True", "MCP_TOOLS_DEFERRED = False"))
+        changed.append(module)
+    return changed
+
+
 def main(argv: list[str]) -> int:
     if not argv:
         print(__doc__)
@@ -626,6 +753,10 @@ def main(argv: list[str]) -> int:
         return 0
     if command == "retool" and len(rest) == 1:
         for path in retool(rest[0]):
+            print(f"rewrote {rel(path)}")
+        return 0
+    if command in ("sync", "undefer") and not rest:
+        for path in sync() if command == "sync" else undefer():
             print(f"rewrote {rel(path)}")
         return 0
     if command == "assemble":

@@ -15,7 +15,7 @@ Ask what the decider is trying to achieve; if the options cannot be ranked, the 
 
 ## Where to look
 
-Go to the primary material about the thing being decided: for a site, its permits and the operator's own queues and tariffs; for a company, its record and its counterparties'; for a product, the people who would buy it.
+Go to the primary material about the thing being decided: for a physical asset, the records of whoever grants its permits and connections; for a company, its record and its counterparties'; for a product, the people who would buy it.
 Treat the materials of anyone selling the deal or the venture as advocacy, tiered interested_party, and look for what they leave out.
 
 ## Before concluding
