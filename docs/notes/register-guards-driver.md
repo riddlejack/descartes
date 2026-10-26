@@ -134,8 +134,23 @@ the detail. Harness facts below were each shown by a run (report and kit in
   install, the stemma package source); probes p14 to p16, live proof
   `tests/e2e/run_read_scope.py`. No extra-denials field was added.
 
+- **Last fix round (after a6929ff).** Bash reads are denied from the filesystem root
+  and re-opened only for the session's run, its own harness temp folder
+  (`.stemma-tmp/<session id>`, via `CLAUDE_CODE_TMPDIR`; another session's is denied to
+  Bash and Read), the shell's system folders and the interpreter's own folders and
+  links (p17 to p19). The derivation sandbox reads only its temp folder (holding a copy
+  of the script and its inputs), the interpreter and the system's start-up libraries,
+  each ancestor folder as a single entry; a mismatch never echoes the script's number.
+  Agent paths with `..` are refused; containment uses the fully resolved real path.
+  The driver marks a checking session verified at its end (no model or effort
+  mismatch, transcript found); only verified sessions' verdicts, frames and reviews
+  count toward the gate and `await_checks`; the release records the sessions it rests
+  on, and a later revocation of one withdraws it (`release_withdrawn`, exit 5). A
+  revocation that cannot be completed records a release block and ends the run
+  `revocation_failed` (exit 6), even if the register claims a release.
+
 ## How it was shown
-- 503 unit and hostile tests (`pytest tests`), no network; `ruff` and `mypy --strict`
+- 555 unit and hostile tests (`pytest tests`), no network; `ruff` and `mypy --strict`
   clean on `src/`.
 - Race tests: two processes filing claims at once (register), four writing the World
   Model log at once (engine), both barrier-synchronised.

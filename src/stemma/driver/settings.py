@@ -10,8 +10,10 @@ section 6). Absolute paths in permission rules take a leading extra slash
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -163,55 +165,81 @@ def _deciders_eye_denials(run_dir: Path, prompt: str) -> list[str]:
 
 def build_settings(run_dir: Path, role: str, prompt: str, tools: ToolSets,
                    claude_config: Path, *, cache_dir: Path | None = None,
-                   deny_agent: bool = False, scope: ReadScope | None = None) -> dict[str, Any]:
+                   deny_agent: bool = False, scope: ReadScope | None = None,
+                   session_id: str | None = None) -> dict[str, Any]:
     """The whole settings JSON of one session: the clean base plus Stemma's rules."""
     return merge_settings(stemma_settings_extra(run_dir, role, prompt, tools, claude_config,
                                                 cache_dir=cache_dir, deny_agent=deny_agent,
-                                                scope=scope))
+                                                scope=scope, session_id=session_id))
+
+
+# Where each session's harness temp files live (CLAUDE_CODE_TMPDIR, probe p19), one folder
+# per session id, so no session reads another's command output.
+SESSION_TMP: Final = ".stemma-tmp"
+# What a shell needs to run commands on macOS: system binaries, libraries and devices,
+# /etc through its symlink, and the harness's own per-command `cwd-*` files (p17 to p19).
+# Logical invariants of the platform, not tuning.
+SYSTEM_READS: Final = ("/bin", "/usr", "/System", "/dev", "/private/etc", "/etc",
+                       "/Library/Apple", "/tmp")
 
 
 @dataclass(frozen=True)
 class ReadScope:
-    """What a session's Bash may read outside its run (CONTRACTS section 6, v0.2.8).
-
-    `deny` are folders no session reads (the home folder, the runs folder, the
-    repository, the plugin source, the fetch cache); `allow` re-opens what the
-    interpreter needs (its venv and base install, the stemma package source). The run
-    folder itself is re-opened too. On 2.1.308 the most specific rule wins: an
-    `allowRead` re-opens a path inside a `denyRead`, and a `denyRead` inside an
-    `allowRead` still denies (probes p14, p16), so the blind roles' own denials hold."""
+    """What a session's Bash may read (CONTRACTS section 6, v0.2.8): deny by default from
+    the filesystem root, then re-open the session's run, its own harness temp folder, what
+    the shell needs and what the interpreter needs (its venv, base install, sys.path, and
+    every symlink on those paths). On 2.1.308 the most specific rule wins: an `allowRead`
+    re-opens a path inside a `denyRead`, and a `denyRead` inside an `allowRead` still
+    denies (probes p14, p16, p19), so the blind roles' own denials hold."""
 
     deny: tuple[str, ...]
     allow: tuple[str, ...]
 
 
-def read_scope(python: Path, runs_dir: Path, repo_dir: Path, plugin_src: Path,
-               cache_dir: Path | None) -> ReadScope:
-    home = Path(os.path.expanduser("~")).resolve()
-    deny = [home, runs_dir, repo_dir, plugin_src] + ([cache_dir] if cache_dir else [])
-    allow: list[Path] = []
-    py = Path(os.path.abspath(python))
-    venv = py.parent.parent
-    cfg = venv / "pyvenv.cfg"
-    if cfg.is_file():
-        allow.append(venv)
-        for line in cfg.read_text(encoding="utf-8").splitlines():
-            key, _, value = line.partition("=")
-            if key.strip() == "home" and value.strip():
-                allow.append(Path(value.strip()).resolve().parent)  # the base install
-    else:
-        allow.append(py.resolve().parent.parent)
-    import stemma  # where the stemma package's source lives (editable or installed)
-    allow.append(Path(stemma.__file__).resolve().parent.parent)
-    def norm(ps: list[Path]) -> tuple[str, ...]:
-        return tuple(dict.fromkeys(str(Path(os.path.realpath(p))) for p in ps))
-    return ReadScope(norm(deny), norm(allow))
+def _links_on(paths: list[str]) -> list[str]:
+    out: list[str] = []
+    for p in paths:
+        cur = Path("/")
+        for part in Path(p).parts[1:]:
+            cur = cur / part
+            if cur.is_symlink() and str(cur) not in out:
+                out.append(str(cur))
+    return out
+
+
+def interpreter_reads(python: Path) -> list[str]:
+    """The interpreter's own folders, asked of the interpreter itself."""
+    code = ("import os, sys, json\nps = [sys.prefix, sys.base_prefix] + "
+            "[p for p in sys.path if p and os.path.exists(p)]\n"
+            "x = os.path.abspath(sys.executable)\n"
+            "while os.path.islink(x):\n"
+            "    t = os.readlink(x)\n"
+            "    x = t if os.path.isabs(t) else os.path.normpath("
+            "os.path.join(os.path.dirname(x), t))\n"
+            "    ps.append(os.path.dirname(x))\nprint(json.dumps(ps))")
+    out = subprocess.run([str(python), "-I", "-c", code], capture_output=True, text=True,
+                         timeout=60, check=True,  # resource limit: seconds to ask it
+                         env={"PATH": "/usr/bin:/bin"}).stdout
+    paths: list[str] = []
+    for p in json.loads(out):
+        for q in (os.path.abspath(p), os.path.realpath(p)):
+            if q not in paths:
+                paths.append(q)
+    return paths
+
+
+def read_scope(python: Path) -> ReadScope:
+    interp = interpreter_reads(python)
+    cwd_files = f"/private/tmp/claude-{os.getuid()}/cwd-*"  # the harness's per-command file
+    allow = [*SYSTEM_READS, cwd_files, *interp]
+    allow += _links_on([a for a in allow if "*" not in a])
+    return ReadScope(("/",), tuple(dict.fromkeys(allow)))
 
 
 def stemma_settings_extra(run_dir: Path, role: str, prompt: str, tools: ToolSets,
                           claude_config: Path, *, cache_dir: Path | None = None,
-                          deny_agent: bool = False,
-                          scope: ReadScope | None = None) -> dict[str, Any]:
+                          deny_agent: bool = False, scope: ReadScope | None = None,
+                          session_id: str | None = None) -> dict[str, Any]:
     """Stemma's rules on top of the clean base: permissions and the sandbox.
     `run_dir` must be the resolved real path. `deny_agent` denies the Agent tool outright
     (the lead under s2 single_loop)."""
@@ -246,11 +274,15 @@ def stemma_settings_extra(run_dir: Path, role: str, prompt: str, tools: ToolSets
         filesystem["denyRead"] = [str(run_dir), str(transcripts)]
         allow_read = [_abs(run_dir, p) for p in _deciders_eye_reads(prompt)]
     elif scope is not None:
-        allow_read = [str(run_dir)]  # re-opened inside the denied folders (probe p14)
+        allow_read = [str(run_dir)]  # re-opened inside the denied root (probes p14, p19)
     if scope is not None:
         # Every session reads only its own run (v0.2.8). The Read tool is confined by the
         # Read guard hook (deny by default outside the run folder); this confines Bash.
-        filesystem["denyRead"] = list(dict.fromkeys(filesystem["denyRead"] + list(scope.deny)))
+        tmp_root = run_dir / SESSION_TMP
+        filesystem["denyRead"] = list(dict.fromkeys(
+            filesystem["denyRead"] + list(scope.deny) + [str(tmp_root)]))
+        if session_id:
+            allow_read.append(str(tmp_root / session_id))  # its own harness temp folder
         allow_read += list(scope.allow)
     if allow_read:
         filesystem["allowRead"] = list(dict.fromkeys(allow_read))

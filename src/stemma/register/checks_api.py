@@ -66,7 +66,7 @@ def request_id_for(role: str, prompt: str, round_no: int = 1) -> str:
 def _states(records: list[dict[str, Any]]) -> dict[str, CheckState]:
     out: dict[str, CheckState] = {}
     for r in records:
-        if r["kind"] == "revoked":
+        if r["kind"] in ("revoked", "verified", "release_blocked"):
             continue
         rid = r["request_id"]
         if r["kind"] == "request":
@@ -151,6 +151,33 @@ def revoke(run_dir: Path, session_id: str, reason: str) -> None:
         raise ValueError("a revocation names the session and the reason")
     jsonl.append(log_path(run_dir), {"kind": "revoked", "request_id": "", "at": _now(),
                                      "session_id": session_id, "reason": reason})
+
+
+def mark_verified(run_dir: Path, session_id: str, model: str, effort: str) -> None:
+    """The driver checked this ended session's resolved model and effort against
+    run.json and they matched: its verdicts, frames and reviews may count."""
+    jsonl.append(log_path(run_dir), {"kind": "verified", "request_id": "", "at": _now(),
+                                     "session_id": session_id, "model": model,
+                                     "effort": effort})
+
+
+def verified_sessions(run_dir: Path) -> frozenset[str]:
+    records = jsonl.read_all(log_path(run_dir))
+    revoked = {r["session_id"] for r in records if r["kind"] == "revoked"}
+    return frozenset(r["session_id"] for r in records
+                     if r["kind"] == "verified" and r["session_id"] not in revoked)
+
+
+def block_release(run_dir: Path, reason: str) -> None:
+    """The driver could not complete something the release depends on (a revocation):
+    no release may happen, and one that happened is withdrawn."""
+    jsonl.append(log_path(run_dir), {"kind": "release_blocked", "request_id": "",
+                                     "at": _now(), "reason": reason})
+
+
+def release_blocks(run_dir: Path) -> list[str]:
+    return [r["reason"] for r in jsonl.read_all(log_path(run_dir))
+            if r["kind"] == "release_blocked"]
 
 
 def revoked_sessions(run_dir: Path) -> frozenset[str]:

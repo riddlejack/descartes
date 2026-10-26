@@ -9,6 +9,7 @@ and reports through `stemma.analysis.result()` (a file it writes back).
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import signal
@@ -41,14 +42,56 @@ class RerunResult:
     time_limit_s: int
 
 
-def _profile(tmp: Path) -> str:
-    # Seatbelt profile: default allow, then deny network and writes outside `tmp`.
-    t = str(tmp.resolve()).replace('"', "")
+# What any process needs to start on macOS (dyld, system libraries, devices). Logical
+# invariant of the platform, not tuning.
+_SYSTEM_READS = ("/usr/lib", "/usr/share", "/System", "/Library/Apple", "/dev",
+                 "/private/var/db/timezone", "/private/var/db/dyld", "/private/etc/localtime")
+
+
+@functools.lru_cache(maxsize=8)
+def runtime_reads(python: str) -> tuple[str, ...]:
+    """The folders the interpreter itself reads: its prefix and base install, the real
+    executable's tree, and every sys.path entry (stdlib, site-packages, stemma's source).
+    Asked of the interpreter itself, once."""
+    code = ("import os, sys, json; print(json.dumps([sys.prefix, sys.base_prefix, "
+            "os.path.dirname(os.path.dirname(os.path.realpath(sys.executable)))] "
+            "+ [p for p in sys.path if p]))")
+    out = subprocess.run([python, "-I", "-c", code], capture_output=True, text=True,
+                         timeout=60, check=True,  # resource limit: seconds to ask it
+                         env={"PATH": "/usr/bin:/bin"}).stdout
+    paths: list[str] = []
+    for p in json.loads(out):
+        for q in (p, os.path.realpath(p)):
+            if q not in paths and os.path.exists(q):
+                paths.append(q)
+    return tuple(paths)
+
+
+def _q(path: str) -> str:
+    return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _profile(tmp: Path, reads: tuple[str, ...], python: str) -> str:
+    """Seatbelt: no network; writes only in `tmp`; file contents readable only in `tmp`,
+    the interpreter's own folders and the system's start-up libraries. Each ancestor
+    folder of those is readable as a single entry (path resolution lists it), never its
+    subtree. Rules are deny-all then allow, because later rules win. So a script reads its
+    copy, its inputs file and the Python runtime, nothing else."""
+    t = str(tmp.resolve())
+    roots = (t, *reads, *_SYSTEM_READS)
+    ancestors: set[str] = set()
+    for r in (*roots, os.path.abspath(python)):
+        ancestors.update(str(a) for a in Path(r).parents)
+        ancestors.add(r)
+    allow = " ".join(f"(subpath {_q(r)})" for r in roots)
+    literal = " ".join(f"(literal {_q(a)})" for a in sorted(ancestors))
     return (
         "(version 1)\n(allow default)\n(deny network*)\n"
-        f'(deny file-write* (require-not (require-any (subpath "{t}") '
+        f"(deny file-write* (require-not (require-any (subpath {_q(t)}) "
         '(literal "/dev/null") (literal "/dev/stdout") (literal "/dev/stderr") '
         '(literal "/dev/dtracehelper"))))\n'
+        "(deny file-read-data)\n"
+        f"(allow file-read-data {allow} {literal})\n"
     )
 
 
@@ -85,7 +128,7 @@ def rerun(script: Path, values: dict[str, float], python: str | None = None,
         raise DerivationError(f"script {script.name} does not exist")
     if not Path(SANDBOX_EXEC).exists():
         raise DerivationError("sandbox-exec is not available on this machine")
-    py = python or os.environ.get("STEMMA_PYTHON") or sys.executable
+    py = os.path.abspath(python or os.environ.get("STEMMA_PYTHON") or sys.executable)
     with tempfile.TemporaryDirectory(prefix="stemma-rerun-") as td:
         tmp = Path(td).resolve()
         inputs_file = tmp / "inputs.json"
@@ -100,7 +143,11 @@ def rerun(script: Path, values: dict[str, float], python: str | None = None,
             "STEMMA_ANALYSIS_RESULT": str(result_file),
             "PYTHONDONTWRITEBYTECODE": "1",
         }
-        argv = [SANDBOX_EXEC, "-p", _profile(tmp), py, "-I", str(script.resolve())]
+        # The script runs from a copy inside the temporary folder, so nothing outside it
+        # (the run folder included) is readable to it.
+        copy = tmp / "script.py"
+        copy.write_bytes(script.read_bytes())
+        argv = [SANDBOX_EXEC, "-p", _profile(tmp, runtime_reads(py), py), py, "-I", str(copy)]
         stderr_path = tmp / ".stderr"
         with open(stderr_path, "wb") as err:
             # Own process group, output to a file, not a pipe: a child the script leaves

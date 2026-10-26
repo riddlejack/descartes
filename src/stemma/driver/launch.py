@@ -22,9 +22,15 @@ from pathlib import Path
 from typing import IO, Any
 
 from stemma.driver import canary, clean, events, hostio
-from stemma.driver.config import SESSIONS_DIR, SETTINGS_DIR, DriverConfig, default_plugin_src
+from stemma.driver.config import SESSIONS_DIR, SETTINGS_DIR, DriverConfig
 from stemma.driver.errors import HarnessError
-from stemma.driver.settings import ReadScope, ToolSets, read_scope, stemma_settings_extra
+from stemma.driver.settings import (
+    SESSION_TMP,
+    ReadScope,
+    ToolSets,
+    read_scope,
+    stemma_settings_extra,
+)
 
 
 def driver_env(cfg: DriverConfig, run_dir: Path) -> dict[str, str]:
@@ -180,10 +186,22 @@ def _follow(run_dir: Path, s: Session, on_init: OnInit, grace_s: float,
                 s.result = msg
 
 
+_SCOPES: dict[str, ReadScope] = {}
+
+
 def session_read_scope(cfg: DriverConfig) -> ReadScope:
-    """Every session's Bash reads only its own run plus what the interpreter needs."""
-    repo = default_plugin_src().parent
-    return read_scope(cfg.python, cfg.runs_dir, repo, cfg.plugin_src, cfg.cache_dir)
+    """Every session's Bash reads only its own run plus what the shell and interpreter
+    need (computed once per interpreter)."""
+    key = str(cfg.python)
+    if key not in _SCOPES:
+        _SCOPES[key] = read_scope(cfg.python)
+    return _SCOPES[key]
+
+
+def session_tmp(run_dir: Path, session_id: str) -> str:
+    """The session's own harness temp folder inside the run (made here, no symlink)."""
+    hostio.write_text(run_dir, f"{SESSION_TMP}/{session_id}/.keep", "")
+    return str(run_dir / SESSION_TMP / session_id)
 
 
 def launch(cfg: DriverConfig, run_dir: Path, plugin_dir: Path, spec: LaunchSpec,
@@ -199,8 +217,11 @@ def launch(cfg: DriverConfig, run_dir: Path, plugin_dir: Path, spec: LaunchSpec,
         settings_extra=stemma_settings_extra(run_dir, spec.role, spec.prompt, spec.tools,
                                              cfg.claude_config, cache_dir=cfg.cache_dir,
                                              deny_agent=spec.deny_agent,
-                                             scope=session_read_scope(cfg)),
-        env_extra=driver_env(cfg, run_dir), session_id=spec.session_id, resume=spec.resume)
+                                             scope=session_read_scope(cfg),
+                                             session_id=spec.session_id),
+        env_extra={**driver_env(cfg, run_dir),
+                   "CLAUDE_CODE_TMPDIR": session_tmp(run_dir, spec.session_id)},
+        session_id=spec.session_id, resume=spec.resume)
     argv = cl.argv
     stream_rel = f"{SESSIONS_DIR}/{spec.name}.stream.jsonl"
     stderr_rel = f"{SESSIONS_DIR}/{spec.name}.stderr"

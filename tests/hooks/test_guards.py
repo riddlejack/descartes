@@ -108,7 +108,8 @@ def test_hostile_tool_only_writes_refused(run_dir: Path, tool: str, target: str)
     key = "notebook_path" if tool == "NotebookEdit" else "file_path"
     r = call(run_dir, "pre", pre(run_dir, tool, {key: target, "content": "x"}))
     assert r.returncode == 2, target
-    assert "written only by Stemma's tools" in r.stderr
+    expect = "outside the run folder" if ".." in target else "written only by Stemma's tools"
+    assert expect in r.stderr
 
 
 def test_write_through_symlink_refused(run_dir: Path) -> None:
@@ -154,7 +155,8 @@ def test_claim_checker_hostile_reads_refused(run_dir: Path, target: str) -> None
     r = call(run_dir, "pre", pre(run_dir, "Read", {"file_path": target},
                                  agent_type="stemma:claim-checker"))
     assert r.returncode == 2, target
-    assert r.stderr.startswith("Refused: the claim checker does not read")
+    expect = "outside the run folder" if ".." in target else "the claim checker does not read"
+    assert expect in r.stderr
 
 
 def test_claim_checker_symlinked_record_refused(run_dir: Path) -> None:

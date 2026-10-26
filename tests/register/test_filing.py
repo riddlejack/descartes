@@ -160,8 +160,9 @@ def test_estimated_rerun_reproduces(tmp_path: Path) -> None:
 
 def test_estimated_rerun_mismatch_refused(tmp_path: Path) -> None:
     script = write_script(tmp_path, RATIO)
-    with pytest.raises(Refused, match="gives 0.75, not 0.8"):
+    with pytest.raises(Refused, match="does not reproduce the claim's number") as e:
         check(estimated(script, 0.8), tmp_path, rerun_fn=rerun, lookup=lookup_ab)
+    assert "0.75" not in str(e.value)
 
 
 def test_estimated_without_result_refused(tmp_path: Path) -> None:

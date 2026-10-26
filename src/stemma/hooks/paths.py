@@ -1,6 +1,9 @@
 """Where a path lands inside a run folder, resolved the way the filesystem will.
 
-Paths are resolved through every existing symlink and `..`, and compared casefolded,
+An agent path with a `..` component is refused outright (no run-relative form):
+collapsing `..` before resolving symlinks would let `run/jump/../secret`, with `jump` a
+link out, look like a path inside the run. Every other path is resolved component by
+component through every existing symlink (`os.path.realpath`), and compared casefolded,
 because the default macOS filesystem is case-insensitive (`Register/log.jsonl` is
 `register/log.jsonl`). A path outside the run folder has no run-relative form.
 """
@@ -11,25 +14,24 @@ import os
 from pathlib import Path, PurePosixPath
 
 
+def has_parent_ref(path: str) -> bool:
+    return ".." in Path(path).parts
+
+
 def resolve(path: str, cwd: str) -> Path:
-    """Absolute, symlink-free form of `path`, even if its last parts do not exist yet."""
+    """Absolute real path of `path` (symlinks followed in order), even if its last parts
+    do not exist yet. Callers refuse `..` first."""
     p = Path(path)
     if not p.is_absolute():
         p = Path(cwd) / p
-    p = Path(os.path.normpath(p))
-    existing = p
-    rest: list[str] = []
-    while not existing.exists() and existing != existing.parent:
-        rest.append(existing.name)
-        existing = existing.parent
-    base = Path(os.path.realpath(existing))
-    for part in reversed(rest):
-        base = base / part
-    return Path(os.path.normpath(base))
+    return Path(os.path.realpath(p))
 
 
 def run_relative(path: str, cwd: str, run_dir: Path) -> PurePosixPath | None:
-    """The path relative to the run folder, casefolded; None when outside it."""
+    """The path relative to the run folder, casefolded; None when outside it or when the
+    path has a `..` component."""
+    if has_parent_ref(path) or has_parent_ref(cwd):
+        return None
     target = str(resolve(path, cwd)).casefold()
     root = str(Path(os.path.realpath(run_dir))).casefold()
     if target == root:

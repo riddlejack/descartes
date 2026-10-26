@@ -51,6 +51,7 @@ def reg(tmp_path: Path) -> Register:
 def checker_for(reg: Register, cid: str, session: str = "s-check") -> Caller:
     req = next(r for r in checks_api.pending_checks(reg.run_dir) if r.prompt == f"claim:{cid}")
     checks_api.mark_launched(reg.run_dir, req.request_id, session, "claude-opus-5-5", "high")
+    checks_api.mark_verified(reg.run_dir, session, "claude-opus-5-5", "high")  # as the driver
     return Caller("stemma:claim-checker", None, session)
 
 
@@ -186,6 +187,7 @@ def reviewer_for(reg: Register, branch: str, session: str = "s-rev") -> Caller:
     req = [r for r in checks_api.pending_checks(reg.run_dir)
            if r.prompt == f"branch:{branch}"][-1]
     checks_api.mark_launched(reg.run_dir, req.request_id, session, "claude-opus-5-5", "high")
+    checks_api.mark_verified(reg.run_dir, session, "claude-opus-5-5", "high")  # as the driver
     return Caller("stemma:branch-reviewer", None, session)
 
 
@@ -254,6 +256,7 @@ def launched(reg: Register, role: str, prompt: str, session: str) -> Caller:
     req = [r for r in checks_api.pending_checks(reg.run_dir)
            if r.role == role and r.prompt == prompt][-1]
     checks_api.mark_launched(reg.run_dir, req.request_id, session, "claude-opus-5-5", "high")
+    checks_api.mark_verified(reg.run_dir, session, "claude-opus-5-5", "high")  # as the driver
     return Caller(f"stemma:{role}", None, session)
 
 

@@ -79,6 +79,8 @@ def test_full_run_argv_env_canary_and_status(cfg: DriverConfig, tmp: Path, fake:
     # macOS adds __CF_USER_TEXT_ENCODING inside every new process (shown by `env -i python`),
     # so the child's own view holds it; nothing else beyond the allowlist.
     env = {k: v for k, v in lead[0]["env"].items() if k not in OS_ADDED_ENV}
+    # Each session's harness temp folder, inside the run (probes p18, p19).
+    assert env.pop("CLAUDE_CODE_TMPDIR") == str(run / ".stemma-tmp" / sid)
     assert set(env) == ALLOWED_ENV, sorted(set(env) ^ ALLOWED_ENV)
     assert set(scrubbed_env(cfg, run)) == ALLOWED_ENV
     stub = dataclasses.replace(cfg, evidence_stub="1")

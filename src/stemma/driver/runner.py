@@ -31,7 +31,7 @@ from stemma.driver.errors import DriverBusy, DriverError, HarnessError, RunState
 from stemma.driver.launch import LaunchSpec, Session, expectation, launch
 from stemma.driver.runfolder import load_run
 from stemma.driver.settings import ToolSets, tools_for_role
-from stemma.register import roles, safeio
+from stemma.register import checks_api, roles, safeio
 
 # Checking roles the driver may start (invariant: section 2), short names.
 CHECK_ROLES: Final = frozenset(roles.short(r) for r in roles.CHECKING_ROLES)
@@ -121,6 +121,8 @@ OUTCOME_CODES: Final = {
     "canary_failed": 2,  # the lead did not start on the run plugin alone
     "stopped_by_limit": 3,  # the lead reached a recorded resource limit
     "lead_failed": 4,  # the lead could not start or crashed
+    "release_withdrawn": 5,  # released, then a session it rested on was revoked
+    "revocation_failed": 6,  # a wrong-model check could not be revoked: release blocked
     "driver_stopped": 130,  # SIGTERM or SIGINT reached the driver
 }
 
@@ -129,10 +131,15 @@ Released = Callable[[Path], bool]
 
 
 def register_released(run_dir: Path) -> bool:
-    """True when the register recorded `finish_run` accepted."""
+    """True when the register recorded `finish_run` accepted and it still stands."""
+    return register_release_state(run_dir) == "released"
+
+
+def register_release_state(run_dir: Path) -> str | None:
+    """`released`, `withdrawn` or None, as the register records it."""
     from stemma.register.store import Register
 
-    return bool(Register(run_dir)._run_facts("finished"))
+    return Register(run_dir).release_state()
 
 
 def register_revoke(run_dir: Path, session_id: str, reason: str) -> None:
@@ -398,7 +405,21 @@ class Driver:
         if s.spec.request_id is not None:
             if s.revoke_reason is not None:
                 self._revoke_and_relaunch(s, code)
-            elif outcome != "driver_stopped":
+                return
+            init_model = (s.init or {}).get("model")
+            if live.tail is not None and init_model == s.spec.model:
+                # The final transcript scan found no model or effort mismatch (a mismatch
+                # would have set revoke_reason): this session's records may now count.
+                checks_api.mark_verified(self.run_dir, s.spec.session_id, s.spec.model,
+                                         s.spec.effort)
+                events.emit(self.run_dir, "session_verified", session=name,
+                            session_id=s.spec.session_id, model=s.spec.model,
+                            effort=s.spec.effort)
+            else:
+                events.emit(self.run_dir, "session_unverified", session=name,
+                            session_id=s.spec.session_id, init_model=init_model,
+                            transcript_found=live.tail is not None)
+            if outcome != "driver_stopped":
                 self.api.mark_ended(self.run_dir, s.spec.request_id, code, outcome)
             return
         lead = self.state["lead"]
@@ -413,9 +434,18 @@ class Driver:
         assert rid is not None and s.revoke_reason is not None  # invariant: a check
         try:
             self.revoke(self.run_dir, s.spec.session_id, s.revoke_reason)
-        except Exception as exc:  # noqa: BLE001 - part B's register; recorded, never hidden
+        except Exception as exc:  # noqa: BLE001 - fail closed: the release is blocked
+            reason = (f"revoking session {s.spec.session_id} failed "
+                      f"({type(exc).__name__}: {exc})")
             events.emit(self.run_dir, "revoke_failed", request_id=rid,
-                        session_id=s.spec.session_id, error=f"{type(exc).__name__}: {exc}")
+                        session_id=s.spec.session_id, error=reason)
+            self.state["release_blocked"] = reason
+            self._save_state()
+            try:
+                checks_api.block_release(self.run_dir, reason)
+            except Exception as exc2:  # noqa: BLE001 - the driver's own state still blocks
+                events.emit(self.run_dir, "release_block_unrecorded",
+                            error=f"{type(exc2).__name__}: {exc2}")
         events.emit(self.run_dir, "check_revoked", request_id=rid, role=s.spec.role,
                     session_id=s.spec.session_id, reason=s.revoke_reason)
         attempts = int(self.state["check_attempts"].get(rid, 0))
@@ -546,8 +576,16 @@ class Driver:
         lead_outcome = self.state["lead"].get("outcome")
         if lead_outcome == "canary_failed":
             return "canary_failed"
+        if self.state.get("release_blocked"):
+            return "revocation_failed"  # whatever the register says, nothing stands
         if self.released(self.run_dir):
             return "released"
+        try:
+            withdrawn = register_release_state(self.run_dir) == "withdrawn"
+        except Exception:  # noqa: BLE001 - unreadable register: not released either way
+            withdrawn = False
+        if withdrawn:
+            return "release_withdrawn"
         if lead_outcome == "stopped_by_limit":
             return "stopped_by_limit"
         if lead_outcome in ("launch_failed", "failed"):

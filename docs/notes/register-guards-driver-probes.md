@@ -127,6 +127,14 @@ settings files, runner) and each run's `out.jsonl` and `probe.log` are in
 - **p16:** `allowRead: [<run>]` with `denyRead` of `<run>/frame.md` and
   `<run>/branches/**/record.md`: the specific denials still hold (the most specific rule
   wins either way), so blind roles keep their denials under a re-opened run.
+- **p17 to p19:** deny by default from the root (`denyRead: ["/"]`). What a shell needs,
+  found by these runs: `/bin`, `/usr`, `/System`, `/dev`, `/private/etc` and the `/etc`
+  link, `/Library/Apple`, the `/tmp` link, the harness's own
+  `/private/tmp/claude-<uid>/cwd-*` files, every symlink on the interpreter's path
+  (`/opt/homebrew/opt/python@3.12`), and the harness temp folder moved into the run
+  with `CLAUDE_CODE_TMPDIR` (without it the shell cannot write its stdout file). With
+  those re-opened, the run, `/etc/hosts` and `import stemma.analysis` work, and a decoy
+  in `/private/tmp`, `ls /tmp`, `ls /Volumes`, `ls /Users` and `ls ~` are refused.
 
 ## Reproducing (when the harness version changes)
 `conformance/harness/run.sh <name> '<prompt>' [claude flags...]` with

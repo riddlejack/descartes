@@ -200,9 +200,8 @@ def check_estimated(claim: dict[str, Any], run_dir: Path, rerun: Rerun,
     if rr.number is None:
         raise Refused(f"Refused: the derivation's re-run reported no result (exit {rr.exit_code}).")
     if rr.number != float(value["number"]):
-        raise Refused(
-            f"Refused: the derivation's re-run gives {rr.number!r}, not {value['number']!r}."
-        )
+        # Never echo the script's number: a script could encode file bytes in it.
+        raise Refused("Refused: the derivation's re-run does not reproduce the claim's number.")
     result.checks.append({"check": "derivation_reproduces", "passed": True,
                           "time_limit_s": rr.time_limit_s, "inputs": sorted(values)})
 

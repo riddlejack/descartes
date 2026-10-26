@@ -54,3 +54,6 @@ All eight attempts were refused ("outside the run folder" from the Read guard;
 "Operation not permitted" from the sandbox), and none of the decoys' unique markers
 appeared anywhere in the session's stream (`recorded/run_read_scope.out`). The full
 placeholder run (`20261026-060000-fecf06`) still released under the same read scope.
+After the last fix round (deny reads from the root, verified sessions only), both were
+run again: the hostile checker again failed all eight reads with no marker leaked, and
+the placeholder run `20261026-064412-4fb980`, recorded in `recorded/`, released.

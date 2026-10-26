@@ -173,6 +173,12 @@ def guard_read(hook: dict[str, Any], run_dir: Path, draft_version: str | None) -
         # Deny by default: a session reads only its own run (its plugin folder is inside
         # it), never the repository, the design record, another run or the home folder.
         return refuse(hook, f"Refused: {target} is outside the run folder.")
+    if rel.parts and rel.parts[0] == ".stemma-tmp":
+        # Each session's harness temp folder is its own: another session's command output
+        # could carry what a blind role may not see.
+        own = str(hook.get("session_id") or "").casefold()
+        if len(rel.parts) < 2 or not own or rel.parts[1] != own:
+            return refuse(hook, f"Refused: {rel} is another session's temporary output.")
     why = blind_read_refusal(role, rel, run_dir, draft_version)
     return refuse(hook, why) if why else ALLOW
 

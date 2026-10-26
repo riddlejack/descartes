@@ -111,6 +111,7 @@ class Register:
                               "namespace": "register"})
         self._evidence = evidence
         self._rerun = rerun_fn or rerun
+        self._relied: list[str] = []
         self._lock = self.dir / "register"  # jsonl.exclusive locks `register.lock`
 
     @property
@@ -158,6 +159,9 @@ class Register:
         revoked = self._revoked()
         return [dict(f) for f in self.wm.view("facts").about(about, {"predicate": predicate})
                 if f["source"].get("runId") not in revoked]
+
+    def _verified(self) -> frozenset[str]:
+        return checks_api.verified_sessions(self.run_dir)
 
     def _read(self, rel: str | PurePosixPath) -> bytes:
         """An agent-written file's bytes, refusing symlinks anywhere on the path."""
@@ -207,6 +211,7 @@ class Register:
             "supersedes": e["attrs"].get("supersedes"),
             "superseded_by": superseded[-1]["value"] if superseded else None,
             "verdict": latest["value"] if latest else None,
+            "verdict_session": latest["source"].get("runId") if latest else None,
             "verdict_history": [f["value"] for f in verdicts],
         })
         return rec
@@ -656,6 +661,13 @@ class Register:
             self.wm.refresh()
             checks_api.revoke(self.run_dir, session_id, reason)
             source = {"kind": "register", "at": now(), "by": "stemma:register"}
+            for fin in self._run_facts("finished"):
+                if session_id in fin.get("sessions", []):
+                    # The release rested on this session: it no longer stands.
+                    self._ensure_entity(RUN_ENTITY, "run", "run", source)
+                    self.wm.assertFact({"about": RUN_ENTITY, "predicate": "release_withdrawn",
+                                        "value": {"session": session_id, "reason": reason,
+                                                  "at": source["at"]}, "source": source})
             for n in self.tree():
                 facts = self.wm.view("facts").about(node_entity(n["id"]),
                                                     {"predicate": "branch_verdict"})
@@ -664,6 +676,16 @@ class Register:
                     self._put_node({**n, "status": "proposed_done"}, source)
             self._write_tree()
             self.rebuild_index()
+
+    def release_state(self) -> str | None:
+        """`released`, `withdrawn` (a release rested on a session since revoked, or a
+        release block was recorded), or None when nothing was released."""
+        self.wm.refresh()
+        if not self._run_facts("finished"):
+            return None
+        if self._run_facts("release_withdrawn") or checks_api.release_blocks(self.run_dir):
+            return "withdrawn"
+        return "released"
 
     def assumptions(self, branch_id: str | None = None) -> list[dict[str, Any]]:
         """Assumptions taken in place of a user's answer, oldest first."""
@@ -802,14 +824,35 @@ class Register:
         the frozen draft `version` (default: the latest submitted). `text` is that
         draft's text when the caller has already read it."""
         failures: list[str] = []
+        verified = self._verified()
+        relied: set[str] = set()  # the checking sessions this release would rest on
+
+        def rests_on(session: str | None, what: str) -> None:
+            relied.add(str(session))
+            if session not in verified:
+                failures.append(f"{what} comes from a session whose model and effort "
+                                f"are not verified yet")
+
+        for reason in checks_api.release_blocks(self.run_dir):
+            failures.append(f"the release is blocked: {reason}")
         nodes = self.tree()
         if not nodes:
             failures.append("the tree has no nodes")
         for n in nodes:
             if n["status"] not in DONE:
                 failures.append(f"node {n['id']} is {n['status']}")
-        if not self._recorded_frames("critique"):
+            elif n["status"] in ("answered", "gap_accepted"):
+                facts = self._live_facts(node_entity(n["id"]), "branch_verdict")
+                if not facts:
+                    failures.append(f"node {n['id']} has no branch verdict")
+                else:
+                    rests_on(facts[-1]["source"].get("runId"),
+                             f"the branch verdict for node {n['id']}")
+        critiques = self._recorded_frames("critique")
+        if not critiques:
             failures.append("the blind framer's critique is not recorded")
+        else:
+            rests_on(critiques[-1]["session"], "the frame critique")
         if not safeio.is_file(self.run_dir, "framer/lead-response.md"):
             failures.append("framer/lead-response.md does not exist")
         versions = self.submitted_versions()
@@ -826,6 +869,8 @@ class Register:
             if role not in have:
                 failures.append(f"the {roles.short(role)} review of version {version} "
                                 f"is not recorded")
+            else:
+                rests_on(have[role]["session"], f"the {roles.short(role)} review")
         if text is None:
             text = safeio.read_text(self.run_dir, frozen_draft(version))
         for a in self.assumptions():
@@ -847,6 +892,9 @@ class Register:
             verdict = (rec["verdict"] or {}).get("verdict")
             if verdict not in RELEASABLE:
                 failures.append(f"claim {short} has verdict {verdict or 'none'}")
+            else:
+                rests_on(rec["verdict_session"], f"the verdict on claim {short}")
+        self._relied = sorted(relied)
         return failures
 
     def finish_run(self, caller: Caller, version: int) -> dict[str, Any]:
@@ -878,7 +926,8 @@ class Register:
             self._write("deliverable/answer.md", text)
             self._write("deliverable/answer.reader.md", self._render_reader(text))
             self._run_fact(caller, "finished", {"at": now(), "version": version,
-                                                "sha256": sha256_bytes(data)})
+                                                "sha256": sha256_bytes(data),
+                                                "sessions": self._relied})
             req = checks_api.request_check(self.run_dir, roles.RETRO_WRITER, "retro:run",
                                            "finish_run")
         return {"finished": True, "version": version, "deliverable": "deliverable/answer.md",
@@ -908,9 +957,12 @@ class Register:
     # ------------------------------------------------------------------- await
     def _landed(self, target: str) -> dict[str, Any] | None:
         kind, _, ident = target.partition(":")
+        verified = self._verified()
         if kind == "claim":
-            verdict: dict[str, Any] | None = self._claim_record(
-                self.resolve_claim_id(ident))["verdict"]
+            rec = self._claim_record(self.resolve_claim_id(ident))
+            # A verdict lands once its session's model and effort are verified.
+            verdict: dict[str, Any] | None = rec["verdict"] \
+                if rec["verdict_session"] in verified else None
             return verdict
         if kind == "branch":
             rounds = checks_api.for_prompt(self.run_dir, "branch-reviewer", target)
@@ -919,19 +971,20 @@ class Register:
                 return None
             latest = max(r.request.round for r in rounds)
             for f in reversed(self._live_facts(node_entity(nodes[0]["id"]), "branch_verdict")):
-                if f["value"].get("round") == latest:
+                if f["value"].get("round") == latest and f["source"].get("runId") in verified:
                     result: dict[str, Any] = f["value"]
                     return result
             return None
         if kind == "draft":
             if not ident.isdigit():
                 raise Refused(f"Refused: {target} is not a check id.")
-            have = self._recorded_reviews(int(ident))
+            have = {r: v for r, v in self._recorded_reviews(int(ident)).items()
+                    if v["session"] in verified}
             return {"reviews": sorted(have)} if len(have) == len(REVIEW_FILES) else None
         if kind == "frame":
             if ident not in FRAME_FILES:
                 raise Refused(f"Refused: {target} is not a check id.")
-            got = self._recorded_frames(ident)
+            got = [f for f in self._recorded_frames(ident) if f["session"] in verified]
             return {"file": FRAME_FILES[ident], "round": got[-1]["round"]} if got else None
         raise Refused(f"Refused: {target} is not a check id.")
 

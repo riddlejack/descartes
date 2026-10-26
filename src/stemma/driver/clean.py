@@ -52,8 +52,10 @@ CANARY_SETTINGS: Final[dict[str, Any]] = {
     },
 }
 BASE_ENV_KEYS: Final = frozenset({"HOME", "USER", "PATH", "LANG", "CLAUDE_CONFIG_DIR"})
-# CLAUDE_* keys a run may set, each shown by a probe (p5: removes built-in agent types).
-PROVEN_CLAUDE_ENV: Final = frozenset({"CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS"})
+# CLAUDE_* keys a run may set, each shown by a probe (p5: removes built-in agent types;
+# p18, p19: CLAUDE_CODE_TMPDIR moves the harness's temp files into the session's folder).
+PROVEN_CLAUDE_ENV: Final = frozenset({"CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS",
+                                      "CLAUDE_CODE_TMPDIR"})
 FORBIDDEN_ENV: Final = frozenset({"CLAUDE_CODE_EFFORT_LEVEL"})  # overrides --effort
 FORBIDDEN_FLAGS: Final = frozenset({"--bare"})
 
