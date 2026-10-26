@@ -22,7 +22,7 @@ Settings (environment; names only in `.env.example`, values never in the repo):
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,7 +34,8 @@ from stemma.datalayer.sinks import PostgresConfig, PostgresSink, SqliteSink
 from stemma.datalayer.values import EvidenceValues, FallbackValues
 from stemma.datalayer.zetaris import DEFAULT_REST_URL, ZetarisClient, ZetarisConfig
 
-__all__ = ["DataLayerError", "Settings", "query_log", "sqlite_path", "sync", "values_backend"]
+__all__ = ["DataLayerError", "InputMismatch", "Settings", "input_lookup", "query_log",
+           "sqlite_path", "sync", "values_backend"]
 
 DATALAYER_DIR = "datalayer"
 
@@ -118,3 +119,40 @@ def values_backend(run_dir: Path, settings: Settings | None = None
     remote = EvidenceValues(ZetarisEngine(ZetarisClient(s.zetaris, log), s.namespace, s.model),
                             run_id)
     return remote if s.fallback == "none" else FallbackValues(remote, local, log)
+
+
+InputLookup = Callable[[str], tuple[str, float]]
+
+
+class InputMismatch(DataLayerError):
+    """The data layer's number for a derivation input differs from the register's."""
+
+    code = "input_mismatch"
+
+
+def input_lookup(run_dir: Path, register_lookup: InputLookup,
+                 settings: Settings | None = None,
+                 claims: ClaimSource | None = None) -> InputLookup:
+    """Part B's derivation-input lookup, with each number read through the data layer.
+
+    For `file_claim` re-runs, called in the MCP server process (outside the sandbox).
+    The register still resolves the id and owns the number; the data layer's copy is
+    what the re-run receives, and it must equal the register's exactly, or the lookup
+    fails loudly. So the numbers a script gets come from Zetaris queries, logged, and
+    can never differ from what was filed. The run is synced once, on the first input.
+    """
+    s = settings or Settings.from_env()
+    state: dict[str, EvidenceValues | FallbackValues] = {}
+
+    def lookup(given: str) -> tuple[str, float]:
+        cid, filed = register_lookup(given)
+        if "backend" not in state:
+            sync(run_dir, s, claims)
+            state["backend"] = values_backend(run_dir, s)
+        served = state["backend"].values([cid])[cid]
+        if served != filed:
+            raise InputMismatch(f"claim {cid[:12]}: the data layer gives {served!r}, "
+                                f"the register {filed!r}")
+        return cid, served
+
+    return lookup
