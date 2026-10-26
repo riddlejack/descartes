@@ -278,3 +278,26 @@ no agent text reaches Zetaris; noted as an option, not built.
 Each run now has its own datasource and semantic layer in Zetaris instead of one shared
 model; the old shared reader role and public tables from earlier tests were dropped.
 Suite: 1017 passed, 5 skipped (Zetaris and web live tests); ruff and mypy clean.
+
+## Stage 3, without the recorded run yet (26 Oct)
+
+Branch `claude/part-d-stage3`, from main at 2afea16.
+- **`run.py`**, one entry point: `ask`, `status`, `logs`, `replay`, `conformance`, `record`;
+  with no arguments and `SAMPLE_MODE=true`, it replays the bundled sample. Runs from a
+  fresh clone without installing (it puts `src/` on the path).
+- **Replay** (`hackathon/replay.py`): a pack is copies of a finished run's readable files
+  plus a manifest of SHA-256 and sizes. Replay verifies every file (changed, missing,
+  unlisted and path-escaping files are typed errors), copies them into a fresh folder and
+  writes `REPLAY.json` labelling each item `replay` with its hash. Lines appended later (a
+  live query in a replayed log) are labelled live; a replayed file whose recorded bytes
+  changed is an error, never relabelled.
+- **The judge's log** (`hackathon/judgelog.py`): models behind each request, World Model
+  transactions and register calls, every data-layer query, the answer, each line
+  `[replay sha:...]` or `[live]`, with a header that says REPLAY when it is one.
+- **Live in sample mode** (`hackathon/sample.py`): the conformance suite (8/8, shown) and
+  the data layer over the replayed evidence.
+- **Dockerfile** (`python:3.12.13-slim-bookworm` with Node 24.14.1 copied from its image):
+  built here; in the container the conformance suite passes 8/8 and a mounted pack replays
+  with the same labels. `.dockerignore` keeps `.env`, `.venv`, `.git` and runs out.
+- Not done: the bundled sample pack (waits for B's walking-skeleton run folder);
+  Nightshift receipts appear in the log only once something calls Nightshift (stage 2).
