@@ -113,6 +113,9 @@ settings files, runner) and each run's `out.jsonl` and `probe.log` are in
 - **p11:** `"alwaysLoad": true` on the plugin's MCP server entry loads its tools at
   start: with `--tools Bash` (no ToolSearch at all) the init list held
   `mcp__plugin_stemma_stemma__echo` and the agent called it directly.
+- **p12:** `denyRead: [<run>]` with `allowRead: [<run>/task, <run>/intake.md,
+  <run>/draft/answer.v2.md]` lets exactly those be read; `answer.v1.md`, `frame.md`
+  and `ls .` are refused. This is how the decider's-eye reviewer reads only its inputs.
 
 ## Reproducing
 `kit/run.sh <name> '<prompt>' [claude flags...]` launches the pinned binary with a
