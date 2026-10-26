@@ -18,7 +18,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from hackathon.replay import labelled_text, replay_marker
+from hackathon.conformance import RECORD_NAME, latest, load
+from hackathon.replay import labelled_text, replay_marker, sha256
 
 # Resource limit: characters of SQL shown per query line (the full text is in the log).
 SQL_CHARS = 160
@@ -43,11 +44,14 @@ def _line(label: str, text: str) -> str:
 def header(run_dir: Path) -> list[str]:
     marker = replay_marker(run_dir)
     if marker is None:
-        return ["# Run log (live run)", f"Run folder: {run_dir}"]
+        return ["# Run log (read from the run's own records)",
+                (f"Run folder: {run_dir}. Every [recorded] line comes from a file of the run, "
+                 "with that file's SHA-256; only [live] lines ran in this process now.")]
     return ["# Run log: REPLAY, not a live run",
             (f"Recorded run {marker['source_run_id']} (recorded {marker['recorded_at']}), "
-            f"replayed {marker['replayed_at']}. Every [replay] line comes from a recorded "
-            "file whose SHA-256 is shown and checked; only [live] lines ran now.")]
+             f"replayed {marker['replayed_at']}. Every [replay] line comes from a recorded "
+             "file whose SHA-256 is shown and checked; only [live] lines ran in this process "
+             "now.")]
 
 
 def models(run_dir: Path) -> list[str]:
@@ -84,9 +88,11 @@ def engine(run_dir: Path, conformance: list[tuple[str, str]] | None = None) -> l
             calls[key] = calls.get(key, 0) + 1
     for (label, kind, tool), n in sorted(calls.items()):
         out.append(_line(label, f"{kind} {tool} x{n}"))
+    out.append("World Model's own conformance suite, unmodified, against this code:")
     if conformance is not None:
-        out.append("World Model's own conformance suite, unmodified, against this code:")
         out += [_line(label, text) for label, text in conformance]
+    else:
+        out.append("(the suite has not been run; python run.py conformance runs it)")
     return out
 
 
@@ -117,7 +123,31 @@ def answer(run_dir: Path) -> list[str]:
     return out
 
 
-def judge_log(run_dir: Path, conformance: list[tuple[str, str]] | None = None) -> str:
+def saved_conformance(run_dir: Path, runs_dir: Path | None) -> list[tuple[str, str]] | None:
+    """A conformance result saved earlier, labelled as recorded (with when and its hash)."""
+    candidates: list[Path] = [run_dir / RECORD_NAME]
+    if runs_dir is not None:
+        newest = latest(runs_dir)
+        if newest is not None:
+            candidates.append(newest[1])
+    for path in candidates:
+        result = load(path) if path.is_file() else None
+        if result is not None:
+            digest = sha256(path.read_bytes())[:12]
+            return result.labelled(f"recorded {result.at} sha:{digest}")
+    return None
+
+
+def judge_log(run_dir: Path, conformance: list[tuple[str, str]] | None = None,
+              live: list[tuple[str, str]] | None = None,
+              runs_dir: Path | None = None) -> str:
+    """The log. `conformance` and `live` are lines this process ran itself just now; with
+    no `conformance`, the newest saved result is shown, labelled recorded."""
+    if conformance is None:
+        conformance = saved_conformance(run_dir, runs_dir)
     parts = header(run_dir) + models(run_dir) + engine(run_dir, conformance) \
         + zetaris(run_dir) + answer(run_dir)
+    if live:
+        parts += ["", "## Ran in this process now, over the run's evidence"]
+        parts += [_line(label, text) for label, text in live]
     return "\n".join(parts) + "\n"

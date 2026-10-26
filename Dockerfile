@@ -23,15 +23,20 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
  && useradd --create-home --uid 10001 stemma
 
+# Only named paths are copied, never the whole context (secrets stay out at any depth;
+# .dockerignore also drops every .env file).
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install --no-cache-dir ".[evidence,server,register,driver,datalayer,providers]"
-COPY conformance ./conformance
+COPY conformance/package.json conformance/package-lock.json conformance/bridge.ts \
+     conformance/run.sh ./conformance/
+COPY conformance/vendor ./conformance/vendor
 RUN cd conformance && npm ci --no-audit --no-fund
 COPY run.py ./
-COPY hackathon ./hackathon
-COPY plugin ./plugin
+COPY hackathon/__init__.py hackathon/replay.py hackathon/judgelog.py \
+     hackathon/conformance.py hackathon/sample.py hackathon/README.md ./hackathon/
+COPY hackathon/sample ./hackathon/sample
 
 ENV SAMPLE_MODE=true \
     STEMMA_RUNS=/data/runs \

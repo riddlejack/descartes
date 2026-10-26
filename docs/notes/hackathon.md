@@ -301,3 +301,24 @@ Branch `claude/part-d-stage3`, from main at 2afea16.
   with the same labels. `.dockerignore` keeps `.env`, `.venv`, `.git` and runs out.
 - Not done: the bundled sample pack (waits for B's walking-skeleton run folder);
   Nightshift receipts appear in the log only once something calls Nightshift (stage 2).
+
+### Review of fd048fd, fixed by principle
+1. **Replay is the default label; live is never inferred.** A line read from a file is
+   `replay sha:` (replayed bytes), `recorded sha:` (a folder without a marker, such as a
+   pack's own files) or `appended after replay`; only steps this process ran and recorded
+   as it ran are `[live]`. Paths are canonicalised before every lookup; a manifest path
+   that is not already canonical (`./x`, `a//b`, `a/./b`) is refused.
+2. **Manifest fields are hostile identifiers:** the run id must be a plain identifier,
+   and every destination is checked to stay inside its folder after resolution
+   (`x/../../outside` and four other forms tested).
+3. **No env file enters the image:** `.dockerignore` drops `.env` files at any depth
+   (`**/.env`, `**/.env.*`, `**/*.env`, keeping `.env.example`), and the Dockerfile copies
+   only named paths. Shown: canaries planted at four depths are absent from the built image.
+4. **Recording refuses every credential form**, with a test per form: `KEY=value`,
+   `export ...TOKEN=`, YAML `PASSWORD:`, JSON `"api_key": "..."`, a SQL `password "..."`
+   option, bearer headers, and known key formats (Anthropic, OpenAI, NVIDIA, GitHub, Slack,
+   AWS, private keys). Masked values (`***`, `<set>`), numeric token counts and ordinary
+   words record. Verification refuses a pack that carries one.
+5. **Kept:** `datalayer/providers.jsonl` (the Nightshift receipts) is recorded and shown;
+   each conformance run is saved (in the replay folder and under `runs/conformance/`), and
+   a log written later shows the saved result labelled `recorded <time> sha:`.

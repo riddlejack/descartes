@@ -18,10 +18,15 @@ from hackathon.replay import (
     record,
     replay,
     replay_marker,
+    sha256,
     verify,
 )
 
-from .conftest import REPO
+from .conftest import REPO, add_receipts
+
+
+def _live_lines(text: str) -> list[str]:
+    return [ln for ln in text.splitlines() if ln.startswith("[live]")]
 
 
 def _pack(run_dir: Path, tmp_path: Path) -> Path:
@@ -42,13 +47,89 @@ def test_record_keeps_what_a_reader_needs_and_lists_the_rest(run_dir: Path,
     assert m["source_run_id"] == run_dir.name and all(len(i["sha256"]) == 64 for i in m["items"])
 
 
-@pytest.mark.parametrize("secret", ["sk-ant-api03-AbCdEfGh123456", "nvapi-AbCdEfGh123456",
-                                    "Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123"])
-def test_record_refuses_anything_shaped_like_a_credential(run_dir: Path, tmp_path: Path,
-                                                          secret: str) -> None:
-    (run_dir / "deliverable" / "notes.md").write_text(f"key {secret}\n")
-    with pytest.raises(ReplayError, match="credential"):
+@pytest.mark.parametrize("secret", [
+    "ZETARIS_API_KEY=zk_live_abc123def456",
+    "export METERLESS_RUNTIME_TOKEN=tok_abcdef123456",
+    "STEMMA_PG_PASSWORD: s3cretvalue99",
+    'stemma_pg_password = "s3cretvalue99"',
+    '{"api_key": "abcd1234efgh5678"}',
+    '{"runtime_token": "xyz1234567890"}',
+    'CREATE DATASOURCE d OPTIONS (password "hunter2hunter2")',
+    "Authorization: Bearer abcdefgh12345678",
+    "sk-ant-api03-AbCdEfGh123456",
+    "nvapi-AbCdEfGh123456",
+    "ghp_AbCdEfGhIjKlMnOpQrStUvWx12",
+    "AKIAABCDEFGHIJKLMNOP",
+    "-----BEGIN OPENSSH PRIVATE KEY-----",
+])
+def test_recording_refuses_every_credential_form(run_dir: Path, tmp_path: Path,
+                                                 secret: str) -> None:
+    (run_dir / "deliverable" / "notes.md").write_text(f"before\n{secret}\nafter\n")
+    with pytest.raises(ReplayError, match="nothing was recorded"):
         record(run_dir, tmp_path / "pack")
+    assert not (tmp_path / "pack").exists()
+
+
+@pytest.mark.parametrize("masked", ['password "***"', "ZETARIS_API_KEY=<set>",
+                                    '{"input_tokens": 1204}', '{"author": "stemma:worker"}',
+                                    "The token budget was 30,000 words."])
+def test_masked_values_and_ordinary_words_record(run_dir: Path, tmp_path: Path,
+                                                 masked: str) -> None:
+    (run_dir / "deliverable" / "notes.md").write_text(masked + "\n")
+    assert record(run_dir, tmp_path / "pack")["items"]
+
+
+def test_a_pack_carrying_a_credential_is_refused(run_dir: Path, tmp_path: Path) -> None:
+    pack = _pack(run_dir, tmp_path)
+    f = pack / "files" / "deliverable" / "answer.reader.md"
+    f.write_text("ZETARIS_API_KEY=zk_live_abc123def456\n")
+    m = json.loads((pack / "manifest.json").read_text())
+    for item in m["items"]:
+        if item["path"] == "deliverable/answer.reader.md":
+            item["sha256"], item["bytes"] = sha256(f.read_bytes()), len(f.read_bytes())
+    (pack / "manifest.json").write_text(json.dumps(m))
+    with pytest.raises(ReplayError, match="holds a key"):
+        verify(pack)
+
+
+@pytest.mark.parametrize("hostile", ["x/../../outside", "../outside", "a/b", "", ".hidden"])
+def test_hostile_run_ids_never_leave_the_runs_folder(run_dir: Path, tmp_path: Path,
+                                                     hostile: str) -> None:
+    pack = _pack(run_dir, tmp_path)
+    m = json.loads((pack / "manifest.json").read_text())
+    m["source_run_id"] = hostile
+    (pack / "manifest.json").write_text(json.dumps(m))
+    with pytest.raises(ReplayError, match="plain identifier"):
+        replay(pack, tmp_path / "runs-out")
+    assert not (tmp_path / "outside").exists()
+
+
+@pytest.mark.parametrize("path", ["./deliverable/answer.reader.md",
+                                  "deliverable//answer.reader.md",
+                                  "deliverable/./answer.reader.md"])
+def test_non_canonical_manifest_paths_are_refused(run_dir: Path, tmp_path: Path,
+                                                  path: str) -> None:
+    pack = _pack(run_dir, tmp_path)
+    m = json.loads((pack / "manifest.json").read_text())
+    for item in m["items"]:
+        if item["path"] == "deliverable/answer.reader.md":
+            item["path"] = path
+    (pack / "manifest.json").write_text(json.dumps(m))
+    with pytest.raises(ReplayError, match="canonical"):
+        verify(pack)
+
+
+def test_lookups_canonicalise_and_never_say_live(run_dir: Path, tmp_path: Path) -> None:
+    rp = replay(_pack(run_dir, tmp_path), tmp_path / "out")
+    for spelling in ("./deliverable/answer.reader.md", "deliverable//answer.reader.md"):
+        labels = {label for label, _ in labelled_text(rp.folder, spelling)}
+        assert labels and all(lb.startswith("replay sha:") for lb in labels)
+
+
+def test_a_folder_without_marker_is_recorded_not_live(run_dir: Path, tmp_path: Path) -> None:
+    pack = _pack(run_dir, tmp_path)
+    text = judge_log(pack / "files")  # the pack's own files, no REPLAY.json
+    assert not _live_lines(text) and "[recorded sha:" in text
 
 
 def test_a_changed_byte_is_refused(run_dir: Path, tmp_path: Path) -> None:
@@ -72,7 +153,7 @@ def test_unlisted_missing_and_escaping_files_are_refused(run_dir: Path, tmp_path
     m = json.loads((pack2 / "manifest.json").read_text())
     m["items"][0]["path"] = "../../outside.txt"
     (pack2 / "manifest.json").write_text(json.dumps(m))
-    with pytest.raises(ReplayError, match="not a plain path"):
+    with pytest.raises(ReplayError, match="canonical"):
         verify(pack2)
 
 
@@ -98,23 +179,34 @@ def test_judge_log_never_presents_a_replay_as_live(run_dir: Path, tmp_path: Path
     assert "[replay sha:" in text.split("## The answer")[1]
 
 
-def test_lines_added_after_replay_are_live_and_changes_are_refused(run_dir: Path,
-                                                                    tmp_path: Path) -> None:
+def test_lines_added_after_replay_are_marked_and_changes_are_refused(run_dir: Path,
+                                                                      tmp_path: Path) -> None:
     rp = replay(_pack(run_dir, tmp_path), tmp_path / "out")
     q = rp.folder / "datalayer" / "queries.jsonl"
     with q.open("a") as fh:
         fh.write(json.dumps({"engine": "sqlite", "purpose": "query", "rows": 1}) + "\n")
     labels = [label for label, _ in labelled_text(rp.folder, "datalayer/queries.jsonl")]
-    assert labels[0].startswith("replay sha:") and labels[-1] == "live"
+    assert labels[0].startswith("replay sha:") and labels[-1] == "appended after replay"
     q.write_text(q.read_text().replace("812", "9"))
     with pytest.raises(ReplayError, match="changed after"):
         judge_log(rp.folder)
 
 
-def test_a_live_run_is_labelled_live(run_dir: Path) -> None:
+def test_a_run_folder_is_labelled_recorded(run_dir: Path) -> None:
     text = judge_log(run_dir)
-    assert text.startswith("# Run log (live run)")
-    assert "[replay" not in text and "[live] tx 1 upsertEntity" in text
+    assert text.startswith("# Run log (read from the run's own records)")
+    assert not _live_lines(text)
+    assert not [ln for ln in text.splitlines() if ln.startswith("[replay")]
+    assert "] tx 1 upsertEntity" in text and "[recorded sha:" in text
+
+
+def test_provider_receipts_are_recorded_and_shown(run_dir: Path, tmp_path: Path) -> None:
+    add_receipts(run_dir)
+    pack = _pack(run_dir, tmp_path)
+    assert "datalayer/providers.jsonl" in {i["path"] for i in json.loads(
+        (pack / "manifest.json").read_text())["items"]}
+    text = judge_log(replay(pack, tmp_path / "out").folder)
+    assert "nightshift demo: route meterless/deep answered by claude-opus-5-5" in text
 
 
 def _run_py(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -145,3 +237,6 @@ def test_sample_run_includes_the_live_conformance_suite(run_dir: Path, tmp_path:
     result = run_sample(_pack(run_dir, tmp_path), tmp_path / "out")
     assert result.ok and "[live] PASS sid-001" in result.log
     assert "[live] 8/8 checks passed" in result.log and "[live] suite PASSED" in result.log
+    later = judge_log(result.folder)  # a log written afterwards keeps the result, as recorded
+    assert not _live_lines(later)
+    assert "PASS sid-001" in later and "] suite PASSED" in later and "[recorded 20" in later

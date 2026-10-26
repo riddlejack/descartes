@@ -8,8 +8,10 @@ SAMPLE_MODE=true python run.py
 
 This replays a recorded real run. It checks every recorded file against the SHA-256 in
 the pack's manifest; a changed byte stops it. The judge's log it prints marks every line
-from the recording `[replay sha:<hash>]`, and says at the top that the run is a replay.
-Only two things run live, marked `[live]`:
+from the recording `[replay sha:<hash>]`, and says at the top that the run is a replay. A
+line read from any file is never marked live: in a folder without a replay marker it is
+`[recorded sha:<hash>]`, and bytes added to a replayed file afterwards are
+`[appended after replay]`. Only steps this process runs itself are marked `[live]`:
 - World Model's own conformance suite, unmodified, against the register's engine;
 - the data layer over the replayed evidence: a sync into SQLite (or Zetaris when
   configured) and one read-only `query_data` query.

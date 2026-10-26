@@ -66,3 +66,9 @@ def make_run(root: Path) -> Path:
 @pytest.fixture
 def run_dir(tmp_path: Path) -> Path:
     return make_run(tmp_path / "runs")
+
+
+def add_receipts(run: Path) -> None:
+    (run / "datalayer" / "providers.jsonl").write_text(json.dumps(
+        {"provider": "nightshift", "purpose": "demo", "route": "meterless/deep",
+         "served_model": "claude-opus-5-5", "ok": True}) + "\n")

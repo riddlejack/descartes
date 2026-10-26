@@ -114,16 +114,17 @@ def cmd_status(run_dir: Path) -> int:
 def cmd_logs(run_dir: Path) -> int:
     from hackathon.judgelog import judge_log
 
-    print(judge_log(run_dir))
+    print(judge_log(run_dir, runs_dir=_runs_dir()))
     return 0
 
 
 def cmd_conformance() -> int:
-    from hackathon.conformance import run_conformance
+    from hackathon.conformance import run_conformance, save_run
 
     result = run_conformance()
-    for label, line in result.labelled():
+    for label, line in result.labelled("live"):
         print(f"[{label}] {line}")
+    print(f"[live] result kept at {save_run(result, _runs_dir())}")
     return result.exit_code
 
 

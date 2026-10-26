@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from hackathon.conformance import Conformance, run_conformance
+from hackathon.conformance import RECORD_NAME, Conformance, run_conformance, save_run
 from hackathon.judgelog import judge_log
 from hackathon.replay import replay
 
@@ -48,9 +48,10 @@ def _live_data_layer(folder: Path) -> list[tuple[str, str]]:
 def run_sample(pack: Path, runs_dir: Path, conformance: bool = True) -> SampleRun:
     rp = replay(pack, runs_dir)
     conf = run_conformance() if conformance else None
+    if conf is not None:  # kept, so a log written later shows it, labelled recorded
+        conf.save(rp.folder / RECORD_NAME)
+        save_run(conf, runs_dir)
     live = _live_data_layer(rp.folder)
-    log = judge_log(rp.folder, conf.labelled() if conf else None)
-    log += "\n## Live now, over the replayed evidence\n" + "\n".join(
-        f"[{label}] {text}" for label, text in live) + "\n"
+    log = judge_log(rp.folder, conf.labelled("live") if conf else None, live, runs_dir)
     (rp.folder / "JUDGE-LOG.md").write_text(log, encoding="utf-8")
     return SampleRun(rp.folder, log, conf)
