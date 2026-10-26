@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,6 +18,10 @@ from stemma.driver.launch import harness_version
 from stemma.driver.task import Task, load_task
 
 RUN_JSON = "run.json"
+
+
+# A run id as new_run_id makes it (logical invariant): UTC date, time, 6 hex digits.
+RUN_ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{6}")
 
 
 def new_run_id() -> str:

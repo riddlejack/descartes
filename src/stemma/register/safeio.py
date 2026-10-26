@@ -63,6 +63,20 @@ def folder_fd(run_dir: Path, rel: str | PurePosixPath) -> AbstractContextManager
     return _dir_fd(run_dir, _parts(rel), create=False)
 
 
+def move(run_dir: Path, src: str | PurePosixPath, dst: str | PurePosixPath) -> None:
+    """Rename run_dir/src to run_dir/dst, following no symlink; dst's folders are made,
+    and an existing dst is refused (the caller holds the lock that makes dst fresh)."""
+    sp, dp = _parts(src), _parts(dst)
+    with _dir_fd(run_dir, sp[:-1], create=False) as sfd, \
+            _dir_fd(run_dir, dp[:-1], create=True) as dfd:
+        try:
+            os.stat(dp[-1], dir_fd=dfd, follow_symlinks=False)
+        except FileNotFoundError:
+            os.rename(sp[-1], dp[-1], src_dir_fd=sfd, dst_dir_fd=dfd)
+            return
+        raise UnsafePath(f"{dst} already exists")
+
+
 def write_bytes(run_dir: Path, rel: str | PurePosixPath, data: bytes) -> None:
     """Atomically replace run_dir/rel with `data`, following no symlink."""
     parts = _parts(rel)

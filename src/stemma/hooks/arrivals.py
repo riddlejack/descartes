@@ -4,23 +4,28 @@
 records it in `.stemma/arrivals.jsonl` and an `arrival` event, and so queues a notice.
 The lead's next tool call takes every queued notice through the PreToolUse hook's
 `additionalContext`, which the harness hands to the model with that call (probed on
-Claude Code 2.1.308, headless). A notice is marked delivered once, under the log's lock,
-and only on a call the guards allow, so a refused call never swallows it.
+Claude Code 2.1.308, headless). The hook holds the log's lock while it records its
+events and builds its answer, and marks the notice delivered last: a call the guards
+refuse, or any failure before that mark, leaves the notice queued for the next call.
 """
 
 from __future__ import annotations
 
 import hashlib
 import os
+import secrets
 import stat
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from stemma.register import jsonl, roles, safeio
 
 LOG = ".stemma/arrivals.jsonl"
 ARRIVALS_DIR = "task/arrivals"
+STAGING = "task/arrivals/.staging"  # copies land here, unlocked, before they are published
 # Resource limit: bytes of one attached file (it is copied whole into the run).
 ATTACH_MAX_BYTES = 512 * 1024 * 1024
 # Resource limit: characters of a file name kept in the run (longer names are refused).
@@ -78,15 +83,25 @@ def attach(run_dir: Path, src: Path) -> dict[str, Any]:
         raise AttachError(f"{run_dir} is not a run folder (no run.json)")
     name = _plain_name(src.name)
     data = _read_source(src)
+    digest = hashlib.sha256(data).hexdigest()
+    staged = f"{STAGING}/{secrets.token_hex(8)}"
+    safeio.write_bytes(run_dir, staged, data)  # the copy, without the lock; no link on the way
     log = _log(run_dir)
-    with jsonl.exclusive(log):
-        records = jsonl.read_all(log)
-        n = 1 + max((int(r["n"]) for r in records if r["kind"] == "arrival"), default=0)
-        rel = f"{ARRIVALS_DIR}/{n}/{name}"
-        safeio.write_bytes(run_dir, rel, data)  # no link on the way; a fresh file
-        rec = {"kind": "arrival", "n": n, "path": rel, "name": name, "bytes": len(data),
-               "sha256": hashlib.sha256(data).hexdigest(), "at": _now()}
-        jsonl.append_unlocked(log, [rec])
+    try:
+        with jsonl.exclusive(log):  # held only to number, publish (a rename) and queue
+            records = jsonl.read_all(log)
+            n = 1 + max((int(r["n"]) for r in records if r["kind"] == "arrival"), default=0)
+            rel = f"{ARRIVALS_DIR}/{n}/{name}"
+            safeio.move(run_dir, staged, rel)
+            rec = {"kind": "arrival", "n": n, "path": rel, "name": name, "bytes": len(data),
+                   "sha256": digest, "at": _now()}
+            jsonl.append_unlocked(log, [rec])
+    finally:
+        try:
+            with safeio.folder_fd(run_dir, STAGING) as sfd:
+                os.unlink(PurePosixPath(staged).name, dir_fd=sfd)
+        except (FileNotFoundError, safeio.UnsafePath):
+            pass  # published, or never staged
     jsonl.append(run_dir / "events.jsonl",
                   {"event": "arrival", "source": "attach", **{k: v for k, v in rec.items()
                                                               if k != "kind"}})
@@ -107,26 +122,31 @@ def is_lead_main_thread(hook: dict[str, Any]) -> bool:
     return hook.get("agent_type") == roles.LEAD and not hook.get("agent_id")
 
 
-def take_notice(run_dir: Path, hook: dict[str, Any]) -> tuple[str | None, list[dict[str, Any]]]:
-    """For the lead's own tool call: the notice of every arrival not yet delivered, now
-    marked delivered, and the events to record. Anyone else gets nothing."""
-    if not is_lead_main_thread(hook):
-        return None, []
+@contextmanager
+def held(run_dir: Path, hook: dict[str, Any]) -> Iterator[list[dict[str, Any]]]:
+    """For the lead's own tool call: hold the log's lock and yield every arrival not
+    yet delivered (empty for anyone else, or when nothing arrived). The caller records
+    its events, builds its answer, then calls `mark_delivered` inside the block."""
     log = _log(run_dir)
-    if not log.exists():
-        return None, []
+    if not is_lead_main_thread(hook) or not log.exists():
+        yield []
+        return
     with jsonl.exclusive(log):
         records = jsonl.read_all(log)
         delivered = {int(r["n"]) for r in records if r["kind"] == "delivered"}
-        due = [r for r in records if r["kind"] == "arrival" and int(r["n"]) not in delivered]
-        if not due:
-            return None, []
-        at = _now()
-        marks = [{"kind": "delivered", "n": r["n"], "at": at,
-                  "session_id": hook.get("session_id"), "tool_use_id": hook.get("tool_use_id"),
-                  "tool": hook.get("tool_name")} for r in due]
-        jsonl.append_unlocked(log, marks)
-    events = [{"event": "arrival_notice_delivered", "at": at, "n": r["n"], "path": r["path"],
-               "session_id": hook.get("session_id"), "tool_use_id": hook.get("tool_use_id"),
-               "tool": hook.get("tool_name")} for r in due]
-    return notice_text(due), events
+        yield [r for r in records if r["kind"] == "arrival" and int(r["n"]) not in delivered]
+
+
+def delivery_events(due: list[dict[str, Any]], hook: dict[str, Any]) -> list[dict[str, Any]]:
+    at = _now()
+    return [{"event": "arrival_notice_delivered", "at": at, "n": r["n"], "path": r["path"],
+             "session_id": hook.get("session_id"), "tool_use_id": hook.get("tool_use_id"),
+             "tool": hook.get("tool_name")} for r in due]
+
+
+def mark_delivered(run_dir: Path, due: list[dict[str, Any]], hook: dict[str, Any]) -> None:
+    """Inside `held`: the notice of `due` went out with this call's answer."""
+    at = _now()
+    jsonl.append_unlocked(_log(run_dir), [
+        {"kind": "delivered", "n": r["n"], "at": at, "session_id": hook.get("session_id"),
+         "tool_use_id": hook.get("tool_use_id"), "tool": hook.get("tool_name")} for r in due])

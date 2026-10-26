@@ -56,6 +56,17 @@ def _decide_subagent_start(hook: dict[str, Any], run_dir: Path) -> guards.Decisi
 HANDLERS = {"pre": _decide_pre, "post": _decide_post, "subagent-start": _decide_subagent_start}
 
 
+def _answer(decision: guards.Decision, notice: str | None) -> str:
+    specific: dict[str, Any] = {}
+    if decision.updated_input is not None:
+        specific["updatedInput"] = decision.updated_input
+    if notice is not None:
+        specific["additionalContext"] = notice
+    if not specific:
+        return ""
+    return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", **specific}})
+
+
 def run(event: str, stdin: str) -> tuple[int, str, str]:
     """Return (exit code, stdout, stderr) for one hook call."""
     try:
@@ -65,26 +76,26 @@ def run(event: str, stdin: str) -> tuple[int, str, str]:
             raise guards.GuardInputError("hook input is not a JSON object")
         run_dir = guards.run_dir_from_env()
         decision = handler(hook, run_dir)
-        notice: str | None = None
-        events = list(decision.events)
-        if event == "pre" and decision.allow:
-            notice, notice_events = arrivals.take_notice(run_dir, hook)
-            events += notice_events
-        if events:
-            jsonl.append(run_dir / "events.jsonl", *events)
+        if not decision.allow or event != "pre":
+            if decision.events:
+                jsonl.append(run_dir / "events.jsonl", *decision.events)
+            out = _answer(decision, None) if decision.allow else ""
+        else:
+            # An allowed call of the lead's own thread carries every queued arrival
+            # notice; it is marked delivered only once the events are recorded and the
+            # answer is built, so any failure before leaves it queued.
+            with arrivals.held(run_dir, hook) as due:
+                events = list(decision.events) + arrivals.delivery_events(due, hook)
+                if events:
+                    jsonl.append(run_dir / "events.jsonl", *events)
+                out = _answer(decision, arrivals.notice_text(due) if due else None)
+                if due:
+                    arrivals.mark_delivered(run_dir, due, hook)
     except Exception as exc:  # noqa: BLE001 - any guard failure blocks: fail closed
         return EXIT_BLOCK, "", f"Refused: a Stemma guard failed ({type(exc).__name__})."
     if not decision.allow:
         return EXIT_BLOCK, "", decision.refusal
-    specific: dict[str, Any] = {}
-    if decision.updated_input is not None:
-        specific["updatedInput"] = decision.updated_input
-    if notice is not None:
-        specific["additionalContext"] = notice
-    if specific:
-        out = {"hookSpecificOutput": {"hookEventName": "PreToolUse", **specific}}
-        return EXIT_ALLOW, json.dumps(out), ""
-    return EXIT_ALLOW, "", ""
+    return EXIT_ALLOW, out, ""
 
 
 def main() -> None:

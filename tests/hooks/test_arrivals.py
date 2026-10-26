@@ -12,7 +12,7 @@ import pytest
 from test_guards import call, events, pre
 
 from stemma.hooks import arrivals
-from stemma.hooks.arrivals import AttachError, attach, take_notice
+from stemma.hooks.arrivals import AttachError, attach
 from stemma.register import jsonl
 
 
@@ -49,6 +49,7 @@ def test_attach_copies_into_task_arrivals_and_records_it(run_dir: Path,
     assert b["path"] == "task/arrivals/2/client-questions.csv"
     copy = run_dir / a["path"]
     assert copy.read_bytes() == questions.read_bytes() and not copy.is_symlink()
+    assert not list((run_dir / arrivals.STAGING).iterdir())  # nothing left staged
     assert copy.stat().st_nlink == 1  # capture_file refuses a file with other names
     assert [e["path"] for e in events(run_dir) if e["event"] == "arrival"] == [a["path"],
                                                                                b["path"]]
@@ -111,14 +112,24 @@ def test_a_refused_call_never_swallows_the_notice(run_dir: Path, questions: Path
     assert context(r.stdout) is not None
 
 
-def test_parallel_tool_calls_deliver_each_notice_once(run_dir: Path, questions: Path) -> None:
+def run_hook(run_dir: Path, hook: dict[str, Any],
+             monkeypatch: pytest.MonkeyPatch) -> tuple[int, str, str]:
+    from stemma.hooks.__main__ import run
+
+    monkeypatch.setenv("STEMMA_RUN_DIR", str(run_dir))
+    return run("pre", json.dumps(hook))
+
+
+def test_parallel_tool_calls_deliver_each_notice_once(run_dir: Path, questions: Path,
+                                                      monkeypatch: pytest.MonkeyPatch) -> None:
     attach(run_dir, questions)
     attach(run_dir, questions)
     got: list[str | None] = []
 
     def one(i: int) -> None:
-        hook = pre(run_dir, "Read", {"file_path": "x"}, tool_use_id=f"toolu_{i}")
-        got.append(take_notice(run_dir, hook)[0])
+        hook = pre(run_dir, "Read", {"file_path": str(run_dir / "intake.md")},
+                   tool_use_id=f"toolu_{i}")
+        got.append(context(run_hook(run_dir, hook, monkeypatch)[1]))
 
     threads = [threading.Thread(target=one, args=(i,)) for i in range(8)]
     for t in threads:
@@ -129,6 +140,42 @@ def test_parallel_tool_calls_deliver_each_notice_once(run_dir: Path, questions: 
     assert len(notes) == 1 and "arrivals/1/" in notes[0] and "arrivals/2/" in notes[0]
     marks = [r for r in jsonl.read_all(run_dir / arrivals.LOG) if r["kind"] == "delivered"]
     assert sorted(m["n"] for m in marks) == [1, 2]
+
+
+def test_a_failed_event_write_blocks_the_call_but_keeps_the_notice_queued(
+        run_dir: Path, questions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Codex review of 2717edc: the notice was marked delivered before the event write,
+    # so a failed write blocked the call and the notice was never delivered.
+    from stemma.hooks import __main__ as hook_main
+
+    attach(run_dir, questions)
+    real = hook_main.jsonl.append
+
+    def broken(log: Path, *records: dict[str, Any]) -> None:
+        if log.name == "events.jsonl":
+            raise OSError("disk full")
+        real(log, *records)
+
+    hook = pre(run_dir, "Read", {"file_path": str(run_dir / "intake.md")})
+    monkeypatch.setattr(hook_main.jsonl, "append", broken)
+    code, out, err = run_hook(run_dir, hook, monkeypatch)
+    assert code == 2 and out == "" and "guard failed" in err
+    monkeypatch.setattr(hook_main.jsonl, "append", real)
+    code, out, _ = run_hook(run_dir, hook, monkeypatch)
+    assert code == 0 and "task/arrivals/1/" in (context(out) or "")
+
+
+def test_a_failed_answer_keeps_the_notice_queued(run_dir: Path, questions: Path,
+                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    from stemma.hooks import __main__ as hook_main
+
+    attach(run_dir, questions)
+    hook = pre(run_dir, "Read", {"file_path": str(run_dir / "intake.md")})
+    real = hook_main._answer
+    monkeypatch.setattr(hook_main, "_answer", lambda *_a: (_ for _ in ()).throw(ValueError()))
+    assert run_hook(run_dir, hook, monkeypatch)[0] == 2
+    monkeypatch.setattr(hook_main, "_answer", real)
+    assert "task/arrivals/1/" in (context(run_hook(run_dir, hook, monkeypatch)[1]) or "")
 
 
 def test_the_notice_rides_beside_an_input_rewrite(run_dir: Path, questions: Path) -> None:
@@ -142,15 +189,33 @@ def test_the_notice_rides_beside_an_input_rewrite(run_dir: Path, questions: Path
     assert "task/arrivals/1/" in out["additionalContext"]
 
 
-def test_the_cli_attaches_by_run_id(run_dir: Path, questions: Path,
-                                    capsys: pytest.CaptureFixture[str],
-                                    monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_cli_attaches_by_run_id_under_stemma_runs_only(
+        tmp_path: Path, questions: Path, capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch) -> None:
     from stemma.driver.__main__ import main
 
-    assert main(["attach", str(run_dir), str(questions)]) == 0
-    printed = json.loads(capsys.readouterr().out)
-    assert printed["path"] == "task/arrivals/1/client-questions.csv"
-    assert main(["attach", str(run_dir.parent / "no-such-run"), str(questions)]) == 2
+    rid = "20261026-154644-b3b359"
+    runs = tmp_path / "runs"
+    real = runs / rid
+    for sub in ("task", ".stemma"):
+        (real / sub).mkdir(parents=True)
+    (real / "run.json").write_text("{}")
+    # Codex review of 2717edc: a same-named folder in the working directory won.
+    decoy = tmp_path / "cwd" / rid
+    for sub in ("task", ".stemma"):
+        (decoy / sub).mkdir(parents=True)
+    (decoy / "run.json").write_text("{}")
+    monkeypatch.chdir(tmp_path / "cwd")
+    monkeypatch.setenv("STEMMA_RUNS", str(runs))
+    assert main(["attach", rid, str(questions)]) == 0
+    assert json.loads(capsys.readouterr().out)["path"] == \
+        "task/arrivals/1/client-questions.csv"
+    assert (real / "task/arrivals/1/client-questions.csv").exists()
+    assert not (decoy / "task/arrivals").exists()
+    for bad in (str(real), "../" + rid, rid + "/..", "latest", "20261026-154644-B3B359"):
+        assert main(["attach", bad, str(questions)]) == 2
+    assert "is not a run id" in capsys.readouterr().err
+    assert main(["attach", "20261026-000000-000000", str(questions)]) == 2  # no such run
 
 
 def test_an_arrival_can_be_captured_by_the_evidence_service(run_dir: Path,
@@ -160,3 +225,33 @@ def test_an_arrival_can_be_captured_by_the_evidence_service(run_dir: Path,
     rec = attach(run_dir, questions)
     receipt = EvidenceService(run_dir).capture_file(rec["path"], "the client's question list")
     assert receipt["status"] == "ok", receipt
+
+
+def test_the_copy_is_made_without_the_lock(run_dir: Path, questions: Path,
+                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    # Codex review of 2717edc: the lock was held while copying up to 512 MiB.
+    from stemma.register import safeio
+
+    held_during_write: list[bool] = []
+    real_write = safeio.write_bytes
+    lock_path = run_dir / ".stemma" / "arrivals.jsonl.lock"
+
+    def watched(rd: Path, rel: Any, data: bytes) -> None:
+        import fcntl
+        import os
+
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                held_during_write.append(False)
+            except BlockingIOError:
+                held_during_write.append(True)
+        finally:
+            os.close(fd)
+        real_write(rd, rel, data)
+
+    monkeypatch.setattr(arrivals.safeio, "write_bytes", watched)
+    attach(run_dir, questions)
+    assert held_during_write == [False]

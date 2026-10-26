@@ -96,6 +96,17 @@ class Limits:
             raise ConfigError(f"run.json limits do not match this driver: {exc}") from exc
 
 
+def runs_dir_from_env() -> Path:
+    """$STEMMA_RUNS, the one folder runs live in (an absolute path)."""
+    value = os.environ.get("STEMMA_RUNS", "")
+    if not value:
+        raise ConfigError("STEMMA_RUNS is not set")
+    p = Path(value).expanduser()
+    if not p.is_absolute():
+        raise ConfigError(f"STEMMA_RUNS must be an absolute path, got {value!r}")
+    return p
+
+
 @dataclass(frozen=True)
 class DriverConfig:
     runs_dir: Path

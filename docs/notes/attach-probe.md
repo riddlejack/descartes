@@ -20,3 +20,8 @@ correct. The second probe waited with an until-loop instead.
 
 **Earlier probe, same day.** A bare plugin with PreToolUse and PostToolUse hooks that
 each return `additionalContext`: the headless model saw both texts.
+
+**After the Codex review fixes (same day).** The notice is now marked delivered last,
+the copy is made outside the lock, and run ids resolve only under `$STEMMA_RUNS`. A
+rerun of the probe, attaching by run id, was proven again: the notice came with the
+lead's next tool call.

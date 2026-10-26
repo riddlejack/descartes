@@ -67,7 +67,7 @@ def main() -> int:
         started, attached = time.monotonic(), False
         while d.step():
             if not attached and time.monotonic() - started > ATTACH_AFTER_S:
-                code = stemma_main(["attach", str(run_dir), str(arrival)])
+                code = stemma_main(["attach", run_dir.name, str(arrival)])
                 print(f"stemma attach exit {code}", flush=True)
                 attached = True
             time.sleep(LIMITS.poll_interval_s)
