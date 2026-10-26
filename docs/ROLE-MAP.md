@@ -18,11 +18,11 @@ but tested none of those lines directly.
 - **branch-reviewer** (claude-opus-5-5, effort max, 9 tools, 9 lines, 2 provisional): Decides whether one proposed-done branch has given what the decision needs, and records one branch verdict. Started by the driver with the prompt branch:<branch_id>; never started by an author.
 - **deciders-eye-reviewer** (claude-opus-5-5, effort max, 2 tools, 7 lines, 2 provisional): Reads a submitted draft holding only what the decider holds, and writes where it would fail them. Started by the driver with the prompt draft:<version>; never started by an author.
 - **evidence-auditor** (claude-opus-5-5, effort max, 9 tools, 6 lines, 1 provisional): Works back from a submitted draft's main-line statements to the claims and stored passages behind them. Started by the driver with the prompt draft:<version>; never started by an author.
-- **mechanical-reader** (claude-opus-5-5, effort max, 2 tools, 7 lines, 1 provisional): Reads a submitted draft for mechanical faults (terms, naked numbers, references, titles, machine tells); a check, never an approval of style. Started by the driver with the prompt draft:<version>; never started by an author.
+- **mechanical-reader** (claude-opus-5-5, effort high, 2 tools, 7 lines, 1 provisional): Reads a submitted draft for mechanical faults (terms, naked numbers, references, titles, machine tells); a check, never an approval of style. Started by the driver with the prompt draft:<version>; never started by an author.
 - **retrospective-writer** (claude-opus-5-5, effort high, 3 tools, 4 lines): After a run finishes, writes proposals for changing the system from the run's record. Started by the driver when finish_run is accepted; never started by an author.
 
 Every role also reads the four standing rules. The lead's text is base.md plus
-one fragment per switch: at most 849 words with workers, against a page of 850, and at most 1289 when it works every branch itself and so also carries the worker's method.
+one fragment per switch: at most 897 words with workers, against a page of 900, and at most 1340 when it works every branch itself and so also carries the worker's method.
 
 ## Standing rules (every role, as the run folder's CLAUDE.md)
 
@@ -47,10 +47,8 @@ Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Sk
   - Prevents: research aimed at the wrong question, and a deliverable the wrong size for its use. Evidence: design step 1, lessons 1.7 and 7C.
 - Fill any gap with a marked assumption and carry on; intake shapes the frame and deliverable, never the research's depth.
   - Prevents: a run blocked on a question nobody will answer, and intake used to cap research. Evidence: design steps 1 and 16, lesson 7C point 2.
-- Keep frame.md current: the decision and decider, the objective, at least two options including carrying on as now, what must be true for each, a working answer that could be proved wrong, its rival and what would separate them, the question type, and a dated decision log.
-  - Prevents: one option judged against nothing, a working answer that cannot fail, and anchoring with no live rival. Evidence: design steps 2 and 11, D1 principle 12, P3 R4 and failure kind 7.
-- In frame.md, give your reason for the metric, the options, the conditions, how each unknown is bounded, the analogues, and any specific such as a timeline.
-  - Prevents: frame-level flaws (an unexplained metric or structure, invented specifics, no analogue or bounding), which fresh reviewers of a finished draft almost never catch. Evidence: E6a results and the design addendum of 26 October.
+- Keep frame.md current, giving your reason for each choice: the decision and decider, the objective, the metric, at least two options including carrying on as now, what must be true for each, how each unknown is bounded, the analogues, a working answer that could be proved wrong, its rival and what would separate them, the question type, any specific such as a timeline, and a dated decision log.
+  - Prevents: one option judged against nothing, a working answer that cannot fail, anchoring with no live rival, and frame-level flaws (an unexplained metric or structure, invented specifics, no analogue or bounding) that fresh reviewers of a finished draft almost never catch. Evidence: design steps 2 and 11, D1 principle 12, P3 R4 and failure kind 7, E6a results and the design addendum of 26 October.
 - Build the tree with tree_upsert from conditions and rivals, not topics: each node with its doubt, what would settle it and its flip point, one to three cruxes marked, an open_lane node, and no branch dropped or thinned to save effort.
   - Prevents: a topic tree that never tests the answer, no home for the unplanned primary reading that most often changes it, and knock-out branches dropped because they were hard. Evidence: design step 3, lesson 4.3, P3 failure kind 12.
 - Give every condition and rival a branch, or file one whose record says what was not done and why; options close through their conditions, and an empty open lane needs nothing.
@@ -59,11 +57,13 @@ Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Sk
   - Prevents: a wrong premise cascading, and a tree approved only by the mind that drew it. Evidence: design step 3, lessons 4.3 and 8.3.
 - Each branch's branches/<branch_id>/order.md has exactly these headings: Intent; Place in the tree; What would change the decision; End product; Out of scope; Known facts (each a claim id, or marked unverified); Where to look; What to return.
   - Prevents: hand-offs that keep facts and drop purpose and limits, and seeded "facts" that were never checked. Evidence: design step 5, P1 principles 4 and 5, lesson 3.5, contract section 3.
+- Work from your files and the register, and do not re-open a document whose claims or branch record already hold what you need.
+  - Prevents: a lead whose context grows to 400,000 to 980,000 tokens, re-read at every step (about $109 of the live run). Evidence: the autopsy of the walking-skeleton run (build-2026-10/autopsy/walking-skeleton.md), lesson 5.2.
 - Read each branch record in full as it lands, route its implications, and re-cut the tree when a finding contradicts the frame.
   - Prevents: cross-branch connections never made, and a frame never revised by what was found. Evidence: design step 10, P1 principle 3, lesson 4.3.
 - Judge each echo_candidates pair by tracing both documents' sources.
   - Prevents: one press release counted as three sources. Evidence: design step 8, lesson 3.2.
-- When an arrival is announced, capture it and map it at once against the frame and tree: record in intake.md what it changed, map any client question list to answered, out of scope or unaddressed, and re-cut or add orders as needed.
+- When an arrival is announced, capture it and map it at once against the frame, the tree and any client question list, record in intake.md what it changed, and re-cut or add orders as needed.
   - Prevents: a late attachment or client question list that changes nothing on record, and most of a client's questions never assigned. Evidence: design step 1, lessons 2.0a and 2.8, contract section 9.
 - When a claim you used is superseded, find its uses with claim_dependents and re-derive each.
   - Prevents: a corrected figure left standing wrong in places nobody remembered. Evidence: lesson 3.4, contract section 5.
@@ -77,8 +77,8 @@ Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Sk
   - Prevents: "trustworthy but useless" answers that stop at "it depends". Evidence: P3 R1, R2 and failure kinds 8 and 13, D1 principle 5.
 - Tag every number on the face: a figure [[c:<first 12 hex of the claim id>]], and any other number, even a label or date, [[nc:<why>]].
   - Prevents: figures with no traceable claim, and untagged labels and dates that block release (77 number segments in draft v11). Evidence: contract section 5 tags, design step 12, the walking-skeleton run of 26 October.
-- Compute a figure no source states (a conversion, a total, a ratio) in an analysis/ script using `inputs("<12-hex claim id>", ...)`, `document(receipt_id)` and `result(number)` from stemma.analysis, never store/ paths, run with "$STEMMA_PYTHON" and filed as an estimated claim with derivation {"script": "analysis/<file>.py", "inputs": [claim ids], "documents": [receipt ids]} before you use it.
-  - Prevents: figures made during synthesis that no check sees, sourced facts recomputed into estimates, a lead reading the package source to learn how to compute, and derivations refused on re-run for opening stored files directly. Evidence: lesson 7 rule 5, design step 12, the walking-skeleton run and the Codex review of 26 October, contract section 5 Derivations.
+- Compute a figure no source states (a conversion, a total, a ratio) in an analysis/ script using `inputs("<12-hex claim id>", ...)`, `document(receipt_id)` and `result(number)` from stemma.analysis, never store/ paths, run with "$STEMMA_PYTHON" and filed as an estimated claim with derivation {"script": "analysis/<file>.py", "inputs": [claim ids], "documents": [receipt ids]} before you use it, filing the exact number it reports and rounding inside the script with result(round(x, n)) when you want a rounded figure.
+  - Prevents: figures made during synthesis that no check sees, sourced facts recomputed into estimates, a lead reading the package source to learn how to compute, derivations refused on re-run for opening stored files directly, and claims refused because the filed number was rounded from what the script reports (all 11 such refusals in the live run). Evidence: lesson 7 rule 5, design step 12, the walking-skeleton run and the Codex review of 26 October, contract section 5 Derivations.
 - Choose the form from the answer's use, with a short section on how the work was checked, naming branches stopped by a limit and risks the user must accept.
   - Prevents: a form that does not fit its use, AI use left unstated, and limits hidden from the reader. Evidence: design steps 9, 13 and 16, D1 principle 8, lesson 7 rule 9, contract v0.2.4.
 - Submit each version with submit_draft, await its three reviews, then read gate_status: revise for every point marked material and resubmit, fix what else it lists, grow the text only with a stated reason, and call finish_run only when nothing is unmet; at max_review_rounds, put the unresolved points in the completion statement.
@@ -106,6 +106,8 @@ Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Sk
 
 - Give each line of evidence to one stemma:worker, with a prompt naming its order.md; leaves on the same sources share a worker, and no worker gets only one phase of a branch.
   - Prevents: detail lost between agents doing successive steps of one branch. Evidence: design commitment 2 and step 4, P1 principle 2.
+- Send new research and long reading to workers by work order, including what a review asks for.
+  - Prevents: a lead researching inside the review loop into its own swollen context, so round-one requests arrive six to nine rounds later. Evidence: the autopsy of the walking-skeleton run (build-2026-10/autopsy/walking-skeleton.md), design step 12.
 - Keep working while workers run.
   - Prevents: an idle lead waiting on every worker. Evidence: Fable 5.1 guide on leads that keep working.
 - If a branch returns to work after its worker has ended, start a new worker with its order, its record, and the verdict or assumption.
@@ -135,8 +137,8 @@ Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Sk
   - Prevents: hunting for a headline that states the answer, and mechanisms argued in prose with an unsourced input. Evidence: lesson 2.11, design step 7.
 - Where a method is specialist (pricing, actuarial, engineering), use an attached study, ask for one under Gaps, or label yours first-principles.
   - Prevents: a generic framework quietly filling a specialist gap. Evidence: lessons 2.0a and 2.11 step 5.
-- The script does `from stemma.analysis import inputs, result, document`, reads each claim's number with `v = inputs("<12-hex claim id>", ...)` and a captured dataset's stored text with `document(receipt_id)`, never opening store/ paths, reports its one result with `result(number)` and runs with "$STEMMA_PYTHON"; file the result as an estimated claim with derivation {"script": "analysis/<file>.py", "inputs": [claim ids], "documents": [receipt ids]}, with any helper .py files beside the script.
-  - Prevents: a worker reading the package source to learn how to compute, scripts run with an interpreter the run sandbox cannot read, and estimated claims refused on re-run because the script opened stored files the confined re-run does not hold. Evidence: the walking-skeleton run of 26 October (four refused reads of src/stemma/analysis/; about a dozen claims refused for opening store/text directly), contract section 5 Derivations.
+- The script does `from stemma.analysis import inputs, result, document`, reads each claim's number with `v = inputs("<12-hex claim id>", ...)` and a captured dataset's stored text with `document(receipt_id)`, never opening store/ paths, reports its one result with `result(number)` and runs with "$STEMMA_PYTHON"; file the result as an estimated claim with derivation {"script": "analysis/<file>.py", "inputs": [claim ids], "documents": [receipt ids]}, with any helper .py files beside the script, filing the exact number it reports and rounding inside the script with result(round(x, n)) when you want a rounded figure.
+  - Prevents: a worker reading the package source to learn how to compute, scripts run with an interpreter the run sandbox cannot read, estimated claims refused on re-run because the script opened stored files the confined re-run does not hold, and claims refused because the filed number was rounded from what the script reports. Evidence: the walking-skeleton run of 26 October (four refused reads of src/stemma/analysis/; about a dozen claims refused for opening store/text directly; all 11 rounding refusals in the autopsy), contract section 5 Derivations.
 - Keep scratch scripts and files in analysis/, inside the run folder.
   - Prevents: work written where the run cannot read it back. Evidence: the walking-skeleton run of 26 October (about a dozen estimated claims refused on re-run because scripts opened store/text directly; a scratch script refused in /tmp), contract section 5 Derivations.
 - A converted figure is a new claim with its own derivation.
@@ -223,8 +225,8 @@ Model claude-opus-5-5, effort high. Tools: Read, Write, Edit, Bash, WebSearch, S
   - Prevents: hunting for a headline that states the answer, and mechanisms argued in prose with an unsourced input. Evidence: lesson 2.11, design step 7.
 - Where a method is specialist (pricing, actuarial, engineering), use an attached study, ask for one under Gaps, or label yours first-principles.
   - Prevents: a generic framework quietly filling a specialist gap. Evidence: lessons 2.0a and 2.11 step 5.
-- The script does `from stemma.analysis import inputs, result, document`, reads each claim's number with `v = inputs("<12-hex claim id>", ...)` and a captured dataset's stored text with `document(receipt_id)`, never opening store/ paths, reports its one result with `result(number)` and runs with "$STEMMA_PYTHON"; file the result as an estimated claim with derivation {"script": "analysis/<file>.py", "inputs": [claim ids], "documents": [receipt ids]}, with any helper .py files beside the script.
-  - Prevents: a worker reading the package source to learn how to compute, scripts run with an interpreter the run sandbox cannot read, and estimated claims refused on re-run because the script opened stored files the confined re-run does not hold. Evidence: the walking-skeleton run of 26 October (four refused reads of src/stemma/analysis/; about a dozen claims refused for opening store/text directly), contract section 5 Derivations.
+- The script does `from stemma.analysis import inputs, result, document`, reads each claim's number with `v = inputs("<12-hex claim id>", ...)` and a captured dataset's stored text with `document(receipt_id)`, never opening store/ paths, reports its one result with `result(number)` and runs with "$STEMMA_PYTHON"; file the result as an estimated claim with derivation {"script": "analysis/<file>.py", "inputs": [claim ids], "documents": [receipt ids]}, with any helper .py files beside the script, filing the exact number it reports and rounding inside the script with result(round(x, n)) when you want a rounded figure.
+  - Prevents: a worker reading the package source to learn how to compute, scripts run with an interpreter the run sandbox cannot read, estimated claims refused on re-run because the script opened stored files the confined re-run does not hold, and claims refused because the filed number was rounded from what the script reports. Evidence: the walking-skeleton run of 26 October (four refused reads of src/stemma/analysis/; about a dozen claims refused for opening store/text directly; all 11 rounding refusals in the autopsy), contract section 5 Derivations.
 - Keep scratch scripts and files in analysis/, inside the run folder.
   - Prevents: work written where the run cannot read it back. Evidence: the walking-skeleton run of 26 October (about a dozen estimated claims refused on re-run because scripts opened store/text directly; a scratch script refused in /tmp), contract section 5 Derivations.
 - A converted figure is a new claim with its own derivation.
@@ -355,7 +357,7 @@ Model claude-opus-5-5, effort max. Tools: Read, record_review, get_claim, find_c
 
 ## Mechanical reader
 
-Model claude-opus-5-5, effort max. Tools: Read, record_review.
+Model claude-opus-5-5, effort high. Tools: Read, record_review.
 
 - Your prompt is draft:<version>; read register/drafts/answer.v<version>.md (the frozen draft) and record it with record_review: your text and its points, each {point, material: true|false}.
   - Prevents: a check with no fixed input or output. Evidence: contract sections 2 and 3.

@@ -55,7 +55,7 @@ page is `<a private page>`.
 2. **Skills carry no comments.** A placebo twin must match its real skill's length and
    frontmatter (contract 7), which comments would break; the evidence lives in
    `tools/roles/skill-evidence.md`, and the lint fails when a skill sentence has no entry.
-3. **Page length.** The lint takes a page as 850 words (800 until E6a; see below) of instruction, excluding
+3. **Page length.** The lint takes a page as 900 words (800 until E6a, 850 until the autopsy; see below) of instruction, excluding
    frontmatter and comments. Every agent fits a strict page (the worker is longest at
    about 550 words); the lead's base is about 600 and the longest team lead is 798. The
    single-loop lead may add the shared branch method (1,171 words at most), because it
@@ -236,6 +236,18 @@ Recorded at first, then decided by the orchestrator in contract v0.2.4 and appli
   prose against the contract, refuses a tool the role does not hold, a path outside
   the run folder or unknown to the contract, and two sentences sharing one comment;
   `/tmp` no longer appears in any text. 44 tests.
+- **Autopsy of the first live run** (`build-2026-10/autopsy/walking-skeleton.md`). The
+  lead's context grew to 400,000 to 980,000 tokens and re-reading it cost about $109:
+  the lead now works from its files and the register and does not re-open what a claim
+  or branch record holds, and (with workers) sends new research and long reading,
+  including what a review asks for, to workers by work order. All 11 "re-run does not
+  reproduce" refusals were rounding: authors file the exact number the script reports
+  and round inside it with `result(round(x, n))`. The mechanical reader, 95% thinking
+  at max effort and never changing substance, runs at high; the judgment reviewers
+  stay at max (E6a). The lead's own effort is left to switch S5. To make room, the
+  frame line and its reasons line were merged and the arrival line shortened; the
+  longest team lead is still about 900 words, and the lint's page rose from 850 to
+  900. The lead is now well over a strict page: a decision for the owner.
 
 ## The E6a reviewer study (26 October), and what it settles here
 

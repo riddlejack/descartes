@@ -145,8 +145,9 @@ SWITCHES: tuple[tuple[str, tuple[str, ...]], ...] = (
 # taken as this many words of instruction, excluding frontmatter and comments: one
 # dense printed page. Raised from 800 on 26 October, when lines from the live run
 # (the analysis call) and from E6a (the frame's reasons) pushed the longest team
-# lead past it; a stricter page (500 to 600 words) fits every role but the lead.
-PAGE_WORDS = 850
+# lead past it, and to 900 on 27 October for the autopsy's context and rounding
+# lines; a stricter page (500 to 600 words) fits every role but the lead.
+PAGE_WORDS = 900
 
 # Resource limit: how far a placebo skill's body may differ in length from its real
 # twin's, as a fraction of the real body's characters (contract 7: "share length").

@@ -2,7 +2,7 @@
 name: mechanical-reader
 description: Reads a submitted draft for mechanical faults (terms, naked numbers, references, titles, machine tells); a check, never an approval of style. Started by the driver with the prompt draft:<version>; never started by an author.
 model: claude-opus-5-5
-effort: max
+effort: high
 tools:
   - Read
   - mcp__plugin_stemma_stemma__record_review

@@ -105,7 +105,7 @@ def test_small_model_fails(rm: ModuleType) -> None:
 
 
 def test_low_effort_fails(rm: ModuleType) -> None:
-    edit(rm.AGENTS_DIR / "mechanical-reader.md", "effort: max", "effort: medium")
+    edit(rm.AGENTS_DIR / "mechanical-reader.md", "effort: high", "effort: medium")
     assert "below high" in errors_of(rm)
 
 
