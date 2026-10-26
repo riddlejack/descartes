@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 from test_filing import EV, estimated, lookup_ab
-from test_store import LEAD, FakeEvidence, checker_for, ready_run
+from test_store import LEAD, WORKER, FakeEvidence, checker_for, claim, ready_run
 
 from stemma.register import checks_api
 from stemma.register.derivation import rerun
@@ -82,3 +82,36 @@ def test_recorded_release_block_refuses_and_withdraws(reg: Register) -> None:
     checks_api.block_release(reg.run_dir, "revoking session s-x failed")
     with pytest.raises(Refused, match="release is blocked"):
         reg.finish_run(LEAD, 1)
+
+
+def test_no_holds_after_this_session_s_correction_was_refused(reg: Register) -> None:
+    # Walking-skeleton run, 12:40-12:41: a checker found an estimated figure wrong in a
+    # detail; the register refused its correction twice (no derivation, then one that did
+    # not reproduce), and it recorded holds on the claim it had just found wrong.
+    cid = reg.file_claim(WORKER, claim())["claim_id"]
+    chk = checker_for(reg, cid)
+    wrong_estimate = claim(tier="estimated", support=[],
+                           statement="Acme Widgets' fiscal 2025 revenue was about 1.1bn.")
+    with pytest.raises(Refused, match="needs a derivation"):
+        reg.record_claim_verdict(chk, cid, "holds_with_correction", "low end overstated",
+                                 corrected_claim=wrong_estimate)
+    with pytest.raises(Refused, match="correction of this claim was refused"):
+        reg.record_claim_verdict(chk, cid, "holds", "holds; the author should refile")
+    assert reg.get_claim(cid)["verdict"] is None
+    out = reg.record_claim_verdict(chk, cid, "not_supported", "low end is 1.1bn, not 1.2bn")
+    assert out["verdict"] == "not_supported"
+
+
+def test_a_refused_correction_binds_only_its_own_session_and_claim(reg: Register) -> None:
+    cid = reg.file_claim(WORKER, claim())["claim_id"]
+    chk = checker_for(reg, cid, "s-first")
+    with pytest.raises(Refused):
+        reg.record_claim_verdict(chk, cid, "holds_with_correction", "x",
+                                 corrected_claim=claim(tier="estimated", support=[]))
+    # The driver relaunches the check: a fresh session judges afresh.
+    req = checks_api.for_prompt(reg.run_dir, "claim-checker", f"claim:{cid}")[-1].request
+    checks_api.mark_launched(reg.run_dir, req.request_id, "s-second", "claude-opus-5-5",
+                             "high", relaunch=True)
+    checks_api.mark_verified(reg.run_dir, "s-second", "claude-opus-5-5", "high")
+    second = Caller("stemma:claim-checker", None, "s-second")
+    assert reg.record_claim_verdict(second, cid, "holds", "ok")["verdict"] == "holds"

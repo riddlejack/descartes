@@ -282,6 +282,30 @@ class Register:
         self._session_prompt_is(caller, "claim-checker", f"claim:{cid}")  # early, cheap refusal
         if verdict not in VERDICTS:
             raise Refused(f"Refused: verdict must be one of {', '.join(VERDICTS)}.")
+        if verdict == "holds" and self._correction_refused(caller.session_id, cid):
+            # The session found the claim wrong in a detail: holds would contradict it.
+            raise Refused("Refused: this session's correction of this claim was refused, so "
+                          "it found an error; holds would contradict that. The verdicts "
+                          "left are not_supported and could_not_check.")
+        try:
+            return self._record_claim_verdict(caller, cid, verdict, evidence, corrected_claim)
+        except Refused as exc:
+            if verdict == "holds_with_correction":
+                jsonl.append(self._refused_corrections_log(),
+                             {"session_id": caller.session_id, "claim_id": cid,
+                              "reason": str(exc)[:500],
+                              "at": datetime.now(UTC).isoformat(timespec="milliseconds")})
+            raise
+
+    def _refused_corrections_log(self) -> Path:
+        return self.run_dir / "register" / "refused_corrections.jsonl"
+
+    def _correction_refused(self, session_id: str | None, cid: str) -> bool:
+        return any(r["session_id"] == session_id and r["claim_id"] == cid
+                   for r in jsonl.read_all(self._refused_corrections_log()))
+
+    def _record_claim_verdict(self, caller: Caller, cid: str, verdict: str, evidence: str,
+                              corrected_claim: dict[str, Any] | None) -> dict[str, Any]:
         if not isinstance(evidence, str) or not evidence.strip():
             raise Refused("Refused: a verdict carries its evidence.")
         if (verdict == "holds_with_correction") != (corrected_claim is not None):
