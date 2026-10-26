@@ -99,6 +99,7 @@ class Session:
     result: dict[str, Any] | None = None
     killed_reason: str | None = None
     revoke_reason: str | None = None  # a check that ran on the wrong model or effort
+    rate_limited: dict[str, Any] | None = None  # the account's usage limit refused it
     reader: threading.Thread | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -180,6 +181,14 @@ def _follow(run_dir: Path, s: Session, on_init: OnInit, grace_s: float,
                             session_id=s.spec.session_id, subtype=sub,
                             detail={k: v for k, v in msg.items()
                                     if k in ("compact_metadata", "trigger", "pre_tokens")})
+            elif mtype == "rate_limit_event":
+                limit = msg.get("rate_limit_info")
+                if isinstance(limit, dict) and limit.get("status") == "rejected":
+                    s.rate_limited = limit
+                    events.emit(run_dir, "usage_limit_hit", session=s.spec.name,
+                                session_id=s.spec.session_id,
+                                limit_type=limit.get("rateLimitType"),
+                                resets_at=limit.get("resetsAt"))
             elif mtype == "result":
                 s.result = msg
 

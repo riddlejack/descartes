@@ -124,6 +124,14 @@ def main() -> int:
         out({"type": "system", "subtype": "compact_boundary",
              "compact_metadata": {"trigger": "auto", "pre_tokens": 1}})
     time.sleep(float(cfg.get("sleep_s", 0)))
+    if cfg.get("rate_limited"):  # the account's usage limit refused the turn
+        out({"type": "rate_limit_event", "session_id": sid,
+             "rate_limit_info": {"status": "rejected", "rateLimitType": "five_hour"}})
+        out({"type": "result", "subtype": "success", "is_error": False, "result": "",
+             "session_id": sid, "num_turns": 0, "permission_denials": []})
+        record["end"] = time.time()
+        rec_path.write_text(json.dumps(record))
+        return 1
     out({"type": "assistant", "message": {"model": model, "content": [
         {"type": "text", "text": "ok"}]}, "session_id": sid})
     code = int(cfg.get("exit_code", 0))

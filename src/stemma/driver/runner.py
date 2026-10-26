@@ -136,8 +136,13 @@ OUTCOME_CODES: Final = {
     "lead_failed": 4,  # the lead could not start or crashed
     "release_withdrawn": 5,  # released, then a session it rested on was revoked
     "revocation_failed": 6,  # a wrong-model check could not be revoked: release blocked
+    "usage_limited": 7,  # the account's usage limit stopped sessions; resume continues
     "driver_stopped": 130,  # SIGTERM or SIGINT reached the driver
 }
+
+# Ends of a checking session that say nothing about the check itself, so resume runs it
+# again (invariant shared with the register: these outcomes mean it never did its job).
+RETRYABLE_OUTCOMES: Final = checks_api.RETRYABLE_OUTCOMES
 
 Revoke = Callable[[Path, str, str], None]
 Released = Callable[[Path], bool]
@@ -318,10 +323,15 @@ class Driver:
                                relaunch=relaunch)
 
     def relaunch_unended_checks(self) -> None:
+        """On resume: relaunch every check whose session never ended, and every check
+        whose session ended without doing its job for a reason outside it (the usage
+        limit, a crash, a failed launch). Same request and round, a new session."""
+        self.state["usage_limited"] = False
         for rid, st in sorted(self.api.states(self.run_dir).items()):
-            if st.status == "running":
+            retry = st.status == "ended" and st.outcome in RETRYABLE_OUTCOMES
+            if st.status == "running" or retry:
                 events.emit(self.run_dir, "check_relaunch", request_id=rid,
-                            previous_session_id=st.session_id)
+                            previous_session_id=st.session_id, previous_outcome=st.outcome)
                 self._launch_check(st.request, relaunch=True)
 
     # ----- watching ----------------------------------------------------------------
@@ -378,6 +388,8 @@ class Driver:
     def _outcome(self, s: Session) -> str:
         if s.revoke_reason is not None:
             return "model_mismatch"
+        if s.rate_limited is not None:
+            return "rate_limited"
         if s.killed_reason in ("canary_failed", "stopped_by_limit", "driver_stopped"):
             return s.killed_reason
         if s.init is None or s.killed_reason == "init_timeout":
@@ -393,6 +405,8 @@ class Driver:
         s.reap(self.limits.stop_grace_s)
         self._scan_transcripts(live, final=True)
         outcome = self._outcome(s)
+        if outcome == "rate_limited":
+            self.state["usage_limited"] = True
         code = s.proc.returncode if s.proc.returncode is not None else -1
         r = s.result or {}
         summary: dict[str, Any] = {k: r.get(k) for k in ("subtype", "is_error", "terminal_reason", "num_turns",
@@ -540,6 +554,15 @@ class Driver:
                 self._end(name, live)
             self.exit_code = 2
             return False
+        if any(lv.session.rate_limited is not None for lv in self.live.values()):
+            self.state["usage_limited"] = True
+        if self.state.get("usage_limited"):
+            # The account's usage limit refused a session: launching more only burns
+            # checks into failures. Let live sessions end; resume continues the run.
+            self._scan_artifacts()
+            busy = bool(self.live)
+            self.write_status("running" if busy else "stopped")
+            return busy
         launching = {lv.session.spec.request_id for lv in self.live.values()}
         for req in launch_order(self.api.pending_checks(self.run_dir)):
             if self._live_checks() >= self.limits.max_concurrent_checks:
@@ -580,6 +603,8 @@ class Driver:
         lead_outcome = self.state["lead"].get("outcome")
         if lead_outcome == "canary_failed":
             return "canary_failed"
+        if self.state.get("usage_limited") and not self.released(self.run_dir):
+            return "usage_limited"
         if self.state.get("release_blocked"):
             return "revocation_failed"  # whatever the register says, nothing stands
         if self.released(self.run_dir):

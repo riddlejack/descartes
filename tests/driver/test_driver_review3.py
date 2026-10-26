@@ -83,3 +83,29 @@ def test_reviews_start_before_a_claim_backlog() -> None:
     order = [r.request_id for r in launch_order(reqs)]
     assert order[:2] == ["b1", "d1"] and order[2:7] == [f"c{i}" for i in range(5)]
     assert order[-1] == "r1"
+
+
+def test_usage_limit_stops_launching_and_resume_reruns_the_checks(
+        cfg: DriverConfig, tmp: Path, fake: Fake, limits: Limits) -> None:
+    # Walking-skeleton run: the account's five-hour limit refused every session; the
+    # driver went on launching ~90 queued checks into failures, and resume would have
+    # skipped them because they had "ended".
+    from stemma.driver.runner import resume
+
+    fake.configure({"lead": {"sleep_s": 0.5, "rate_limited": True},
+                    "blind-framer": {"rate_limited": True}})
+    run = create_run(cfg, write_task(tmp), limits=limits)
+    for i in range(5):
+        checks_api.request_check(run, "claim-checker", "claim:" + f"{i:x}" * 64, "file_claim")
+    code = start(cfg, run, checks_api, limits)
+    assert code == OUTCOME_CODES["usage_limited"]
+    assert kinds(run, "usage_limit_hit")
+    claim_launches = [c for c in fake.calls() if c["role"] == "claim-checker"]
+    assert len(claim_launches) < 5  # it stopped launching once the limit was seen
+    # After the reset, resume relaunches the lead and every check that never did its job.
+    fake.configure({"lead": {"sleep_s": 0.3}})
+    resume(cfg, run, checks_api, limits)
+    states = checks_api.states(run).values()
+    assert all(s.status == "ended" and s.outcome == "completed" for s in states), [
+        (s.request.prompt, s.status, s.outcome) for s in states]
+    assert kinds(run, "check_relaunch")

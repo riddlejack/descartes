@@ -16,6 +16,10 @@ from typing import Any
 
 from stemma.register import jsonl, roles
 
+# Ends of a checking session that say nothing about the check (the usage limit, a crash,
+# a failed launch): such a check may be launched again (invariant, shared with the driver).
+RETRYABLE_OUTCOMES = frozenset({"rate_limited", "failed", "launch_failed"})
+
 
 class UnknownCheck(Exception):
     """A launch or end was recorded for a request that does not exist."""
@@ -125,8 +129,13 @@ def _mark(run_dir: Path, record: dict[str, Any], need: frozenset[str]) -> None:
 
 def mark_launched(run_dir: Path, request_id: str, session_id: str, model: str,
                   effort: str, relaunch: bool = False) -> None:
-    """Record a launch; `relaunch` allows it for a check whose session never ended."""
+    """Record a launch; `relaunch` allows it for a check whose session never ended, or
+    ended without doing its job for a reason outside it (see RETRYABLE_OUTCOMES)."""
     need = frozenset({"pending", "running"}) if relaunch else frozenset({"pending"})
+    if relaunch:
+        st = states(run_dir).get(request_id)
+        if st is not None and st.status == "ended" and st.outcome in RETRYABLE_OUTCOMES:
+            need = need | {"ended"}
     _mark(run_dir, {"kind": "launched", "request_id": request_id, "session_id": session_id,
                     "model": model, "effort": effort, "at": _now()}, need)
 
