@@ -84,6 +84,19 @@ class ChecksApi(Protocol):
     def states(self, run_dir: Path) -> dict[str, Any]: ...
 
 
+# Which pending checks start first when sessions are scarce (invariant: the flow of a run,
+# not a quality bar). Frame, branch and draft reviews gate the lead's next step; claim
+# checks are many and each gates only its own figure. Within a rank, oldest first.
+LAUNCH_RANK: Final = {"blind-framer": 0, "branch-reviewer": 1, "deciders-eye-reviewer": 2,
+                      "evidence-auditor": 2, "mechanical-reader": 2, "claim-checker": 3,
+                      "retrospective-writer": 4}
+
+
+def launch_order(pending: Sequence[CheckRequestLike]) -> list[CheckRequestLike]:
+    """Pending checks in launch order: by LAUNCH_RANK, then by request time."""
+    return sorted(pending, key=lambda r: (LAUNCH_RANK.get(r.role, 3), r.created_at))
+
+
 def real_checks_api() -> ChecksApi:
     return cast(ChecksApi, importlib.import_module("stemma.register.checks_api"))
 
@@ -528,7 +541,7 @@ class Driver:
             self.exit_code = 2
             return False
         launching = {lv.session.spec.request_id for lv in self.live.values()}
-        for req in self.api.pending_checks(self.run_dir):
+        for req in launch_order(self.api.pending_checks(self.run_dir)):
             if self._live_checks() >= self.limits.max_concurrent_checks:
                 break
             if req.request_id in launching or req.request_id in self.skipped:

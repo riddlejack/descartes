@@ -59,3 +59,27 @@ def test_wrong_model_session_is_never_verified(cfg: DriverConfig, tmp: Path, fak
     start(cfg, run, checks_api, limits, revoke=lambda *_a: None)
     framers = [c["session_id"] for c in fake.calls() if c["role"] == "blind-framer"]
     assert not set(framers) & checks_api.verified_sessions(run)
+
+
+def test_reviews_start_before_a_claim_backlog() -> None:
+    # Walking-skeleton run: 192 claim checks queued ahead of the three draft reviews.
+    from dataclasses import dataclass
+
+    from stemma.driver.runner import launch_order
+
+    @dataclass
+    class Req:
+        request_id: str
+        role: str
+        prompt: str
+        event: str
+        created_at: str
+
+    reqs = [Req(f"c{i}", "claim-checker", f"claim:{i}", "file_claim", f"t{i:03d}")
+            for i in range(5)]
+    reqs += [Req("d1", "deciders-eye-reviewer", "draft:1", "submit_draft", "t900"),
+             Req("b1", "branch-reviewer", "branch:b1", "propose_branch_done", "t950"),
+             Req("r1", "retrospective-writer", "retro:run", "finish_run", "t999")]
+    order = [r.request_id for r in launch_order(reqs)]
+    assert order[:2] == ["b1", "d1"] and order[2:7] == [f"c{i}" for i in range(5)]
+    assert order[-1] == "r1"
