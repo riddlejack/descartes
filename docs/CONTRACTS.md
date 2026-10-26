@@ -1,4 +1,4 @@
-# Contracts between the parts (v0.2.8)
+# Contracts between the parts (v0.2.9)
 
 These are the interfaces the parts agree on, so they can be built in parallel. The
 design (`DESIGN-v1.md`, cited as "step n") says what the system does; this file says
@@ -381,6 +381,14 @@ Each guard has a producer in the live path, or it would block every run.
 - Input: `task.json` with `question`, optional `intake` answers, `attachments`,
   optional `as_of`, optional `switches`. The sealed side adapts its task package to
   this; the driver never reads benchmark material itself.
+- **Attachments mid-run** (design step 1: an attachment slot open at every stage; a
+  client's question list arriving mid-run is mapped at once). `stemma attach <run_id>
+  <file>` copies the file into `task/arrivals/<n>/` (tool-only), records an event, and
+  queues a notice; the lead's next tool call receives the notice through a hook
+  (`additionalContext`, *B verifies*), never through a file the lead must remember to
+  check. The lead maps the arrival against its frame and tree at once and records
+  what it changed in `intake.md`. The sealed side uses this to deliver a test task's
+  second wave when its own rule says the wave arrives.
 - It launches the lead and every checking session, verifies the resolved model and
   effort of each (for the lead's subagents, from their transcripts, which land in
   the clean config's `projects/<cwd-slug>/`; a copied config folder is not signed
