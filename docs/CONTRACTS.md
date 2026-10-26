@@ -1,4 +1,4 @@
-# Contracts between the parts (v0.2.9)
+# Contracts between the parts (v0.2.10)
 
 These are the interfaces the parts agree on, so they can be built in parallel. The
 design (`DESIGN-v1.md`, cited as "step n") says what the system does; this file says
@@ -191,7 +191,12 @@ from the harness), `created_at`, each code check's result, `supersedes`,
   A failure refuses the claim and names the failed check, nothing more.
 - **Derivations.** A script in `analysis/` reads its inputs only through
   `stemma.analysis.inputs()` (a mapping from the claim ids named in the derivation to
-  their values) and reports with `stemma.analysis.result(number)`. `file_claim`
+  their values) and `stemma.analysis.document(receipt_id)` (the stored text of a
+  capture the derivation names), and reports with `stemma.analysis.result(number)`.
+  A derivation is `{script, inputs: [claim ids], documents: [receipt ids]}`; the
+  re-run copies the script, its sibling `.py` files and exactly the named documents
+  into its sandbox, nothing else, so a figure computed from a captured dataset
+  re-runs from the stored bytes. No script opens `store/` paths directly. `file_claim`
   re-runs it in a subprocess with no network, no write access outside a temporary
   folder, and a recorded time limit, and compares the reported number with the
   claim's. Agent-written code never runs inside the MCP server's own process.
