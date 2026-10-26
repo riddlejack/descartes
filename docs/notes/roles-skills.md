@@ -22,7 +22,7 @@ page is `<a private page>`.
 - `tools/roles/shared/branch-work.md`: the worker's branch method, copied by `sync`
   into the worker and the single-loop lead fragment, so both arms of S2 carry the same
   method. `tools/roles/skill-evidence.md`: the failure and evidence behind every
-  sentence of every real skill. `tests/roles/`: 37 tests.
+  sentence of every real skill. `tests/roles/`: 44 tests.
 
 ## How it was shown to work, and what is not shown
 
@@ -55,7 +55,7 @@ page is `<a private page>`.
 2. **Skills carry no comments.** A placebo twin must match its real skill's length and
    frontmatter (contract 7), which comments would break; the evidence lives in
    `tools/roles/skill-evidence.md`, and the lint fails when a skill sentence has no entry.
-3. **Page length.** The lint takes a page as 800 words of instruction, excluding
+3. **Page length.** The lint takes a page as 850 words (800 until E6a; see below) of instruction, excluding
    frontmatter and comments. Every agent fits a strict page (the worker is longest at
    about 550 words); the lead's base is about 600 and the longest team lead is 798. The
    single-loop lead may add the shared branch method (1,171 words at most), because it
@@ -176,19 +176,107 @@ Recorded at first, then decided by the orchestrator in contract v0.2.4 and appli
   from a row still has to be filed with a quotation found in its receipt, and
   derivations read only claims, so code already stops an unfiled row figure.
 
-## Lines that depend on the pending E6a reviewer study (contract 10)
+## Contract v0.2.9 (attachments mid-run)
 
-Marked `E6a-provisional` in their comments and listed in `docs/ROLE-MAP.md`:
-- blind-framer: the four named points of its goal;
-- branch-reviewer: reading frame.md and tree.json (an input beyond the goal that also
-  shows it the working answer), and its four questions;
-- claim-checker: the five questions;
-- deciders-eye-reviewer: the named failures in its goal, and the field expert's two
-  questions;
-- evidence-auditor: the focus on figures made during synthesis;
-- mechanical-reader: its list of mechanical faults.
-Each reviewer's goal sentence, its own inputs and its line against needless hedging
-are not provisional.
+- One lead line, replacing the earlier "capture each new file in task/": when the hook
+  announces an arrival, the lead captures it, maps it at once against the frame and
+  tree, records in intake.md what it changed, maps any client question list to
+  answered, out of scope or unaddressed, and re-cuts or adds orders where the
+  decision's needs change (design step 1, lessons 2.0a and 2.8). No worker or checker
+  line: arrivals reach workers only through the orders the lead amends. A few words
+  elsewhere in the lead were trimmed to keep the longest team lead within its page.
+
+## From the walking-skeleton run (26 October)
+
+- A worker tried four times to read `src/stemma/analysis/__init__.py` because its text
+  said "compute through stemma.analysis" without the call. The shared branch method
+  and the lead now give the call shape: `from stemma.analysis import inputs, result`,
+  `v = inputs("<12-hex claim id>", ...)`, `result(number)`, run with
+  `"$STEMMA_PYTHON"` (python3 on PATH is unreadable under the run's read sandbox), and
+  derivation `{"script": "analysis/<file>.py", "inputs": [ids]}` on an estimated claim.
+  The longest team lead is 799 words after small trims.
+- A worker rendered PDF pages to PNG in /tmp and the read guard refused them. The
+  shared branch method now says to Read the stored PDF (`store/bytes/<sha256>`) with
+  the pages parameter, and to put any rendered image in analysis/. No lead line sends
+  the lead to page images, so the lead's own text is unchanged.
+- Scripts that opened `store/text/<sha>.txt` directly had about a dozen estimated
+  claims refused on the confined re-run. The branch method and the lead now read a
+  captured dataset with `document(receipt_id)`, name it in the derivation's
+  "documents" list, may keep helper `.py` files beside the script, and never open
+  `store/` paths (contract v0.2.10). Scratch scripts and files go in analysis/, never
+  /tmp, after a worker's write there was refused.
+- A claim checker found an estimate's low end wrong, could not file a corrected
+  estimate (a correction to an estimated claim needs a derivation that reproduces it,
+  and the checker has no Write or Bash), and recorded holds while naming the error
+  (claim 71728d0fc75a). The checker now records not_supported for an estimate it finds
+  wrong, naming the error and the value it found, and never holds after finding an
+  error; part B adds a register guard to the same effect.
+- **The run never released** (`docs/notes/walking-skeleton.md` on branch
+  claude/walking-skeleton; contract v0.3). The lead was told to call finish_run only
+  when a round changed nothing material; every round changed something, so it wrote 11
+  drafts in 10 rounds (1,865 to 4,765 words) and never read the gate. Now it calls
+  finish_run after every review round, fixes exactly what the refusal lists, revises
+  only what a reviewer marked material (the three final reviewers now mark each point
+  material or minor), grows the text only with a stated reason, and at the run's
+  max_review_rounds lists unresolved criticisms in the completion statement. Seven
+  nodes (five options, the open lane, one condition) had no branch and could never
+  close: every condition and rival now gets a branch, or one whose record says what was
+  not done and why; options close through their conditions; an empty open lane needs
+  nothing. Draft v11 had 77 untagged number segments, many of them labels and dates:
+  every number on the face now carries a c tag or an nc tag with its reason.
+- **Codex review and contract v0.3.1.** Calling finish_run to read the gate would have
+  released a draft whose reviews raised material points, so the lead now reads
+  `gate_status(version)` after every round, revises for every point marked material
+  and resubmits, and calls finish_run only when nothing is unmet. The final reviewers
+  record `record_review(text, points)` with each point's materiality, material only
+  if it would change the answer, a figure or the decider's action. The worker's gap
+  line now carries the reviewer's cost clause (it invited endless search), and the
+  lead computes only figures no source states (it invited sourced facts turned into
+  estimates). The lint now also checks every snake_case name and every path in the
+  prose against the contract, refuses a tool the role does not hold, a path outside
+  the run folder or unknown to the contract, and two sentences sharing one comment;
+  `/tmp` no longer appears in any text. 44 tests.
+
+## The E6a reviewer study (26 October), and what it settles here
+
+E6a gave 36 fresh reviewers only the question and one of two answers. They reliably
+caught flaws inside an answer's frame (a weak figure, a missing size, a claim beyond
+its evidence) and almost never frame-level flaws (why this metric, why this
+structure, invented specifics, no analogue or bounding), whatever they were given.
+Generic standards (ICD 203) did no better than no criteria; medium effort did worst;
+Fable missed flaws Opus caught. Its limits: two answers to one question, reviewers
+could not open sources, no author history, model-judged matching.
+
+Applied:
+- **The lead's frame states its reasons** for the metric, the options, the conditions,
+  how each unknown is bounded, the analogues, and any specific such as a timeline,
+  because frame quality has to be built upstream.
+- **The blind framer** builds its own frame first (as before), now with its reasons for
+  the metric, the cut and the bounding, and compares those reasons with the lead's.
+- **Reviewers run on Opus at max effort**: the three final reviewers already did; the
+  branch reviewer is raised from high. The claim checker stays at high: E6a tested
+  reviewers of finished answers, not claim checking, and the design sets checkers at
+  high.
+- **No generic standards list** is in any role (none was; confirmed).
+
+Markers, line by line:
+- decider's-eye reviewer, its named failures and the field expert's two questions:
+  left `E6a-provisional`, as the orchestrator asked, pending one fact about P3's
+  wording.
+- blind framer's critique points: provisional, not settled; E6a tested no blind-first
+  reviewer (the design addendum proposes that component test).
+- branch reviewer reading frame.md and tree.json: provisional, not settled; E6a's
+  reviewers had no frame or author history.
+- branch reviewer's four questions: provisional, not settled; E6a tested reviews of
+  finished answers, not of branches.
+- claim checker's five questions and the evidence auditor's focus: provisional, not
+  settled; E6a's reviewers could not open sources.
+- mechanical reader's list: provisional, not settled; E6a found generic lists no
+  better than none, and this list is specific to lesson 7's faults, which it did not
+  test.
+
+The page limit in the lint rose from 800 to 850 words: the analysis call (from the
+live run) and the frame's reasons (from E6a) pushed the longest team lead to 807.
 
 ## For part B
 

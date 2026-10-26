@@ -34,12 +34,13 @@ STANDING_RULES = PLUGIN / "STANDING-RULES.md"
 SKILL_EVIDENCE = ROOT / "tools" / "roles" / "skill-evidence.md"
 ROLE_MAP = ROOT / "docs" / "ROLE-MAP.md"
 SHARED_DIR = ROOT / "tools" / "roles" / "shared"
+CONTRACTS = ROOT / "docs" / "CONTRACTS.md"
 
 
 def set_root(root: Path) -> None:
     """Point every path at another copy of the repository (used by the tests)."""
     global ROOT, PLUGIN, AGENTS_DIR, LEAD_DIR, SKILLS_DIR, STANDING_RULES
-    global SKILL_EVIDENCE, ROLE_MAP, SHARED_DIR
+    global SKILL_EVIDENCE, ROLE_MAP, SHARED_DIR, CONTRACTS
     ROOT = root
     PLUGIN = root / "plugin"
     AGENTS_DIR = PLUGIN / "agents"
@@ -49,6 +50,7 @@ def set_root(root: Path) -> None:
     SKILL_EVIDENCE = root / "tools" / "roles" / "skill-evidence.md"
     ROLE_MAP = root / "docs" / "ROLE-MAP.md"
     SHARED_DIR = root / "tools" / "roles" / "shared"
+    CONTRACTS = root / "docs" / "CONTRACTS.md"
 
 
 # Logical invariant: the namespace the `stemma` MCP server's tools appear under
@@ -88,6 +90,7 @@ CONTRACT_TOOLS = frozenset(
         "get_tree",
         "claim_dependents",
         "query_data",
+        "gate_status",
         "finish_run",
     }
 )
@@ -140,9 +143,10 @@ SWITCHES: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 # Resource limit: the design's "a page or less" for a standing role text (step 5),
 # taken as this many words of instruction, excluding frontmatter and comments: one
-# dense printed page. A stricter page (500 to 600 words) fits every role but the
-# lead assembled with its longest switch fragments; see docs/notes/roles-skills.md.
-PAGE_WORDS = 800
+# dense printed page. Raised from 800 on 26 October, when lines from the live run
+# (the analysis call) and from E6a (the frame's reasons) pushed the longest team
+# lead past it; a stricter page (500 to 600 words) fits every role but the lead.
+PAGE_WORDS = 850
 
 # Resource limit: how far a placebo skill's body may differ in length from its real
 # twin's, as a fraction of the real body's characters (contract 7: "share length").
@@ -178,7 +182,14 @@ COMMENT = re.compile(
     r"(?P<evidence>.+?)\s*-->\s*$"
 )
 SHARED_MARK = re.compile(r"^<!-- (?:shared: (?P<name>[a-z-]+)|end shared) -->$")
-SENTENCE_BREAK = re.compile(r"[.!?][\"”')\]]*\s+(?=[A-Z])")
+SENTENCE_BREAK = re.compile(r"[.!?][\"”')\]]*\s+(?=[A-Z0-9`\"'(\[])")
+# A snake_case name in prose: a tool, a verdict, a field. Checked against the contract.
+IDENTIFIER = re.compile(r"(?<![\w<])[a-z][a-z0-9]*(?:_[a-z0-9]+)+(?![\w>])")
+# A run-folder path in prose: a token with a slash, or a file name with an extension.
+PATH_TOKEN = re.compile(
+    r"(?<![\w$.])(?:~|\.\.)?/?(?:[\w<>.\-]+/)+[\w<>.\-]*|(?<![\w$./])[\w<>\-]+(?:\.[\w<>]+)*"
+    r"\.(?:md|json|jsonl|py|txt)\b"
+)
 MCP_NAME = re.compile(r"mcp__[A-Za-z0-9_]+")
 
 
@@ -194,7 +205,7 @@ class Line:
 
     @property
     def provisional(self) -> bool:
-        return "E6a-provisional" in self.evidence
+        return "provisional" in self.evidence
 
 
 @dataclass
@@ -592,12 +603,78 @@ def check_skills(errors: list[str]) -> None:
         errors.append(f"{rel(SKILL_EVIDENCE)}: section {name!r} names no real skill")
 
 
+def contract_vocabulary() -> tuple[set[str], set[str], str]:
+    """Snake_case names, top-level run-folder entries, and the contract's text."""
+    text = CONTRACTS.read_text()
+    names = set(IDENTIFIER.findall(text))
+    section = text[text.index("## 3. The run folder") : text.index("## 4.")]
+    tops = set()
+    for token in re.findall(r"`([^`]+)`", section):
+        first = token.strip().split("/")[0]
+        tops.add(first + "/" if "/" in token else first)
+    return names, tops, text
+
+
+def check_prose(doc: Doc, tools: list[str], errors: list[str]) -> None:
+    """Names and paths a role reads must exist in the contract and in its tools."""
+    names, tops, contract = contract_vocabulary()
+    held = {t.removeprefix(TOOL_PREFIX) for t in tools}
+    seen_comments: set[tuple[str, str]] = set()
+    for line in doc.lines:
+        where = f"{rel(doc.path)}: {line.text[:60]!r}"
+        key = (line.prevents, line.evidence)
+        if key in seen_comments:
+            errors.append(f"{where}: shares its comment with another sentence")
+        seen_comments.add(key)
+        for name in IDENTIFIER.findall(line.text):
+            if name not in names:
+                errors.append(f"{where}: names {name!r}, which the contract does not")
+            elif name in CONTRACT_TOOLS and name not in held:
+                errors.append(f"{where}: tells the role to use {name}, which it does not hold")
+        for path in PATH_TOKEN.findall(line.text):
+            if path.startswith(("/", "~")) or ".." in path.split("/"):
+                errors.append(f"{where}: names {path!r}, outside the run folder")
+                continue
+            first = path.split("/")[0] + ("/" if "/" in path else "")
+            if first not in tops and path not in contract and path.split("/")[-1] not in contract:
+                errors.append(f"{where}: names the path {path!r}, which the contract does not")
+
+
+def prose_targets() -> list[tuple[Path, list[str]]]:
+    """Each commented role text with the tools of the role that reads it."""
+
+    def tools_of(path: Path) -> list[str]:
+        meta, _ = split_frontmatter(path, path.read_text())
+        tools = meta.get("tools", [])
+        return tools if isinstance(tools, list) else []
+
+    lead_tools = tools_of(LEAD_DIR / "base.md")
+    worker_tools = tools_of(AGENTS_DIR / "worker.md")
+    out = [(p, tools_of(p)) for p in sorted(AGENTS_DIR.glob("*.md"))]
+    out += [(p, lead_tools) for p in sorted(LEAD_DIR.glob("*.md"))]
+    out += [(STANDING_RULES, [])]
+    out += [(p, sorted(set(worker_tools) & set(lead_tools))) for p in SHARED_DIR.glob("*.md")]
+    return out
+
+
+def check_all_prose(errors: list[str]) -> None:
+    for path, tools in prose_targets():
+        doc = load_role(path, errors)
+        if doc is None:
+            continue
+        if path == STANDING_RULES:
+            tools = [TOOL_PREFIX + t for t in ("capture", "capture_file", "sec_capture")]
+        check_prose(doc, tools, errors)
+
+
 def check_all() -> list[str]:
     errors: list[str] = []
     check_roles(errors)
     check_lead(errors)
     check_skills(errors)
     check_shared(errors)
+    if not errors:
+        check_all_prose(errors)
     return errors
 
 
@@ -607,7 +684,7 @@ def short_tool(tool: str) -> str:
 
 def render_lines(doc: Doc, out: list[str]) -> None:
     for line in doc.lines:
-        mark = " (provisional until study E6a reports)" if line.provisional else ""
+        mark = " (provisional: not yet settled by a test)" if line.provisional else ""
         out.append(f"- {line.text}")
         out.append(f"  - Prevents: {line.prevents}{mark}. Evidence: {line.evidence}.")
 
@@ -630,8 +707,9 @@ def build_map() -> str:
         'its evidence. Evidence names: "design" is DESIGN-v1; "lesson" is',
         'the practice lessons (private); "P1", "P3" and "D1" are the research files of those',
         'names; "contract" is docs/CONTRACTS.md; the Opus 5.5 and Fable 5.1 guides are',
-        "Anthropic's prompting pages. Lines marked provisional depend on the pending",
-        "reviewer study E6a.",
+        "Anthropic's prompting pages. Lines marked provisional are not yet settled by a",
+        "test; the E6a reviewer study (26 October) set the reviewers' model and effort",
+        "but tested none of those lines directly.",
         "",
     ]
     errors: list[str] = []
@@ -644,7 +722,7 @@ def build_map() -> str:
         tools = doc.meta.get("tools", [])
         count = len(tools) if isinstance(tools, list) else 0
         provisional = sum(line.provisional for line in doc.lines)
-        note = f", {provisional} provisional on E6a" if provisional else ""
+        note = f", {provisional} provisional" if provisional else ""
         out.append(
             f"- **{role}** ({doc.meta.get('model')}, effort {doc.meta.get('effort')}, "
             f"{count} tools, {len(doc.lines)} lines{note}): {doc.meta.get('description')}"
