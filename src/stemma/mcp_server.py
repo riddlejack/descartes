@@ -176,8 +176,10 @@ def tree_upsert(ctx: Context[Any], node: dict[str, Any]) -> dict[str, Any]:
 
 @server.tool()
 def get_tree(ctx: Context[Any]) -> list[dict[str, Any]]:
-    """The issue tree's nodes."""
-    return _call(ctx, "get_tree", lambda r, c: r.tree())
+    """The issue tree's nodes, each with how it closes (closes_by: "branch" for a leaf, a
+    condition, rival or open lane holding work; "children" for an option or any node with
+    children, whose status is derived; "nothing" for an empty open lane) and closed."""
+    return _call(ctx, "get_tree", lambda r, c: r.tree_view())
 
 
 @server.tool()
@@ -220,7 +222,9 @@ def request_frame_critique(ctx: Context[Any]) -> dict[str, Any]:
 
 @server.tool()
 def submit_draft(ctx: Context[Any], version: int) -> dict[str, Any]:
-    """Lead only: freeze draft/answer.v<version>.md and start the three final reviews."""
+    """Lead only: freeze draft/answer.v<version>.md and start the three final reviews.
+    Each submission is one review round; after max_review_rounds (run.json, a resource
+    limit) it refuses another."""
     return _call(ctx, "submit_draft", lambda r, c: r.submit_draft(c, version))
 
 
@@ -257,8 +261,10 @@ def record_review(ctx: Context[Any], version: int, text: str) -> dict[str, Any]:
 @server.tool()
 def finish_run(ctx: Context[Any], version: int) -> dict[str, Any]:
     """Lead only: release the submitted, reviewed draft <version> as the deliverable.
-    The register copies the frozen draft to deliverable/answer.md itself. Refused, with
-    every unmet condition, unless the release gate holds."""
+    The register copies the frozen draft to deliverable/answer.md itself. Call it at any
+    time to read the gate: when it refuses, it lists every unmet condition, numbered.
+    After the last review round run.json allows, the release also writes
+    deliverable/completion.md with that round's criticisms."""
     return _call(ctx, "finish_run", lambda r, c: r.finish_run(c, version))
 
 

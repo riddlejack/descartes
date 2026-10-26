@@ -59,6 +59,12 @@ DONE = frozenset({"answered", "gap_accepted", "stopped_by_limit"})
 SETTABLE_BY_AUTHORS = frozenset({"open", "in_progress"})
 # Statuses a branch verdict set or is about to set; content changes reopen the node.
 REVIEWED = frozenset({"proposed_done", "answered", "gap_accepted"})
+# Leaf kinds a branch verdict closes (CONTRACTS section 6, v0.3); a node with children
+# closes when they all have (derived, never set), and an empty open lane needs nothing.
+LEAF_KINDS = frozenset({"condition", "rival", "open_lane"})
+# Resource limit: rounds of the three final reviews when run.json does not say (CONTRACTS
+# section 6, `max_review_rounds`); never a quality bar.
+DEFAULT_MAX_REVIEW_ROUNDS = 3
 GAP_TYPES = ("user_held", "source_unavailable", "method_exhausted", "out_of_scope")
 BRANCH_VERDICTS = {"answered": "answered", "accept_gap": "gap_accepted",
                    "find_more": "in_progress", "analyse": "in_progress",
@@ -76,6 +82,52 @@ AWAIT_POLL_S = 2.0
 
 _SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 
+
+def closure(nodes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """How each node closes and whether it has (CONTRACTS section 6, v0.3), by node id:
+    `closes_by` is "branch" (a leaf: condition, rival, an open lane holding work),
+    "children" (any node with children, and an option), or "nothing" (an empty open lane);
+    `status` is the stored one for a leaf and derived for the rest; `closed` follows."""
+    children: dict[str, list[str]] = {}
+    for n in nodes:
+        if n.get("parent") is not None:
+            children.setdefault(str(n["parent"]), []).append(str(n["id"]))
+    by_id = {str(n["id"]): n for n in nodes}
+    out: dict[str, dict[str, Any]] = {}
+
+    def visit(nid: str, path: frozenset[str]) -> dict[str, Any]:
+        if nid in out:
+            return out[nid]
+        n, kids = by_id[nid], [k for k in children.get(nid, []) if k in by_id]
+        if nid in path:  # a cycle in parents cannot close (invariant: a tree has none)
+            return {"closes_by": "children", "status": "open", "closed": False}
+        if kids or n["kind"] == "option":
+            subs = [visit(k, path | {nid}) for k in kids]
+            if all(c["closed"] for c in subs):
+                st = ("stopped_by_limit" if any(c["status"] == "stopped_by_limit" for c in subs)
+                      else "gap_accepted" if any(c["status"] == "gap_accepted" for c in subs)
+                      else "answered")
+            else:
+                st = "open" if all(c["status"] == "open" for c in subs) else "in_progress"
+            res = {"closes_by": "children", "status": st, "closed": st in DONE}
+        elif n["kind"] == "open_lane" and not n.get("branch_id"):
+            res = {"closes_by": "nothing", "status": "not_needed", "closed": True}
+        else:
+            res = {"closes_by": "branch", "status": n["status"], "closed": n["status"] in DONE}
+        out[nid] = res
+        return res
+
+    for nid in by_id:
+        visit(nid, frozenset())
+    return out
+
+
+
+def gate_refusal(failures: list[str]) -> str:
+    """finish_run's refusal: every unmet condition, counted and one per line, so the
+    lead can read the whole gate (CONTRACTS section 6, v0.3)."""
+    lines = "\n".join(f"{i}. {f}" for i, f in enumerate(failures, start=1))
+    return f"Refused: finish_run: {len(failures)} unmet conditions:\n{lines}"
 
 @dataclass(frozen=True)
 class Caller:
@@ -492,8 +544,23 @@ class Register:
         nodes = [dict(e["attrs"]) for e in self.wm.view("graph").query({"type": "node"})]
         return sorted(nodes, key=lambda n: str(n["id"]))
 
-    def _write_tree(self) -> None:
+    def tree_view(self) -> list[dict[str, Any]]:
+        """The tree as the gate sees it: each node with how it closes and whether it has.
+        A node that closes by its children shows the derived status, with the stored one
+        beside it as `stored_status`."""
         nodes = self.tree()
+        info = closure(nodes)
+        out = []
+        for n in nodes:
+            c = info[str(n["id"])]
+            view = {**n, "closes_by": c["closes_by"], "closed": c["closed"]}
+            if c["closes_by"] != "branch":
+                view["stored_status"], view["status"] = n["status"], c["status"]
+            out.append(view)
+        return out
+
+    def _write_tree(self) -> None:
+        nodes = self.tree_view()
         data = {"nodes": nodes, "log_tx": len(self.wm.audit())}
         self._write("tree.json", json.dumps(data, indent=2, ensure_ascii=False))
         lines = ["# Issue tree (rendered from tree.json)", ""]
@@ -798,6 +865,49 @@ class Register:
                             "round": req.round})
         return {"check_requested": req.request_id, "round": req.round}
 
+    def max_review_rounds(self) -> int:
+        """`limits.max_review_rounds` from run.json; the default when run.json or the key
+        is absent. A value that is not a positive whole number is a loud refusal."""
+        try:
+            run = json.loads(safeio.read_text(self.run_dir, "run.json"))
+        except FileNotFoundError:
+            return DEFAULT_MAX_REVIEW_ROUNDS
+        except (OSError, ValueError, safeio.UnsafePath) as exc:
+            raise Refused(f"Refused: run.json cannot be read ({type(exc).__name__}).") from exc
+        limits = run.get("limits") if isinstance(run, dict) else None
+        if not isinstance(limits, dict) or "max_review_rounds" not in limits:
+            return DEFAULT_MAX_REVIEW_ROUNDS
+        n = limits["max_review_rounds"]
+        if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+            raise Refused("Refused: run.json max_review_rounds is not a positive whole number.")
+        return n
+
+    def review_rounds_exhausted(self) -> bool:
+        return len(self.submitted_versions()) >= self.max_review_rounds()
+
+    def _completion_statement(self, version: int) -> str:
+        """When the review rounds ran out: the criticisms of the last permitted round, which
+        no further round could resolve, as the three reviewers wrote them (code selects
+        nothing; whether each was resolved is the reader's and the lead's judgment)."""
+        last = max(self.submitted_versions())
+        limit = self.max_review_rounds()
+        parts = ["# Completion statement", "",
+                 (f"Review rounds stopped by limit (stopped_by_limit): {limit} of {limit} "
+                  f"rounds (max_review_rounds in run.json, a resource limit, not a quality "
+                  f"verdict). Released: version {version}."), ""]
+        shown = [last] if version == last else [last, version]
+        for v in shown:
+            label = "the last permitted round" if v == last else "the released version"
+            parts += [f"## Criticisms raised in the reviews of version {v} ({label})", ""]
+            for role in roles.FINAL_REVIEWERS:
+                rel = f"reviews/v{v}/{REVIEW_FILE_OF[role]}"
+                try:
+                    body = safeio.read_text(self.run_dir, rel).strip()
+                except (FileNotFoundError, safeio.UnsafePath):
+                    body = "(no review recorded)"
+                parts += [f"### {roles.short(role)}", "", body, ""]
+        return "\n".join(parts)
+
     def submitted_versions(self) -> list[int]:
         self.wm.refresh()
         return [int(v["version"]) for v in self._run_facts("draft_submitted")]
@@ -811,6 +921,12 @@ class Register:
             done = self.submitted_versions()
             if done and version <= max(done):
                 raise Refused(f"Refused: version {version} is not after version {max(done)}.")
+            limit = self.max_review_rounds()
+            if len(done) >= limit:
+                raise Refused(f"Refused: the review-round limit is reached ({limit} rounds, "
+                              f"max_review_rounds in run.json, a resource limit). finish_run "
+                              f"releases a reviewed version, listing the last round's "
+                              f"criticisms.")
             try:
                 safeio.write_bytes(self.run_dir, frozen_draft(version), data)
             except safeio.UnsafePath as exc:
@@ -889,12 +1005,16 @@ class Register:
 
         for reason in checks_api.release_blocks(self.run_dir):
             failures.append(f"the release is blocked: {reason}")
-        nodes = self.tree()
+        nodes = self.tree_view()
         if not nodes:
             failures.append("the tree has no nodes")
         for n in nodes:
+            if n["closes_by"] != "branch":
+                continue  # an empty open lane, or a node its children close
             if n["status"] not in DONE:
-                failures.append(f"node {n['id']} is {n['status']}")
+                where = (f"branch {n['branch_id']}" if n.get("branch_id")
+                         else "in no branch; only a branch verdict closes it")
+                failures.append(f"node {n['id']} is {n['status']} ({n['kind']}, {where})")
             elif n["status"] in ("answered", "gap_accepted"):
                 facts = self._live_facts(node_entity(n["id"]), "branch_verdict")
                 if not facts:
@@ -961,8 +1081,7 @@ class Register:
             self.wm.refresh()
             self._sync_records()
             if version not in self.submitted_versions():
-                raise Refused("Refused: finish_run: "
-                              + "; ".join(self.finish_failures(version)) + ".")
+                raise Refused(gate_refusal(self.finish_failures(version)))
             try:
                 data = safeio.read_bytes(self.run_dir, frozen_draft(version))
             except (FileNotFoundError, safeio.UnsafePath, NotADirectoryError) as exc:
@@ -976,16 +1095,25 @@ class Register:
             text = data.decode("utf-8")
             failures = self.finish_failures(version, text)
             if failures:
-                raise Refused("Refused: finish_run: " + "; ".join(failures) + ".")
+                raise Refused(gate_refusal(failures))
             self._write("deliverable/answer.md", text)
             self._write("deliverable/answer.reader.md", self._render_reader(text))
+            extra: dict[str, Any] = {}
+            if self.review_rounds_exhausted():
+                self._write("deliverable/completion.md", self._completion_statement(version))
+                self._run_fact(caller, "stopped_by_limit",
+                               {"what": "review_rounds", "limit": self.max_review_rounds(),
+                                "version": version})
+                extra = {"completion": "deliverable/completion.md",
+                         "stopped_by_limit": ["review_rounds"]}
             self._run_fact(caller, "finished", {"at": now(), "version": version,
                                                 "sha256": sha256_bytes(data),
-                                                "sessions": self._relied})
+                                                "sessions": self._relied, **extra})
             req = checks_api.request_check(self.run_dir, roles.RETRO_WRITER, "retro:run",
                                            "finish_run")
         return {"finished": True, "version": version, "deliverable": "deliverable/answer.md",
-                "reader": "deliverable/answer.reader.md", "check_requested": req.request_id}
+                "reader": "deliverable/answer.reader.md", "check_requested": req.request_id,
+                **extra}
 
     def _render_reader(self, text: str) -> str:
         order: dict[str, int] = {}
