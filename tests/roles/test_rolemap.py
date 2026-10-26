@@ -252,7 +252,7 @@ def test_single_loop_lead_carries_the_worker_method(rm: ModuleType) -> None:
     choice = {
         "s1_method": "none",
         "s2_shape": "single_loop",
-        "s3_hypothesis_in_briefs": "false",
+        "s3_hypothesis_in_briefs": "not_applicable",
         "s4_orientation": "frame_first",
         "s6_cross_family": "off",
     }
@@ -268,3 +268,38 @@ def test_undefer_removes_every_toolsearch_line(rm: ModuleType) -> None:
     assert rm.DEFERRED_TOOLS_LINE not in worker.read_text()
     assert "ToolSearch" not in worker.read_text()
     assert "MCP_TOOLS_DEFERRED = False" in (rm.ROOT / "tools/roles/rolemap.py").read_text()
+
+
+def test_single_loop_loads_no_s3_fragment(rm: ModuleType) -> None:
+    choice = {
+        "s1_method": "none",
+        "s2_shape": "single_loop",
+        "s3_hypothesis_in_briefs": "not_applicable",
+        "s4_orientation": "frame_first",
+        "s6_cross_family": "off",
+    }
+    assert "## What orders carry" not in rm.assemble_lead(choice)
+
+
+def test_s3_with_single_loop_is_refused(rm: ModuleType) -> None:
+    choice = {
+        "s1_method": "none",
+        "s2_shape": "single_loop",
+        "s3_hypothesis_in_briefs": "true",
+        "s4_orientation": "frame_first",
+        "s6_cross_family": "off",
+    }
+    with pytest.raises(rm.RoleFileError, match="not_applicable"):
+        rm.assemble_lead(choice)
+
+
+def test_not_applicable_s3_with_workers_is_refused(rm: ModuleType) -> None:
+    choice = {
+        "s1_method": "none",
+        "s2_shape": "team",
+        "s3_hypothesis_in_briefs": "not_applicable",
+        "s4_orientation": "frame_first",
+        "s6_cross_family": "off",
+    }
+    with pytest.raises(rm.RoleFileError, match="not_applicable"):
+        rm.assemble_lead(choice)

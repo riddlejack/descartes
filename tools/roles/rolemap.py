@@ -82,6 +82,7 @@ CONTRACT_TOOLS = frozenset(
         "request_frame_critique",
         "submit_draft",
         "await_checks",
+        "proceed_on_assumption",
         "finish_run",
     }
 )
@@ -268,11 +269,24 @@ def lead_fragment(switch: str, value: str) -> Path:
     return LEAD_DIR / f"{switch}.{value}.md"
 
 
+# Logical invariant: S3 needs workers, so with single_loop the driver records it
+# not_applicable and loads no S3 fragment (contract 7, v0.2.4).
+NOT_APPLICABLE = "not_applicable"
+
+
 def assemble_lead(choice: dict[str, str]) -> str:
     """The run's agents/lead.md: base.md, then one fragment per switch (contract 7)."""
     parts = [(LEAD_DIR / "base.md").read_text()]
+    single = choice.get("s2_shape") == "single_loop"
     for switch, values in SWITCHES:
         value = choice.get(switch)
+        if switch == "s3_hypothesis_in_briefs" and (single or value == NOT_APPLICABLE):
+            if not (single and value == NOT_APPLICABLE):
+                raise RoleFileError(
+                    f"switch {switch} is {NOT_APPLICABLE} exactly when s2_shape is "
+                    f"single_loop: {value!r}"
+                )
+            continue
         if value not in values:
             raise RoleFileError(f"switch {switch} has no value among {values}: {value!r}")
         parts.append(lead_fragment(switch, value).read_text())
@@ -281,7 +295,15 @@ def assemble_lead(choice: dict[str, str]) -> str:
 
 def all_lead_choices() -> list[dict[str, str]]:
     names = [s for s, _ in SWITCHES]
-    return [dict(zip(names, combo)) for combo in itertools.product(*(v for _, v in SWITCHES))]
+    choices = []
+    for combo in itertools.product(*(v for _, v in SWITCHES)):
+        choice = dict(zip(names, combo))
+        if choice["s2_shape"] == "single_loop":
+            if choice["s3_hypothesis_in_briefs"] != "true":
+                continue
+            choice["s3_hypothesis_in_briefs"] = NOT_APPLICABLE
+        choices.append(choice)
+    return choices
 
 
 def max_lead_words(shape: str) -> int:

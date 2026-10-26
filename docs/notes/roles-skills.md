@@ -1,6 +1,6 @@
 # Part C notes: the role texts and skills
 
-Builder C, against `docs/CONTRACTS.md` v0.2.3. Detail behind the report; the owner's
+Builder C, against `docs/CONTRACTS.md` v0.2.4. Detail behind the report; the owner's
 page is `<a private page>`.
 
 ## What is in the branch
@@ -22,12 +22,12 @@ page is `<a private page>`.
 - `tools/roles/shared/branch-work.md`: the worker's branch method, copied by `sync`
   into the worker and the single-loop lead fragment, so both arms of S2 carry the same
   method. `tools/roles/skill-evidence.md`: the failure and evidence behind every
-  sentence of every real skill. `tests/roles/`: 34 tests.
+  sentence of every real skill. `tests/roles/`: 37 tests.
 
 ## How it was shown to work, and what is not shown
 
 - Shown: `python tools/roles/rolemap.py check` passes; `pytest tests/roles` passes
-  (34), with a hostile case for each guard (a line with no comment, a comment with no
+  (37), with a hostile case for each guard (a line with no comment, a comment with no
   evidence, two sentences behind one comment, an unknown tool, a wrong prefix,
   WebFetch, Grep, a small model, low effort, an extra role file, a text over a page,
   an assembled lead over a page, a missing fragment, frontmatter in a fragment, S1
@@ -35,7 +35,7 @@ page is `<a private page>`.
   comment inside a skill, a placebo with different frontmatter, a placebo that uses a
   method word, a placebo of the wrong length, a missing placebo, a missing ToolSearch
   line, a needless ToolSearch line, a shared block edited in one role, an unknown
-  switch value, a malformed prefix); `ruff` and `mypy --strict` are clean on the tool;
+  switch value, S3 paired wrongly with the single loop, a malformed prefix); `ruff` and `mypy --strict` are clean on the tool;
   `claude plugin validate` (2.1.296, the only CLI on this machine) passes on the agent
   files and on an assembled lead.
 - Not shown: no role has run. Whether each text produces the behaviour it names is the
@@ -73,8 +73,8 @@ page is `<a private page>`.
    assumption; the status page could surface those lines.
 9. **Authors wait for their own branch verdict** with `await_checks` and act on
    find_more, analyse or bound themselves; when a worker has ended, the team lead starts
-   a new one with the order, record and verdict. This assumes `await_checks` accepts
-   branch ids and draft versions as well as claim ids; B to confirm.
+   a new one with the order, record and verdict. `await_checks` accepts branch ids
+   and draft versions (contract v0.2.4).
 10. **The blind framer's first pass reads task/ only**, since the driver starts it at
     run start, before intake.md exists. It has Skill so that it sees the card list.
 11. **P3's rubric is in no role** (orchestrator, 26 October). The decider's-eye reviewer
@@ -142,27 +142,21 @@ Applied:
   conflicts with capturing attachments; the blind order on the crux gets its own node
   and carries nothing from the ghost storyline.
 
-Recorded, not applied (each needs the orchestrator or part B):
-- **ask_user has no way out in a headless run.** A branch verdict of ask_user sets
-  waiting_user, and finish_run refuses while any node waits. The lead now logs the
-  question and its assumption, but the contract needs a path (for example, the lead
-  re-dispatches on a stated assumption and the reviewer may then accept the gap typed
-  user_held, or the driver's task package answers it). Design step 16's "a risk that
-  needs accepting" has no role either.
-- **A worker can start checking roles as its own subagents.** In a subagent definition
-  `Agent(type)` restrictions are ignored, and built-in types are denied but plugin
-  roles are not, so a worker could start `stemma:claim-checker` with its own prompt and
-  the identity hook would stamp a checker's verdict. Run settings should deny
-  `Agent(stemma:<each checking role>)` (and `Agent(stemma:lead)`), or the register
-  should accept checker verdicts only from driver-launched sessions.
-- **S3 needs workers.** In single-loop runs the hypothesis arm's blind worker cannot
-  exist and the blind arm is inert (the author holds the hypothesis). The driver should
-  run S3 only with `s2_shape: team`.
-- **Single-loop runs should deny `Agent`** in settings: the lead's frontmatter allows
-  `Agent(stemma:worker)` in every arm, because frontmatter cannot vary by switch.
-- **Fresh checks on documents behind a re-cut and on late documents** (design steps 6
-  and 10) are covered only because every filed claim is checked; no role re-checks a
-  document as such.
+Recorded at first, then decided by the orchestrator in contract v0.2.4 and applied:
+- **A branch waiting on the user.** The lead calls `proceed_on_assumption` when no
+  answer comes (always so headless) and lists each question with its assumption in the
+  deliverable; the branch reviewer may then close the branch as accept_gap with gap
+  type user_held; the team lead restarts a worker on it with the assumption. A risk
+  the user must accept is named in the lead's section on how the work was checked.
+- **Checking roles started by an author.** Run settings deny `Agent(stemma:<each
+  checking role>)` and `Agent(stemma:lead)`, and the register accepts verdicts only
+  from sessions the driver launched for that role and id.
+- **S3 needs workers.** With `single_loop` the driver records S3 `not_applicable` and
+  loads no S3 fragment; `assemble_lead` refuses any other pairing.
+- **Single-loop runs deny `Agent`** to the lead in settings.
+- **`await_checks`** accepts claim ids, branch ids and draft versions.
+- **Late documents and documents behind a re-cut** are accepted as covered by the
+  per-claim checks for now.
 
 ## Lines that depend on the pending E6a reviewer study (contract 10)
 
@@ -182,4 +176,3 @@ are not provisional.
 
 - The driver's lead assembly is `rolemap.assemble_lead(choice)`; B may import it or
   reimplement it, in the contract's order (s1, s2, s3, s4, s6).
-- `await_checks` should accept branch ids and draft versions (decision 9).
