@@ -120,6 +120,8 @@ _REGION_WARNINGS = {
     "white_pdf_text": "in PDF text drawn in white",
     "table_merged_cells": "in a table with merged cells whose columns may be misaligned",
     "element_split": "across a place where digits from two page elements were split",
+    "superscript": "in a raised marker (a footnote number or superscript in a PDF)",
+    "superscript_split": "across the space put in before or after a raised PDF marker",
 }
 
 

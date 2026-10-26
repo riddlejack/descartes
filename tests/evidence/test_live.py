@@ -223,3 +223,20 @@ def test_live_government_data_files() -> None:
                          "xlsx": summary(xlsx_r) | {"details": xlsx_r["format_details"],
                                                     "quoted_cells": first_two,
                                                     "head": xlsx_text[:400]}})
+
+
+CRS_PDF = "https://www.congress.gov/crs_external_products/R/PDF/R48598/R48598.2.pdf"
+
+
+def test_live_crs_footnote_markers() -> None:
+    import re
+
+    svc = new_run()
+    r = svc.capture(CRS_PDF, "live test: CRS report footnote markers")
+    assert r["status"] == "ok", r
+    text = api.read_text(svc.run_dir, r["receipt_id"])
+    markers = [f for f in r["flagged_ranges"] if f["kind"] == "superscript"]
+    assert markers
+    assert not re.findall(r"[a-z)]\.\d{1,3}\n", text)  # no footnote number fused to a sentence
+    sample = [text[max(0, f["start"] - 40):f["end"] + 8] for f in markers[:10]]
+    write("crs_markers", {"receipt": summary(r), "markers": len(markers), "sample": sample})

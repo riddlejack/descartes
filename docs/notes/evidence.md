@@ -9,7 +9,7 @@ on `EvidenceService` (`service.py`) and as an MCP tool registered by
 
 ## What works, and how it was shown
 
-Unit tests: `pytest tests/evidence` runs 287 tests in about a second, with no
+Unit tests: `pytest tests/evidence` runs 291 tests in about a second, with no
 network (a fake transport, a fake SEC backend, invented pages, a PDF built by hand
 in `conftest.py`). `ruff check` and `mypy --strict` pass on `src/stemma/evidence`.
 The live tests are marked `live` and skipped unless `STEMMA_LIVE=1`; they were run
@@ -171,6 +171,27 @@ files).
 - **Limits:** display formatting is not rendered, so the sheet's "5,024,294" is
   stored as `5024294 [#,##0]` and a quotation must use the stored form; XLS was
   tested only on invented broken input (no XLS writer is pinned), not live.
+
+## Raised PDF markers (footnote numbers, superscripts)
+A CRS report's text read "…as of December 31, 2025.18\nAccording…", the "18"
+being a raised footnote marker, so the number tokeniser read "2025.18" and the
+sentence end could not be quoted. Fixed where it arises, in the PDF worker: each
+character's baseline (`FPDFText_GetCharOrigin`) and font size are compared with
+the last ordinary character on its line; a glyph at least 0.2 of the line's font
+size higher and at most 0.9 of its size (or 0.33 higher at any size) is a raised
+marker (extraction flags, recorded in `pdfworker.py`). A space is put in before
+the marker run (and after it, when text follows directly), each recorded as a
+`superscript_split` range, and the marker is flagged `superscript`. Unlike an HTML
+`element_split`, a quote may end or start at a `superscript_split`: the geometry
+shows the marker is a separate glyph, and refusing the edge would leave the
+sentence unquotable, the failure being fixed. A quote spanning a split or
+including a marker gets a warning. Quote edges were not loosened: a real
+"2025.18" stays one number. Tests: `tests/evidence/test_pdf_markers.py` (marker
+after a period, after a number, followed by text, a real decimal, a footnote line
+at the page foot not flagged). Live, once: CRS report R48598 from congress.gov
+(26 pages; crsreports.congress.gov answers our fetcher 403): 92 markers set apart,
+e.g. "…($1.4 trillion in FY2024). 1\nIt", and no footnote number left fused to a
+sentence. Raised ordinals are split too ("119 th Congress").
 
 ## SEC tools
 edgartools 5.62.1 resolves the company and lists filings (with filing dates and

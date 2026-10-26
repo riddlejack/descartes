@@ -114,7 +114,7 @@ def extractor_versions() -> dict[str, str]:
 
 
 # Invariant: bumped whenever this module's rules change the text it produces.
-EXTRACT_RULES_VERSION = "6"
+EXTRACT_RULES_VERSION = "7"
 
 
 def sniff_content_type(declared: str | None, body: bytes, name_hint: str = "") -> str:
@@ -292,6 +292,10 @@ def pdf_to_text(body: bytes) -> tuple[str, list[dict[str, Any]], int, list[str],
         warnings.append(f"invisible_pdf_text_kept: {invisible} ranges")
     if white:
         warnings.append(f"white_pdf_text_kept: {white} ranges")
+    raised = sum(1 for r in flagged if r["kind"] == "superscript")
+    if raised:
+        warnings.append(f"raised_markers_separated: {raised} footnote or superscript markers "
+                        "set apart by a space and flagged")
     return str(ok["text"]), list(ok["outline"]), int(ok["pages"]), warnings, flagged
 
 
