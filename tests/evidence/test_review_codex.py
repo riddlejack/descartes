@@ -27,7 +27,6 @@ from stemma.evidence.extract import extract
 from stemma.evidence.fetch import Fetcher
 from stemma.evidence.htmltext import html_to_text
 from stemma.evidence.quotes import find_quote
-from stemma.evidence.render import Rendered
 from stemma.evidence.service import EvidenceService
 from stemma.evidence.transport import StdlibTransport
 
@@ -200,69 +199,8 @@ def test_tls_header_drip_stopped_at_deadline(tls_files: tuple[Path, Path],
 
 # 5, 7. The browser fallback is off unless the run turns it on; status is checked -----
 
-class _Spy:
-    name, version = "spy", "0"
-
-    def __init__(self, result: Rendered | Exception) -> None:
-        self.result = result
-        self.calls: list[str] = []
-
-    def render(self, url: str) -> Rendered:
-        self.calls.append(url)
-        if isinstance(self.result, Exception):
-            raise self.result
-        return self.result
-
-
 SHELL = b"<html><body><div id='root'></div></body></html>"
 FULL = html("<h1>Dashboard</h1>" + "<p>Orders rose 12% to 4,410.</p>" * 10)
-
-
-def test_fallback_off_by_default(run_dir: Path, tmp_path: Path) -> None:
-    t = FakeTransport({"https://app.example.org/": Reply(200, [("Content-Type", "text/html")], SHELL)})
-    svc = EvidenceService(run_dir, transport=t, cache_dir=None, throttle=False)
-    spy = _Spy(Rendered(FULL, "https://app.example.org/", []))
-    svc._renderer = spy  # a browser present but not enabled for this run
-    r = svc.capture("https://app.example.org/", "probe")
-    assert spy.calls == [] and r["kind"] == "web"
-    assert "browser_fallback_off_for_this_run" in r["warnings"]
-
-
-def test_fallback_runs_when_enabled(run_dir: Path) -> None:
-    (run_dir / "run.json").write_text(json.dumps({"run_id": "t", "as_of": None,
-                                                 "evidence": {"browser_fallback": True}}))
-    t = FakeTransport({"https://app.example.org/": Reply(200, [("Content-Type", "text/html")], SHELL)})
-    spy = _Spy(Rendered(FULL, "https://app.example.org/", []))
-    svc = EvidenceService(run_dir, transport=t, cache_dir=None, throttle=False, renderer=spy)
-    assert svc.capture("https://app.example.org/", "probe")["kind"] == "rendered"
-
-
-@pytest.mark.parametrize("status, expected", [(403, "forbidden"), (404, "not_found"),
-                                              (500, "http_error")])
-def test_rendered_error_status_is_typed(run_dir: Path, status: int, expected: str) -> None:
-    (run_dir / "run.json").write_text(json.dumps({"run_id": "t", "as_of": None,
-                                                 "evidence": {"browser_fallback": True}}))
-    from stemma.evidence.render import RenderHttpError
-
-    t = FakeTransport({"https://app.example.org/": Reply(200, [("Content-Type", "text/html")], SHELL)})
-    spy = _Spy(RenderHttpError(status, FULL))
-    svc = EvidenceService(run_dir, transport=t, cache_dir=None, throttle=False, renderer=spy)
-    r = svc.capture("https://app.example.org/", "probe")
-    rendered = [json.loads(p.read_text()) for p in (run_dir / "store" / "receipts").glob("*.json")]
-    statuses = {x["kind"]: x["status"] for x in rendered}
-    assert statuses["rendered"] == expected
-    assert r["status"] in ("empty_text", "short_text")  # the plain capture is returned
-    assert all(x.get("text_path") is None for x in rendered if x["kind"] == "rendered")
-
-
-def test_playwright_gate_allows_only_the_validated_document() -> None:
-    from stemma.evidence.render import _gate_decision
-
-    main = "https://app.example.org/page"
-    assert _gate_decision(main, main, True) is True
-    assert _gate_decision("https://app.example.org/app.js", main, False) is False
-    assert _gate_decision("https://elsewhere.example.net/", main, True) is False
-    assert _gate_decision("https://app.example.org/other", main, True) is False
 
 
 # 6. Archive Memento-Datetime is read from every header ------------------------------------

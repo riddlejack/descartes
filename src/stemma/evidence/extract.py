@@ -15,10 +15,12 @@ Unicode code points in the stored text.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass, field
 from importlib import metadata
 from typing import Any
@@ -167,23 +169,61 @@ def _pdf_worker_argv() -> list[str]:
     return [sys.executable, "-I", "-m", "stemma.evidence.pdfworker", str(limits.PDF_MAX_TEXT_CHARS)]
 
 
+def _run_worker(argv: list[str], body: bytes) -> tuple[bytes, bytes]:
+    """Run the worker, feeding `body` and reading both pipes in bounded chunks. Past
+    a recorded byte limit on either pipe, or the time limit, the child is killed and
+    the extraction fails typed; nothing accumulates without a bound."""
+    proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE)
+    over = threading.Event()
+    buffers: dict[str, bytearray] = {"stdout": bytearray(), "stderr": bytearray()}
+    caps = {"stdout": limits.PDF_MAX_OUTPUT_BYTES, "stderr": limits.PDF_MAX_STDERR_BYTES}
+
+    def read(name: str, pipe: Any) -> None:
+        while True:
+            chunk = pipe.read1(65536)
+            if not chunk:
+                return
+            buffers[name] += chunk
+            if len(buffers[name]) > caps[name]:
+                over.set()
+                proc.kill()
+                return
+
+    def write() -> None:
+        with contextlib.suppress(BrokenPipeError, OSError):
+            assert proc.stdin is not None
+            proc.stdin.write(body)
+            proc.stdin.close()
+
+    threads = [threading.Thread(target=read, args=("stdout", proc.stdout), daemon=True),
+               threading.Thread(target=read, args=("stderr", proc.stderr), daemon=True),
+               threading.Thread(target=write, daemon=True)]
+    for thread in threads:
+        thread.start()
+    try:
+        proc.wait(timeout=limits.PDF_EXTRACT_TIMEOUT_S)
+    except subprocess.TimeoutExpired as exc:
+        proc.kill()
+        proc.wait()
+        raise PdfExtractionError(
+            f"PDF extraction passed its time limit of {limits.PDF_EXTRACT_TIMEOUT_S} s") from exc
+    for thread in threads:
+        thread.join(5)
+    if over.is_set():
+        raise PdfExtractionError("PDF extraction output passed its byte limit")
+    return bytes(buffers["stdout"]), bytes(buffers["stderr"])
+
+
 def pdf_to_text(body: bytes) -> tuple[str, list[dict[str, Any]], int, list[str],
                                       list[dict[str, Any]]]:
     """Run PDFium in a child process under a recorded time limit and output limit."""
+    stdout, stderr = _run_worker(_pdf_worker_argv(), body)
     try:
-        done = subprocess.run(_pdf_worker_argv(), input=body, capture_output=True,
-                              timeout=limits.PDF_EXTRACT_TIMEOUT_S, check=False)
-    except subprocess.TimeoutExpired as exc:
-        raise PdfExtractionError(
-            f"PDF extraction passed its time limit of {limits.PDF_EXTRACT_TIMEOUT_S} s") from exc
-    if len(done.stdout) > limits.PDF_MAX_OUTPUT_BYTES:
-        raise PdfExtractionError("PDF extraction output passed its byte limit")
-    try:
-        result = json.loads(done.stdout.decode("ascii"))
+        result = json.loads(stdout.decode("ascii"))
     except (UnicodeDecodeError, ValueError) as exc:
-        detail = done.stderr.decode("utf-8", "replace")[-300:]
-        raise PdfExtractionError(
-            f"PDF worker exited {done.returncode} without a result: {detail}") from exc
+        detail = stderr.decode("utf-8", "replace")[-300:]
+        raise PdfExtractionError(f"PDF worker gave no result: {detail}") from exc
     if "error" in result:
         kind = result["error"]
         detail = str(result.get("detail", ""))

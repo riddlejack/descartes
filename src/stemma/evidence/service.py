@@ -32,7 +32,6 @@ from stemma.evidence.extract import (
 )
 from stemma.evidence.fetch import Fetcher, FetchResult
 from stemma.evidence.quotes import find_quote
-from stemma.evidence.render import Renderer, RenderHttpError, default_renderer
 from stemma.evidence.sec import (
     EdgarToolsBackend,
     FilingRef,
@@ -124,7 +123,6 @@ class EvidenceService:
         cache_dir: str | Path | None = _UNSET,
         sec_backend: SecBackend | None = None,
         sec_identity: str | None = _UNSET,
-        renderer: Renderer | None = _UNSET,
         throttle: bool = True,
     ) -> None:
         self._run_dir_given = Path(os.path.abspath(run_dir))
@@ -142,8 +140,6 @@ class EvidenceService:
             cache_dir = os.environ.get("STEMMA_CACHE") or None
         self.cache = RequestCache(Path(cache_dir)) if cache_dir else None
         self._sec_backend = sec_backend
-        # Built only when a run enables the browser fallback and a page needs it.
-        self._renderer: Any = renderer
 
     # Run facts --------------------------------------------------------------------
 
@@ -432,6 +428,10 @@ class EvidenceService:
 
     def capture(self, url: str, reason: str) -> dict[str, Any]:
         """Capture a web page or document; in `as_of` mode, from an archived copy."""
+        if self.browser_fallback_enabled:
+            raise EvidenceError(
+                "browser_fallback_unavailable",
+                "this version has no browser fallback")
         self._base_receipt("web", reason)  # a missing reason is refused before any work
         return self._receipted("web", reason, {"requested_url": url},
                                lambda: self._capture(url, reason))
@@ -450,29 +450,18 @@ class EvidenceService:
             return self.fetcher.fetch(url), None, None, None
 
         body, content_type = self._fetch_cached(kind, url, receipt, do_fetch)
-        markup_like = False
         note: str | None = None
-        renderer: Renderer | None = None
         if body is not None:
             media = (content_type or "").split(";")[0].strip().lower()
-            markup_like = media in HTML_TYPES or media in XML_TYPES or media == ""
-            if markup_like and as_of:
-                note = "browser_fallback_not_used_in_as_of_mode"
-            elif markup_like and not self.browser_fallback_enabled:
-                note = "browser_fallback_off_for_this_run"
-            elif markup_like:
-                renderer = self._get_renderer()
-                if renderer is None:
-                    note = "browser_fallback_not_installed"
-        plain = self._finish(receipt, body, content_type, loud_note=note)
-        needs_fallback = plain["status"] in (CaptureStatus.EMPTY_TEXT, CaptureStatus.SHORT_TEXT)
-        if needs_fallback and renderer is not None:
-            return self._render_fallback(renderer, plain, reason)
-        return plain
+            if media in HTML_TYPES or media in XML_TYPES or media == "":
+                # No browser path in this version: a loud page stays loud.
+                note = "browser_fallback_unavailable"
+        return self._finish(receipt, body, content_type, loud_note=note)
 
     @property
     def browser_fallback_enabled(self) -> bool:
-        """A recorded run setting, off unless `run.json` turns it on."""
+        """Whether `run.json` asks for the browser fallback (`"evidence":
+        {"browser_fallback": true}`). It is unavailable in this version."""
         path = self.run_dir / "run.json"
         if not path.exists():
             return False
@@ -481,41 +470,6 @@ class EvidenceService:
         except (OSError, ValueError, AttributeError):
             return False
         return isinstance(settings, dict) and settings.get("browser_fallback") is True
-
-    def _get_renderer(self) -> Renderer | None:
-        if self._renderer is _UNSET:
-            self._renderer = default_renderer()
-        renderer: Renderer | None = self._renderer
-        return renderer
-
-    def _render_fallback(self, renderer: Renderer, plain: dict[str, Any],
-                         reason: str) -> dict[str, Any]:
-        receipt = self._base_receipt("rendered", reason)
-        receipt["requested_url"] = plain.get("final_url") or plain["requested_url"]
-        receipt["fallback_of"] = plain["receipt_id"]
-        receipt["renderer"] = {"name": renderer.name, "version": renderer.version}
-        receipt["fetched_at"] = utc_now()
-        try:
-            rendered = renderer.render(receipt["requested_url"])
-        except Exception as exc:  # noqa: BLE001 - recorded on a receipt, never swallowed
-            if isinstance(exc, RenderHttpError):
-                receipt["status"] = _http_failure(exc.status)
-                receipt["detail"] = f"browser fallback: main document answered HTTP {exc.status}"
-            else:
-                receipt["status"] = CaptureStatus.TRANSPORT_ERROR
-                receipt["detail"] = f"browser fallback failed: {exc}"
-            failed = self._finish(receipt, None, None)
-            plain = dict(plain)
-            plain["warnings"] = plain["warnings"] + [
-                f"browser_fallback_failed: receipt {failed['receipt_id']}"
-            ]
-            return plain
-        receipt["final_url"] = rendered.final_url
-        if rendered.blocked_requests:
-            receipt["warnings"].append(
-                f"browser_requests_refused: {len(rendered.blocked_requests)}")
-            receipt["blocked_requests"] = rendered.blocked_requests[:50]
-        return self._finish(receipt, rendered.html, "text/html; charset=utf-8")
 
     def capture_file(self, path: str, reason: str) -> dict[str, Any]:
         """Capture one of the user's attachments, which live under the run's `task/`."""
@@ -814,7 +768,7 @@ class EvidenceService:
         else:
             raise EvidenceError("bad_mode", "mode is 'words' or 'exact'")
         for hit in hits:
-            hit["receipt_id"] = self.store.first_receipt_for(hit["sha256"])
+            hit["receipt_id"] = self.store.first_receipt_for(hit["text_id"])
         return {"query": query, "mode": mode, "hits": hits}
 
     def check_quote(self, receipt_id: str, quote: str) -> dict[str, Any]:

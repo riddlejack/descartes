@@ -9,7 +9,7 @@ on `EvidenceService` (`service.py`) and as an MCP tool registered by
 
 ## What works, and how it was shown
 
-Unit tests: `pytest tests/evidence` runs 234 tests in about a second, with no
+Unit tests: `pytest tests/evidence` runs 265 tests in about a second, with no
 network (a fake transport, a fake SEC backend, invented pages, a PDF built by hand
 in `conftest.py`). `ruff check` and `mypy --strict` pass on `src/stemma/evidence`.
 The live tests are marked `live` and skipped unless `STEMMA_LIVE=1`; they were run
@@ -76,7 +76,7 @@ connection are two lookups; the plain fetch does not have this gap.
   substring search gives each hit's offsets. Agent queries are quoted, so FTS5
   syntax cannot be injected (tested with `" OR *`, `NEAR(...)` and others).
 - `check_quote`: exact match after one documented normalisation
-  (`whitespace-runs-to-one-space;typographic-quotes-to-ascii;token-and-quantity-edges;v4`):
+  (`whitespace-runs-to-one-space;typographic-quotes-to-ascii;word-and-number-token-edges;v5`):
   every run of Unicode whitespace becomes one space; curly and typographic quotation
   marks become straight ones; a match must sit on token boundaries and never start
   or end in the middle of a number (a digit, or digit-separator-digit, across
@@ -251,8 +251,9 @@ and its separate DNS lookup remains a known gap.
 - Receipt ids look like `r_20261026T040948_8c50c0396d96` (UTC time plus random).
 - Tools taking `sha256` for stored text also accept a `text_id`
   (`sha256~<variant>`); receipts carry `text_id`.
-- The browser fallback is a run setting, `run.json` `"evidence":
-  {"browser_fallback": true}`, off by default (driver, part B).
+- The browser fallback is not in this version; a `run.json` asking for it
+  (`"evidence": {"browser_fallback": true}`) is refused with
+  `browser_fallback_unavailable` (driver, part B: do not set it).
 - `check_quote` raises typed errors for unusable input (`unknown_receipt`,
   `bad_receipt_id`, `no_text`, `empty_quote`) and returns `found: false` only when
   the text exists and the quote is not in it.
@@ -315,7 +316,7 @@ failed before the fixes):
    change the quantity or its sign: a decimal point (".5"), a sign after a space
    or in an exponent ("-$5", "1e-3"), a currency sign ("$5", "5€"), a percent or
    per-mille sign, an exponent marker. Mirror cases at the end are covered.
-   Normalisation is now `...;token-and-quantity-edges;v4`.
+   Normalisation is now `...;word-and-number-token-edges;v5`.
 3. Digits from two different elements never meet: a space is put between them
    and recorded as an `element_split` range; `check_quote` refuses a match with an
    edge at a split (CSS may show the digits joined), and warns on one spanning it.
@@ -345,7 +346,38 @@ reading of the same bytes), so the same bytes read another way get their own tex
 instead of reusing the first. `outline`, `read`, `read_section` and `search_store`
 accept a `text_id` wherever they take a sha256; hits carry both.
 
+## Final fix round (Codex recheck of 0af9227)
+Fixed by principle, each reproduced first in `tests/evidence/test_review_final.py`
+(17 of its tests failed before; the two pipe-flood tests hung, which was the bug):
+1. Quote edges: the stored text is tokenised once into number tokens (sign where it
+   cannot be a hyphen, currency prefix, digit groups and separators or a leading
+   decimal point, exponent, percent or currency suffix), and a match may not start
+   or end strictly inside a token. The earlier special cases are deleted.
+   Normalisation `...;word-and-number-token-edges;v5`.
+2. Element splits: at every element boundary where the text would touch and
+   either side is a digit, or a separator (`.` `,` `-`) next to a digit, a space is
+   put in and recorded. Exception: unstyled inline XBRL (`ix:`) tags, which only
+   tag a figure; without it every "$<ix:nonFraction>…" amount in a filing's prose
+   would become unquotable. Live: Apple's 10-K gets 783 splits, almost all inside
+   its hidden XBRL header, and its prose dollar amounts are untouched.
+3. No in-band markers: marker characters are chosen per document from the
+   Supplementary Private Use Area among code points absent from the page's text and
+   attributes, so a page cannot disable or forge the ranges; the stored text holds
+   none.
+4. Search hits on a text variant name that variant's receipt.
+5. The browser fallback is removed from this version: `run.json` asking for it is
+   the typed refusal `browser_fallback_unavailable`; loud pages say
+   `browser_fallback_unavailable`. `render.py` and the `evidence-render` extra are
+   gone.
+6. The PDF worker's stdout and stderr are read in bounded chunks and the child is
+   killed past the recorded limits (stdout `PDF_MAX_OUTPUT_BYTES`, stderr 256 KiB);
+   the text budget is checked per character, not per page.
+Rerun: the earlier gate probes (12) pass; live, the BLS page and PDF, the `as_of`
+capture and the 10-K (27 Item anchors) pass.
+
 **Known limits, recorded rather than fixed.**
+- There is no browser fallback: a page whose text is written by scripts stays
+  `short_text` or `empty_text` (the World Bank page in the live study is one).
 - A PDF whose ToUnicode map lies (a glyph drawn as "1" but mapped to "9", so a
   visible 1,250 is stored as 9,250) cannot be caught from the text layer. The
   claim checker can view the page image with the Read tool.

@@ -52,6 +52,8 @@ PDF_EXTRACT_TIMEOUT_S = 120.0
 PDF_MAX_TEXT_CHARS = 50_000_000
 # Resource limit: bytes of JSON the PDF extraction child may write.
 PDF_MAX_OUTPUT_BYTES = 8 * PDF_MAX_TEXT_CHARS
+# Resource limit: bytes of error output the PDF extraction child may write.
+PDF_MAX_STDERR_BYTES = 256 * 1024
 
 # Resource limit: code points returned by one `read` or `read_section` call.
 READ_MAX_CHARS = 20_000

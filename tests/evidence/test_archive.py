@@ -8,7 +8,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
-from conftest import FakeTransport, Reply, enable_fallback, html, set_as_of
+from conftest import FakeTransport, Reply, html, set_as_of
 
 from stemma.evidence.archive import cdx_query_url
 from stemma.evidence.service import EvidenceService
@@ -119,22 +119,11 @@ def test_archive_replay_error_is_not_absence(make_service: Factory, run_dir: Pat
     assert svc.capture(URL, "probe")["status"] == "archive_unavailable"
 
 
-def test_no_browser_fallback_in_as_of_mode(make_service: Factory, run_dir: Path) -> None:
-    calls: list[str] = []
-
-    class Spy:
-        name, version = "spy", "0"
-
-        def render(self, url: str) -> object:
-            calls.append(url)
-            raise AssertionError("must not render in as_of mode")
-
+def test_as_of_loud_page_names_no_fallback(make_service: Factory, run_dir: Path) -> None:
     routes = {cdx_query_url(URL, AS_OF): cdx("20240530000000"),
               snap("20240530000000"): Reply(200, [("Content-Type", "text/html"), (
                   "Memento-Datetime", "Thu, 30 May 2024 00:00:00 GMT")], b"<html></html>")}
-    enable_fallback(run_dir)
     set_as_of(run_dir, AS_OF)
-    svc = make_service(FakeTransport(routes), renderer=Spy())
-    r = svc.capture(URL, "probe")
-    assert r["status"] == "empty_text" and calls == []
-    assert "browser_fallback_not_used_in_as_of_mode" in r["warnings"]
+    r = make_service(FakeTransport(routes)).capture(URL, "probe")
+    assert r["status"] == "empty_text" and "browser_fallback_unavailable" in r["warnings"]
+

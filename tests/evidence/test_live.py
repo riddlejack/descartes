@@ -46,11 +46,10 @@ def write(name: str, data: Any) -> None:
     print(f"\n[live] {name}: {path}")
 
 
-def new_run(as_of: str | None = None, fallback: bool = False) -> EvidenceService:
+def new_run(as_of: str | None = None) -> EvidenceService:
     run = Path(tempfile.mkdtemp(prefix="stemma-live-run-")) / "run"
     (run / "task").mkdir(parents=True)
-    (run / "run.json").write_text(json.dumps({"run_id": "live", "as_of": as_of,
-                                              "evidence": {"browser_fallback": fallback}}))
+    (run / "run.json").write_text(json.dumps({"run_id": "live", "as_of": as_of}))
     return EvidenceService(run, cache_dir=None)
 
 
@@ -123,26 +122,6 @@ def test_live_sec_filing_and_facts() -> None:
         "filing_receipts": facts["filings"], "warnings": facts["warnings"],
         "sample_facts": facts["facts"][-4:],
     })
-
-
-SCRIPT_BUILT_PAGE = "https://data.worldbank.org/indicator/NY.GDP.MKTP.CD"
-
-
-def test_live_browser_fallback() -> None:
-    from stemma.evidence.render import default_renderer
-
-    if default_renderer() is None:
-        pytest.skip("Playwright (extra evidence-render) not installed")
-    svc = new_run(fallback=True)
-    r = svc.capture(SCRIPT_BUILT_PAGE, "live test: page whose figures are written by scripts")
-    plain = svc.store.get_receipt(r["fallback_of"]) if r.get("fallback_of") else r
-    write("browser_fallback", {"plain": summary(plain), "rendered": summary(r),
-                               "blocked_requests": r.get("blocked_requests")})
-    assert plain["status"] in ("short_text", "empty_text")
-    # Hardened: only the main document loads, so script-built figures from other
-    # files stay missing; what is shown is that the browser fetched nothing else.
-    assert r["kind"] == "rendered", r
-    assert r.get("blocked_requests"), "subresources should have been refused"
 
 
 def test_live_as_of_capture() -> None:

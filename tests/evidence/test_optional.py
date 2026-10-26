@@ -1,4 +1,4 @@
-"""The browser fallback, the Docling table view and the MCP registration."""
+"""The Docling table view and the MCP registration."""
 
 from __future__ import annotations
 
@@ -9,66 +9,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import FakeTransport, Reply, enable_fallback, html
+from conftest import FakeTransport, Reply, html
 
 from stemma.evidence import tables as tables_mod
 from stemma.evidence import tools
-from stemma.evidence.render import Rendered
 from stemma.evidence.service import EvidenceService
 
 Factory = Callable[..., EvidenceService]
 SPA = b"<html><head><script src='/app.js'></script></head><body><div id='root'></div></body></html>"
 FULL = html("<h1>Invented dashboard</h1>" + "<p>Orders rose 12% to 4,410.</p>" * 10)
-
-
-class FakeRenderer:
-    name, version = "fake-browser", "0"
-
-    def __init__(self, result: Rendered | Exception) -> None:
-        self.result = result
-        self.calls: list[str] = []
-
-    def render(self, url: str) -> Rendered:
-        self.calls.append(url)
-        if isinstance(self.result, Exception):
-            raise self.result
-        return self.result
-
-
-def test_fallback_runs_only_on_loud_text(make_service: Factory, run_dir: Path) -> None:
-    enable_fallback(run_dir)
-    renderer = FakeRenderer(Rendered(FULL, "https://app.example.org/", ["http://10.0.0.1/x"]))
-    t = FakeTransport({"https://app.example.org/": Reply(200, [("Content-Type", "text/html")], SPA),
-                       "https://ok.example.org/": Reply(200, [("Content-Type", "text/html")], FULL)})
-    svc = make_service(t, renderer=renderer)
-    r = svc.capture("https://app.example.org/", "dashboard")
-    assert r["kind"] == "rendered" and r["status"] == "ok"
-    plain = svc.store.get_receipt(r["fallback_of"])
-    assert plain["status"] == "empty_text"  # the plain capture is kept, loud
-    assert r["renderer"]["name"] == "fake-browser"
-    assert r["warnings"] == ["browser_requests_refused: 1"]
-    assert svc.check_quote(r["receipt_id"], "Orders rose 12% to 4,410.")["found"]
-    assert svc.capture("https://ok.example.org/", "fine page")["kind"] == "web"
-    assert renderer.calls == ["https://app.example.org/"]
-
-
-def test_fallback_failure_is_recorded(make_service: Factory, run_dir: Path) -> None:
-    enable_fallback(run_dir)
-    renderer = FakeRenderer(RuntimeError("browser crashed"))
-    t = FakeTransport({"https://app.example.org/": Reply(200, [("Content-Type", "text/html")], SPA)})
-    r = make_service(t, renderer=renderer).capture("https://app.example.org/", "dashboard")
-    assert r["status"] == "empty_text"
-    assert any(w.startswith("browser_fallback_failed: receipt r_") for w in r["warnings"])
-
-
-def test_fallback_absent_is_warned(make_service: Factory, run_dir: Path) -> None:
-    enable_fallback(run_dir)
-    t = FakeTransport({"https://app.example.org/": Reply(200, [("Content-Type", "text/html")], SPA),
-                       "https://ok.example.org/": Reply(200, [("Content-Type", "text/html")], FULL)})
-    svc = make_service(t, renderer=None)
-    r = svc.capture("https://app.example.org/", "dashboard")
-    assert r["status"] == "empty_text" and "browser_fallback_not_installed" in r["warnings"]
-    assert svc.capture("https://ok.example.org/", "fine")["warnings"] == []
 
 
 def test_tables_not_installed(make_service: Factory, monkeypatch: pytest.MonkeyPatch) -> None:

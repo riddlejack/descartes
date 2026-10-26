@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import FakeSec, FakeTransport, Reply, enable_fallback, html, make_pdf, set_as_of
+from conftest import FakeSec, FakeTransport, Reply, html, make_pdf, set_as_of
 
 from stemma.evidence import api, limits, netpolicy
 from stemma.evidence import fetch as fetch_mod
@@ -304,21 +304,12 @@ def test_script_shell_is_short_and_zero_width_is_empty() -> None:
     assert extract(hidden_only, "text/html").status is CaptureStatus.EMPTY_TEXT
 
 
-def test_shell_triggers_browser_fallback(make_service: Factory, run_dir: Path) -> None:
-    enable_fallback(run_dir)
-    calls: list[str] = []
-
-    class Spy:
-        name, version = "spy", "0"
-
-        def render(self, url: str) -> Any:
-            calls.append(url)
-            raise RuntimeError("no browser here")
-
+def test_shell_is_loud_without_a_browser(make_service: Factory) -> None:
     page = b"<html><body><nav><a href='https://x.example.org/a'><img src='/i.svg'></a></nav></body></html>"
     t = FakeTransport({"https://app.example.org/": Reply(200, [("Content-Type", "text/html")], page)})
-    r = make_service(t, renderer=Spy()).capture("https://app.example.org/", "probe")
-    assert calls == ["https://app.example.org/"] and r["status"] in ("short_text", "empty_text")
+    r = make_service(t).capture("https://app.example.org/", "probe")
+    assert r["status"] in ("short_text", "empty_text")
+    assert "browser_fallback_unavailable" in r["warnings"]
 
 
 # 8. SEC amendments ------------------------------------------------------------------------

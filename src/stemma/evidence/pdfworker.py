@@ -31,13 +31,28 @@ class TooMuchText(Exception):
     pass
 
 
-def _page(textpage: Any, raw: Any) -> tuple[str, list[str | None]]:
+class _CharBudget:
+    """Characters the whole document may still yield; checked per character, so a
+    page cannot grow past the limit before it is caught."""
+
+    def __init__(self, limit: int) -> None:
+        self.left = limit
+        self.limit = limit
+
+    def take(self, count: int = 1) -> None:
+        self.left -= count
+        if self.left < 0:
+            raise TooMuchText(f"text passed the limit of {self.limit} characters")
+
+
+def _page(textpage: Any, raw: Any, budget: _CharBudget) -> tuple[str, list[str | None]]:
     count = raw.FPDFText_CountChars(textpage.raw)
     chars: list[str] = []
     flags: list[str | None] = []
     r, g, b, a = (ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint())
     index = 0
     while index < count:
+        budget.take()
         code = raw.FPDFText_GetUnicode(textpage.raw, index)
         width = 1
         if 0xD800 <= code <= 0xDBFF and index + 1 < count:
@@ -106,15 +121,17 @@ def run(body: bytes, max_chars: int) -> dict[str, Any]:
         offset = 0
         page_starts: list[int] = []
         count = len(pdf)
+        budget = _CharBudget(max_chars)
         for index in range(count):
             page = pdf[index]
             textpage = page.get_textpage()
             try:
-                page_text, flags = _newlines(*_page(textpage, raw))
+                page_text, flags = _newlines(*_page(textpage, raw, budget))
             finally:
                 textpage.close()
                 page.close()
             if index > 0:
+                budget.take(2)
                 parts.append("\n\n")
                 offset += 2
             page_starts.append(offset)
@@ -124,8 +141,6 @@ def run(body: bytes, max_chars: int) -> dict[str, Any]:
                             "title": f"Page {index + 1}", "start": offset,
                             "end": offset + len(page_text)})
             offset += len(page_text)
-            if offset > max_chars:
-                raise TooMuchText(f"text passed the limit of {max_chars} characters")
         try:
             for number, item in enumerate(pdf.get_toc(max_depth=4)):
                 page_index = item.page_index

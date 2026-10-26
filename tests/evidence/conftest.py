@@ -114,13 +114,6 @@ def run_dir(tmp_path: Path) -> Path:
     return folder
 
 
-def enable_fallback(run_dir: Path) -> None:
-    """Turn the browser fallback on for this run (it is off by default)."""
-    data = json.loads((run_dir / "run.json").read_text())
-    data["evidence"] = {"browser_fallback": True}
-    (run_dir / "run.json").write_text(json.dumps(data))
-
-
 def set_as_of(run_dir: Path, as_of: str | None) -> None:
     path = run_dir / "run.json"
     data = json.loads(path.read_text()) if path.exists() else {"run_id": "t"}
@@ -132,7 +125,6 @@ def set_as_of(run_dir: Path, as_of: str | None) -> None:
 def make_service(run_dir: Path, tmp_path: Path) -> Callable[..., EvidenceService]:
     def factory(transport: FakeTransport | None = None, **kwargs: Any) -> EvidenceService:
         kwargs.setdefault("cache_dir", tmp_path / "cache")
-        kwargs.setdefault("renderer", None)
         kwargs.setdefault("sec_identity", "Test Builder test@example.org")
         kwargs.setdefault("throttle", False)
         return EvidenceService(run_dir, transport=transport or FakeTransport(), **kwargs)
