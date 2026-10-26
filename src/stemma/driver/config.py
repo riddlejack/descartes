@@ -73,6 +73,9 @@ class Limits:
     lead_max_s: float = 24 * 3600.0
     # Resource limit: seconds between SIGTERM and SIGKILL when a session is stopped.
     stop_grace_s: float = 10.0
+    # Resource limit: launches of one check request when each resolves the wrong model or
+    # effort (each is revoked and relaunched until this many have run).
+    max_check_attempts: int = 3
     # Resource limit: bytes of a session's stderr kept in an event when it fails.
     stderr_tail_bytes: int = 2000
 

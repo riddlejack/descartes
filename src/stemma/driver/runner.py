@@ -17,21 +17,21 @@ import re
 import signal
 import time
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import FrameType
 from typing import Any, Final, Protocol, cast
 
-from stemma.driver import canary, events, frontmatter, status, verify
+from stemma.driver import canary, events, frontmatter, hostio, status, verify
 from stemma.driver.assemble import folder_digest, sha256_bytes
 from stemma.driver.config import LOCK_FILE, PLUGIN_DIR, STATE_FILE, DriverConfig, Limits
 from stemma.driver.errors import DriverBusy, DriverError, HarnessError, RunStateError
 from stemma.driver.launch import LaunchSpec, Session, expectation, launch
-from stemma.driver.runfolder import load_run, write_json_atomic
+from stemma.driver.runfolder import load_run
 from stemma.driver.settings import ToolSets, tools_for_role
-from stemma.register import roles
+from stemma.register import roles, safeio
 
 # Checking roles the driver may start (invariant: section 2), short names.
 CHECK_ROLES: Final = frozenset(roles.short(r) for r in roles.CHECKING_ROLES)
@@ -90,9 +90,7 @@ def real_checks_api() -> ChecksApi:
 
 @contextmanager
 def run_lock(run_dir: Path) -> Iterator[None]:
-    path = run_dir / LOCK_FILE
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    fd = hostio.open_nofollow(Path(os.path.realpath(run_dir)), LOCK_FILE, os.O_RDWR)
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -116,14 +114,48 @@ class Live:
     subagents: dict[str, verify.Subagent] = field(default_factory=dict)
 
 
+# How a driver run ended, and its exit code (invariant: one code per kind of end).
+OUTCOME_CODES: Final = {
+    "released": 0,  # the register recorded finish_run accepted
+    "ended_without_release": 1,  # the lead exited and nothing released the run
+    "canary_failed": 2,  # the lead did not start on the run plugin alone
+    "stopped_by_limit": 3,  # the lead reached a recorded resource limit
+    "lead_failed": 4,  # the lead could not start or crashed
+    "driver_stopped": 130,  # SIGTERM or SIGINT reached the driver
+}
+
+Revoke = Callable[[Path, str, str], None]
+Released = Callable[[Path], bool]
+
+
+def register_released(run_dir: Path) -> bool:
+    """True when the register recorded `finish_run` accepted."""
+    from stemma.register.store import Register
+
+    return bool(Register(run_dir)._run_facts("finished"))
+
+
+def register_revoke(run_dir: Path, session_id: str, reason: str) -> None:
+    """Take verdict authority from a session (`Register.revoke_session`, part B)."""
+    from stemma.register.store import Register
+
+    fn = getattr(Register(run_dir), "revoke_session", None)
+    if fn is None:
+        raise RunStateError("Register.revoke_session is not available")
+    fn(session_id, reason)
+
+
 def lead_prompt(run_id: str) -> str:
     return f"run:{run_id}"
 
 
 class Driver:
     def __init__(self, cfg: DriverConfig, run_dir: Path, api: ChecksApi | None = None,
-                 limits: Limits | None = None) -> None:
+                 limits: Limits | None = None, *, released: Released | None = None,
+                 revoke: Revoke | None = None) -> None:
         self.cfg = cfg
+        self.released = released or register_released
+        self.revoke = revoke or register_revoke
         self.run_dir = Path(os.path.realpath(run_dir))
         self.api = api if api is not None else real_checks_api()
         self.run = load_run(self.run_dir)
@@ -145,13 +177,14 @@ class Driver:
 
     # ----- state -------------------------------------------------------------------
     def _load_state(self) -> dict[str, Any]:
-        p = self.run_dir / STATE_FILE
-        if not p.exists():
+        try:
+            text = safeio.read_text(self.run_dir, STATE_FILE)
+        except FileNotFoundError:
             return {"run_id": self.run_id, "lead": {"session_id": None, "launches": 0,
                                                     "running": False},
                     "artifacts": {}, "check_attempts": {}}
         try:
-            data = json.loads(p.read_text(encoding="utf-8"))
+            data = json.loads(text)
         except json.JSONDecodeError as exc:
             raise RunStateError(f"driver state is not JSON: {exc}") from exc
         if not isinstance(data, dict) or data.get("run_id") != self.run_id:
@@ -159,7 +192,7 @@ class Driver:
         return data
 
     def _save_state(self) -> None:
-        write_json_atomic(self.run_dir / STATE_FILE, self.state)
+        hostio.write_json(self.run_dir, STATE_FILE, self.state)
 
     def note_evidence_stub(self) -> None:
         """Record when sessions get the evidence stub, and loudly if run.json says otherwise."""
@@ -190,7 +223,19 @@ class Driver:
         if init.get("model") != s.spec.model:
             events.emit(self.run_dir, "model_effort_mismatch", scope="init",
                         model=init.get("model"), expected_model=s.spec.model, **common)
+            if s.spec.request_id is not None and not problems:
+                self._lose_authority(s, f"init model {init.get('model')!r}, run.json "
+                                        f"{s.spec.model!r}")
         return problems
+
+    def _lose_authority(self, s: Session, reason: str) -> None:
+        """A check on the wrong model or effort: no verdict of it may stand; stop it now.
+        `_end` revokes the session in the register and relaunches the request."""
+        with s.lock:
+            if s.revoke_reason is not None:
+                return
+            s.revoke_reason = reason
+        s.stop("model_mismatch", self.limits.stop_grace_s)
 
     def _start(self, spec: LaunchSpec) -> Live:
         self._check_plugin()
@@ -227,6 +272,7 @@ class Driver:
         spec = self._spec("lead", lead_prompt(self.run_id), sid, resume, name, None)
         lead.update({"session_id": sid, "launches": n + 1, "running": True, "name": name,
                      "outcome": None, "exit_code": None})
+        self.state["outcome"] = None
         self._save_state()
         self._start(spec)
 
@@ -284,6 +330,10 @@ class Driver:
             events.emit(self.run_dir, "resolved_model_effort", **rec)
             if not match:
                 events.emit(self.run_dir, "model_effort_mismatch", **rec)
+                if scope == "main" and s.spec.request_id is not None:
+                    self._lose_authority(s, f"transcript model {model!r} effort {effort!r}, "
+                                            f"run.json {expected['model']!r} "
+                                            f"{expected['effort']!r}")
 
     def _scan_transcripts(self, live: Live, final: bool) -> None:
         s = live.session
@@ -315,6 +365,8 @@ class Driver:
                                     "spawn_depth": sub.spawn_depth})
 
     def _outcome(self, s: Session) -> str:
+        if s.revoke_reason is not None:
+            return "model_mismatch"
         if s.killed_reason in ("canary_failed", "stopped_by_limit", "driver_stopped"):
             return s.killed_reason
         if s.init is None or s.killed_reason == "init_timeout":
@@ -344,7 +396,9 @@ class Driver:
                     permission_denials=len(r.get("permission_denials") or []))
         del self.live[name]
         if s.spec.request_id is not None:
-            if outcome != "driver_stopped":
+            if s.revoke_reason is not None:
+                self._revoke_and_relaunch(s, code)
+            elif outcome != "driver_stopped":
                 self.api.mark_ended(self.run_dir, s.spec.request_id, code, outcome)
             return
         lead = self.state["lead"]
@@ -353,6 +407,26 @@ class Driver:
         last: dict[str, Any] = {"result": str(r.get("result") or "")[:4000], **summary}
         lead.update({"running": False, "exit_code": code, "outcome": outcome, "result": last})
         self._save_state()
+
+    def _revoke_and_relaunch(self, s: Session, code: int) -> None:
+        rid = s.spec.request_id
+        assert rid is not None and s.revoke_reason is not None  # invariant: a check
+        try:
+            self.revoke(self.run_dir, s.spec.session_id, s.revoke_reason)
+        except Exception as exc:  # noqa: BLE001 - part B's register; recorded, never hidden
+            events.emit(self.run_dir, "revoke_failed", request_id=rid,
+                        session_id=s.spec.session_id, error=f"{type(exc).__name__}: {exc}")
+        events.emit(self.run_dir, "check_revoked", request_id=rid, role=s.spec.role,
+                    session_id=s.spec.session_id, reason=s.revoke_reason)
+        attempts = int(self.state["check_attempts"].get(rid, 0))
+        if attempts >= self.limits.max_check_attempts:
+            events.emit(self.run_dir, "check_given_up", request_id=rid, attempts=attempts)
+            self.api.mark_ended(self.run_dir, rid, code, "model_mismatch")
+            return
+        st = self.api.states(self.run_dir).get(rid)
+        if st is None:
+            raise RunStateError(f"check request {rid} vanished from the register")
+        self._launch_check(st.request, relaunch=True)
 
     def _police(self, now: float) -> None:
         for live in list(self.live.values()):
@@ -399,7 +473,7 @@ class Driver:
         if changed:
             self._save_state()
 
-    def write_status(self, state: str) -> None:
+    def write_status(self, state: str, outcome: str | None = None) -> None:
         checks = []
         for rid, st in sorted(self.api.states(self.run_dir).items()):
             checks.append({"request_id": rid, "role": st.request.role,
@@ -409,7 +483,7 @@ class Driver:
         landed = [{"path": k, "at": v[3]} for k, v in sorted(self.state["artifacts"].items(),
                                                              key=lambda kv: kv[1][3])]
         status.write(self.run_dir, status.build(self.run_dir, self.run_id, state, lead, checks,
-                                                landed))
+                                                landed, outcome or self.state.get("outcome")))
 
     def _live_checks(self) -> int:
         return sum(1 for lv in self.live.values() if lv.session.spec.request_id is not None)
@@ -461,24 +535,41 @@ class Driver:
                 live.session.stop("driver_stopped", self.limits.stop_grace_s)
             for name, live in list(self.live.items()):
                 self._end(name, live)
-            self.write_status("stopped")
-            return 130
+            return self._finish("driver_stopped")
         finally:
             signal.signal(signal.SIGTERM, old_term)
             signal.signal(signal.SIGINT, old_int)
-        lead = self.state["lead"]
-        if self.exit_code == 0 and lead.get("outcome") != "completed":
-            self.exit_code = 1
-        events.emit(self.run_dir, "driver_finished", exit_code=self.exit_code,
-                    lead_outcome=lead.get("outcome"))
-        self.write_status("finished" if self.exit_code == 0 else "stopped")
-        return self.exit_code
+        return self._finish(self._run_outcome())
+
+    def _run_outcome(self) -> str:
+        """Success is the register's record of the release, and nothing else."""
+        lead_outcome = self.state["lead"].get("outcome")
+        if lead_outcome == "canary_failed":
+            return "canary_failed"
+        if self.released(self.run_dir):
+            return "released"
+        if lead_outcome == "stopped_by_limit":
+            return "stopped_by_limit"
+        if lead_outcome in ("launch_failed", "failed"):
+            return "lead_failed"
+        return "ended_without_release"
+
+    def _finish(self, outcome: str) -> int:
+        code = OUTCOME_CODES[outcome]
+        self.exit_code = code
+        self.state["outcome"] = outcome
+        self._save_state()
+        events.emit(self.run_dir, "driver_finished", exit_code=code, outcome=outcome,
+                    lead_outcome=self.state["lead"].get("outcome"))
+        self.write_status("finished" if outcome == "released" else "stopped", outcome)
+        return code
 
 
 def start(cfg: DriverConfig, run_dir: Path, api: ChecksApi | None = None,
-          limits: Limits | None = None, watch: bool = True) -> int:
+          limits: Limits | None = None, watch: bool = True, *,
+          released: Released | None = None, revoke: Revoke | None = None) -> int:
     with run_lock(run_dir):
-        d = Driver(cfg, run_dir, api, limits)
+        d = Driver(cfg, run_dir, api, limits, released=released, revoke=revoke)
         events.emit(d.run_dir, "run_started", run_id=d.run_id,
                     plugin_digest=d.run["plugin"]["digest"], harness=d.version)
         d.note_evidence_stub()
@@ -488,9 +579,10 @@ def start(cfg: DriverConfig, run_dir: Path, api: ChecksApi | None = None,
 
 
 def resume(cfg: DriverConfig, run_dir: Path, api: ChecksApi | None = None,
-           limits: Limits | None = None) -> int:
+           limits: Limits | None = None, *, released: Released | None = None,
+           revoke: Revoke | None = None) -> int:
     with run_lock(run_dir):
-        d = Driver(cfg, run_dir, api, limits)
+        d = Driver(cfg, run_dir, api, limits, released=released, revoke=revoke)
         events.emit(d.run_dir, "run_resumed", run_id=d.run_id,
                     lead_session_id=d.state["lead"].get("session_id"))
         d.note_evidence_stub()

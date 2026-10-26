@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import pwd
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -108,7 +109,8 @@ def clean_launch(binary: Path, config_dir: Path, prompt: str, *, cwd: Path, mode
                  settings_extra: dict[str, Any] | None = None,
                  env_extra: dict[str, str] | None = None, session_id: str | None = None,
                  resume: bool = False, strict_mcp_config: bool = False,
-                 disable_slash_commands: bool = False) -> CleanLaunch:
+                 disable_slash_commands: bool = False,
+                 settings_writer: Callable[[str], None] | None = None) -> CleanLaunch:
     """Build a clean launch and write its settings file; the caller starts `argv` with
     `env` in `cwd`, stdin closed."""
     if not prompt or prompt.startswith("-"):
@@ -144,8 +146,12 @@ def clean_launch(binary: Path, config_dir: Path, prompt: str, *, cwd: Path, mode
         argv.append(f"--resume={session_id}" if resume else f"--session-id={session_id}")
     assert not FORBIDDEN_FLAGS & set(argv)  # invariant
     env = scrubbed_env(config_dir, env_extra)
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(json.dumps(settings, indent=1, sort_keys=True), encoding="utf-8")
+    text = json.dumps(settings, indent=1, sort_keys=True)
+    if settings_writer is not None:  # e.g. a write that follows no symlink
+        settings_writer(text)
+    else:
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(text, encoding="utf-8")
     return CleanLaunch(argv, env, settings, settings_path)
 
 

@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any
 
-from stemma.driver import canary, clean, events
+from stemma.driver import canary, clean, events, hostio
 from stemma.driver.config import SESSIONS_DIR, SETTINGS_DIR, DriverConfig
 from stemma.driver.errors import HarnessError
 from stemma.driver.settings import ToolSets, stemma_settings_extra
@@ -94,6 +94,7 @@ class Session:
     canary_problems: list[str] | None = None
     result: dict[str, Any] | None = None
     killed_reason: str | None = None
+    revoke_reason: str | None = None  # a check that ran on the wrong model or effort
     reader: threading.Thread | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -142,10 +143,10 @@ OnInit = Callable[[Session, dict[str, Any]], list[str]]
 
 
 def _follow(run_dir: Path, s: Session, on_init: OnInit, grace_s: float,
-            out: IO[bytes]) -> None:
+            out: IO[bytes], sink: IO[bytes]) -> None:
     """Reader thread: copy the stream to disk, run the canary on init, note compactions."""
     unparsed_seen = False
-    with open(s.stream_path, "ab") as sink:
+    with sink:
         for raw in out:
             sink.write(raw)
             sink.flush()
@@ -182,34 +183,35 @@ def _follow(run_dir: Path, s: Session, on_init: OnInit, grace_s: float,
 def launch(cfg: DriverConfig, run_dir: Path, plugin_dir: Path, spec: LaunchSpec,
            on_init: OnInit, grace_s: float) -> Session:
     """Write the session's settings file and start the process. Never raises after start."""
-    settings_dir = run_dir / SETTINGS_DIR
-    sessions_dir = run_dir / SESSIONS_DIR
-    settings_dir.mkdir(parents=True, exist_ok=True)
-    sessions_dir.mkdir(parents=True, exist_ok=True)
+    settings_rel = f"{SETTINGS_DIR}/{spec.name}.json"
     cl = clean.clean_launch(
         cfg.claude_bin, cfg.claude_config, spec.prompt, cwd=run_dir, model=spec.model,
         effort=spec.effort, tools=spec.tools.builtin,
-        settings_path=settings_dir / f"{spec.name}.json", plugin_dir=plugin_dir,
+        settings_path=run_dir / settings_rel, plugin_dir=plugin_dir,
+        settings_writer=lambda text: hostio.write_text(run_dir, settings_rel, text),
         agent=f"stemma:{spec.role}",
         settings_extra=stemma_settings_extra(run_dir, spec.role, spec.prompt, spec.tools,
                                              cfg.claude_config, cache_dir=cfg.cache_dir,
                                              deny_agent=spec.deny_agent),
         env_extra=driver_env(cfg, run_dir), session_id=spec.session_id, resume=spec.resume)
     argv = cl.argv
-    stream_path = sessions_dir / f"{spec.name}.stream.jsonl"
-    stderr_path = sessions_dir / f"{spec.name}.stderr"
-    with open(stderr_path, "ab") as err:
+    stream_rel = f"{SESSIONS_DIR}/{spec.name}.stream.jsonl"
+    stderr_rel = f"{SESSIONS_DIR}/{spec.name}.stderr"
+    stream_path, stderr_path = run_dir / stream_rel, run_dir / stderr_rel
+    sink = hostio.open_append(run_dir, stream_rel)
+    with hostio.open_append(run_dir, stderr_rel) as err:
         try:
             proc = subprocess.Popen(
                 argv, cwd=run_dir, env=cl.env, stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=err, start_new_session=True,
             )
         except OSError as exc:
+            sink.close()
             raise HarnessError(f"could not start {cfg.claude_bin}: {exc}") from exc
     s = Session(spec, argv, proc, time.monotonic(), stream_path, stderr_path)
     assert proc.stdout is not None  # invariant: stdout=PIPE
     s.reader = threading.Thread(target=_follow, name=f"follow-{spec.name}", daemon=True,
-                                args=(run_dir, s, on_init, grace_s, proc.stdout))
+                                args=(run_dir, s, on_init, grace_s, proc.stdout, sink))
     s.reader.start()
     return s
 

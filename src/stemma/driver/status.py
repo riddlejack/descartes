@@ -7,8 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from stemma.driver import events
-from stemma.driver.runfolder import write_json_atomic
+from stemma.driver import events, hostio
 
 
 def _latest_verdict(run_dir: Path, branch_id: str) -> dict[str, Any] | None:
@@ -53,12 +52,14 @@ def waiting_on_user(run_dir: Path) -> list[dict[str, Any]]:
 
 
 def build(run_dir: Path, run_id: str, state: str, lead: dict[str, Any],
-          checks: list[dict[str, Any]], landed: list[dict[str, Any]]) -> dict[str, Any]:
+          checks: list[dict[str, Any]], landed: list[dict[str, Any]],
+          outcome: str | None = None) -> dict[str, Any]:
     alerts = [e for e in events.read(run_dir) if e.get("event") in events.LOUD]
     return {
         "run_id": run_id,
         "updated_at": events.now(),
         "state": state,
+        "outcome": outcome,
         "lead": lead,
         "checks": {
             "running": [c for c in checks if c["status"] == "running"],
@@ -104,7 +105,9 @@ def render_html(st: dict[str, Any]) -> str:
         ("<style>body{font-family:system-ui,sans-serif;max-width:52rem;margin:2rem auto;"
         "padding:0 1rem;line-height:1.5}</style></head><body>"),
         f"<h1>Run {e(st['run_id'])}</h1>",
-        f"<p>State: {e(st['state'])}. Updated {e(st['updated_at'])}.</p>",
+        f"<p>State: {e(st['state'])}"
+        + (f", outcome {e(str(st['outcome']))}" if st.get("outcome") else "")
+        + f". Updated {e(st['updated_at'])}.</p>",
         "<h2>Running now</h2>", _li(running),
         "<h2>Waiting on you</h2>", _li(waits),
         "<h2>Needs attention</h2>", _li(alerts),
@@ -118,7 +121,5 @@ def render_html(st: dict[str, Any]) -> str:
 
 
 def write(run_dir: Path, st: dict[str, Any]) -> None:
-    write_json_atomic(run_dir / "status.json", st)
-    tmp = run_dir / ".status.html.tmp"
-    tmp.write_text(render_html(st), encoding="utf-8")
-    tmp.replace(run_dir / "status.html")
+    hostio.write_json(run_dir, "status.json", st)
+    hostio.write_text(run_dir, "status.html", render_html(st))
