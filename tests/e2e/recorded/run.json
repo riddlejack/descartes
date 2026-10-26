@@ -1,6 +1,6 @@
 {
  "as_of": null,
- "created_at": "2026-10-26T04:44:00Z",
+ "created_at": "2026-10-26T05:07:44Z",
  "evidence_stub": true,
  "harness": {
   "binary": "<HOME>/.private/runs/tools/claude-code-2.1.308/node_modules/.bin/claude",
@@ -76,20 +76,20 @@
      "lead/s4_orientation.frame_first.md",
      "lead/s6_cross_family.off.md"
     ],
-    "sha256": "aca01ad8c8a18ae9317bc8c611a8f699b585239ab735984b9c16c7da37a92a12"
+    "sha256": "e7ae00f89796b33464e703795ce8126aa187454b6e025f8b592521009cbd0d60"
    }
   },
-  "digest": "9d92a45f329781c51aee793a0389ccad79d119539186e2324eb27a8c63b6cb14",
+  "digest": "07ef69d82f309886cdad530d63c95f5279ac34ce2e27d285b888fb257b5d2a1a",
   "files": {
    ".claude-plugin/plugin.json": "d3d7686b17e1605d36dc58bfa79215b869010bcb182e38cd9e174cec76eddfc9",
    ".mcp.json": "de2b00bc112ca125508ba25e3cc65cfb000fce379c8e1fde25a8261217154685",
-   "agents/blind-framer.md": "a2e4f0d9d03863028364656c7237ee28071873dc7d53d41dcfa783d4b3967be7",
+   "agents/blind-framer.md": "ff1bf895e44378c7a10c2fa0922724c97edf6b720436b15cfde8688e3fdffe01",
    "agents/branch-reviewer.md": "e792afe6c8f690fc73cb4245dd8e7284b6154c02ed65421ba662cf3dfe488ce8",
    "agents/claim-checker.md": "e81f2c4c039b1d8a35bca7253f74ed09fae435d72f1147217d22f62253cabcc5",
-   "agents/deciders-eye-reviewer.md": "566acc888ae4e18d33ecb2963da0911e0d7f86e1308dafa1437cacdfe223d291",
-   "agents/evidence-auditor.md": "7928620eeb7d3a80b321a87ed5c97975e067ee7d6ee26e33483859eb3f90f508",
-   "agents/lead.md": "aca01ad8c8a18ae9317bc8c611a8f699b585239ab735984b9c16c7da37a92a12",
-   "agents/mechanical-reader.md": "fd756c363f66f0b9838f5ad7d9d102ddb1373b564755f9b9dcaa2d574fe92eab",
+   "agents/deciders-eye-reviewer.md": "bee86b411af58d878458a6d41664bc1ea61b3d79c20b7413e629c525c7f8f9c4",
+   "agents/evidence-auditor.md": "39dd1b8bc2137e44e32fe74f2639e55ce262a0f11f8d6875465dd6b15b115b46",
+   "agents/lead.md": "e7ae00f89796b33464e703795ce8126aa187454b6e025f8b592521009cbd0d60",
+   "agents/mechanical-reader.md": "1e33e4b4824eee7c5ceabdaf4c072e145f3fda5cdf082ca50136d70c1806c251",
    "agents/retrospective-writer.md": "cf16f7619cf252263a5d88696af932d3e362ca6e0d588f601e1a15d345c98a8a",
    "agents/worker.md": "f9e41bf8bbf9edfd6600f1bedef97689df8502c27ada7edafd9e28a02a5ecb43",
    "hooks/hooks.json": "bdca615837cbeba21b4e749f2960c7598adfd4f1b7cd78a7374a637cd5e1d642",
@@ -104,7 +104,7 @@
   ],
   "standing_rules_sha256": "bbf2e65bc7ad0e7506299e933fe37b8d0b70fadc9c2497b9e3c535ed37090ccf"
  },
- "run_id": "20261026-044400-e99681",
+ "run_id": "20261026-050744-7917ca",
  "switches": {
   "s1_method": "decomposition",
   "s2_shape": "team",

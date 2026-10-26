@@ -17,12 +17,12 @@
         "reason": "Placeholder review.",
         "method": null,
         "gap_type": null,
-        "record_digest": "5ec1072e9d53d1cca2338ffdcdb4a7b85bcb9dc3fd77713f36b1a4860298c312",
+        "record_digest": "c06dd1faca3d59067f09a7ebd569b0f78fa95168797fab29427937551e365abb",
         "by": "stemma:branch-reviewer",
-        "session": "1e19ec7b-36a1-4b17-8c3a-45d78a843201",
-        "at": "2026-10-26T04:44:20.774Z"
+        "session": "a04a326b-5238-48cc-bba8-9f1408a5a3e5",
+        "at": "2026-10-26T05:08:07.560Z"
       }
     }
   ],
-  "log_tx": 10
+  "log_tx": 15
 }

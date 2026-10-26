@@ -5,9 +5,9 @@ clean config, placeholder role texts (`placeholder_plugin/`), the real
 `plugin/hooks/` and `plugin/.mcp.json`, and one invented capture
 (`r-invented-1`, written by the script into the run's store; the evidence service was
 the register's stub, `STEMMA_EVIDENCE_STUB=1`, because part A is not in this branch).
-Recorded run: `20261026-044400-e99681` on the final code (commit after 5616b79), about
-one minute, driver exit 0; its files are in `recorded/`. An earlier run on older code
-(`20261026-043549-60adb0`) also passed.
+Recorded run: `20261026-050744-7917ca`, on the code after the merge-gate review fixes
+(8b1df30), about one minute, driver exit 0; its files are in `recorded/`. Earlier runs
+`20261026-044400-e99681` and `20261026-043549-60adb0`, on older code, also passed.
 
 What it shows, in order (from `recorded/events.jsonl`):
 1. The driver launched the lead (`--agent stemma:lead`) and, at run start, the blind
@@ -21,8 +21,11 @@ What it shows, in order (from `recorded/events.jsonl`):
    evidence auditor and the mechanical reader (each `draft:1`, three at once), and,
    after `finish_run` was accepted, the retrospective writer (`retro:run`). Eight
    checking sessions in all, none started by an author.
-5. The claim checker recorded `holds`; the second `finish_run` was accepted and
-   `deliverable/answer.reader.md` rendered the tag as a numbered reference.
+5. The framer and the three reviewers recorded their work through `record_frame` and
+   `record_review` (tool-written files). The claim checker recorded `holds`; the second
+   `finish_run(1)` was accepted, copied the frozen reviewed draft to
+   `deliverable/answer.md` byte for byte, and rendered the tag as a numbered reference
+   in `deliverable/answer.reader.md`.
 6. Every launch's resolved model and effort matched `run.json`
    (`resolved_model_effort ... match: true`, claude-opus-5-5 at the effort the task set).
 

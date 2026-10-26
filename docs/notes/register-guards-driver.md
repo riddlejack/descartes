@@ -104,13 +104,27 @@ the detail. Harness facts below were each shown by a run (report and kit in
   role>)` and `Agent(stemma:lead)` denied, `$STEMMA_CACHE` unwritable, single_loop
   denies `Agent` to the lead and records s3 `not_applicable`.
 
+- **Merge-gate review fixes (after 09e15da).** Host writes go through
+  `register/safeio.py` (no symlink followed, temp files in `register/tmp/`, rename by
+  directory fd; FIFOs refused). The framer's frames and the three reviews are written
+  by `record_frame`/`record_review`, accepted only from the session the driver launched
+  for that role, id, version and latest round. `finish_run(version)` releases the frozen
+  reviewed draft itself (`register/drafts/answer.v<n>.md`), one read for gate,
+  deliverable and reader; `deliverable/`, `reviews/`, `framer/own-frame.md`,
+  `framer/critique.md` and `tree.md` are tool-only. Reviewers read the frozen draft.
+  Malformed tags are refused; segmentation fails closed (`tags.py`). Corrections must be
+  new claims; changing a reviewed node reopens it. Torn log lines are moved to
+  `<log>.torn`. The reviewer's 27 attack probes pass on 09e15da and fail now;
+  `tests/register/test_review_attacks.py` keeps each.
+
 ## How it was shown
-- 321 unit and hostile tests (`pytest tests`), no network; `ruff` and `mypy --strict`
+- 474 unit and hostile tests (`pytest tests`), no network; `ruff` and `mypy --strict`
   clean on `src/`.
 - Race tests: two processes filing claims at once (register), four writing the World
   Model log at once (engine), both barrier-synchronised.
-- World Model conformance: `sh conformance/run.sh`, unmodified runner, 8/8
-  (`conformance/RESULT.md`).
+- World Model conformance: `sh conformance/run.sh` (memory store) and
+  `sh conformance/run-file.sh` (the file store the register uses), unmodified runner,
+  8/8 each (`conformance/RESULT.md`).
 - Harness probes p0 to p13 (`docs/notes/register-guards-driver-probes.md`,
   `conformance/harness/`).
 - End-to-end launch with placeholder roles (`tests/e2e/RESULT.md`).
