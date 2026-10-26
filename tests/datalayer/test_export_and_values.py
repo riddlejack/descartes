@@ -199,3 +199,19 @@ def test_concurrent_syncs_leave_one_consistent_copy(run_dir: Path) -> None:
     con.close()
     assert counts == {"capture": 3, "claim": 5, "claim_support": 4, "sec_fact": 2,
                       "doc_table_cell": 6}
+
+
+def test_sec_parse_agrees_with_part_a() -> None:
+    """D re-reads stored SEC answers; it must find exactly the facts part A's parser finds."""
+    import json as _json
+
+    from stemma.datalayer.export import sec_facts_from_bytes
+    from stemma.evidence.sec import facts_from_concept_json
+
+    from .conftest import AS_OF, SEC_JSON
+
+    body = _json.dumps(SEC_JSON).encode()
+    ours = [(f["accn"], f["end"], f["value"], f["unit"]) for f in sec_facts_from_bytes(body, AS_OF)]
+    theirs = [(f["accession"], f["end"], f["value"], f["unit"])
+              for f in facts_from_concept_json(SEC_JSON) if str(f["filed"]) < AS_OF]
+    assert ours == theirs and len(ours) == 2

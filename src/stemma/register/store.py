@@ -226,6 +226,26 @@ class Register:
             raise Refused(f"Refused: derivation input {given} has no number.")
         return cid, float(number)
 
+    def _inputs(self) -> Callable[[str], tuple[str, float]]:
+        """Derivation inputs; through the data layer when STEMMA_DATALAYER=zetaris (5a)."""
+        if os.environ.get("STEMMA_DATALAYER") != "zetaris":
+            return self._lookup_input
+        from stemma.datalayer import InputMismatch, input_lookup
+
+        def alert(record: dict[str, Any]) -> None:  # loud on the run, never a refusal
+            jsonl.append(self.run_dir / "events.jsonl", {**record, "at": now(),
+                                                          "source": "register"})
+
+        through = input_lookup(self.run_dir, self._lookup_input, claims=self, alert=alert)
+
+        def lookup(given: str) -> tuple[str, float]:
+            try:
+                return through(given)
+            except InputMismatch as exc:
+                raise Refused(f"Refused: input_mismatch: derivation input {given}.") from exc
+
+        return lookup
+
     def _store_claim(self, result: filing.FilingResult, caller: Caller,
                      supersedes: str | None) -> tuple[str, bool]:
         cid = filing.claim_id_of(result.claim)
@@ -263,7 +283,7 @@ class Register:
     def file_claim(self, caller: Caller, raw: dict[str, Any]) -> dict[str, Any]:
         self._require(caller, roles.AUTHORS, "file claims")
         result = filing.run_checks(raw, self.run_dir, self.evidence, self._rerun,
-                                   self._lookup_input)
+                                   self._inputs())
         with jsonl.exclusive(self._lock):
             self.wm.refresh()
             cid, existed = self._store_claim(result, caller, None)
@@ -289,7 +309,7 @@ class Register:
         corrected = None
         if corrected_claim is not None:
             corrected = filing.run_checks(corrected_claim, self.run_dir, self.evidence,
-                                          self._rerun, self._lookup_input)
+                                          self._rerun, self._inputs())
         with jsonl.exclusive(self._lock):
             self.wm.refresh()
             self._session_prompt_is(caller, "claim-checker", f"claim:{cid}")  # binding, in lock

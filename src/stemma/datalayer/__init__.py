@@ -158,12 +158,12 @@ def input_lookup(run_dir: Path, register_lookup: InputLookup,
     (the run's events, at merge) and the query log: the research path never stops
     or changes for it. The run is synced once, on the first input.
     """
-    s = settings or Settings.from_env()
     log = query_log(run_dir)
     state: dict[str, Any] = {}
 
     def unavailable(cid: str, exc: Exception) -> None:
-        record = {"event": UNAVAILABLE, "claim_id": cid, "mode": s.mode,
+        mode = settings.mode if settings else os.environ.get("STEMMA_DATALAYER", "sqlite")
+        record = {"event": UNAVAILABLE, "claim_id": cid, "mode": mode,
                   "error": f"{type(exc).__name__}: {exc}"}
         log.write(engine="datalayer", purpose=UNAVAILABLE, level="loud", **record)
         logger.error("%s", record)
@@ -172,6 +172,7 @@ def input_lookup(run_dir: Path, register_lookup: InputLookup,
 
     def backend() -> EvidenceValues:
         if "backend" not in state:
+            s = settings or Settings.from_env()  # a bad setting is unavailability too
             sync(run_dir, s, claims)
             run_id, _ = read_run(run_dir)
             if s.mode == "zetaris":
@@ -191,7 +192,7 @@ def input_lookup(run_dir: Path, register_lookup: InputLookup,
         except ValueMismatch as exc:
             raise InputMismatch(f"claim {cid[:12]}: the data layer's copy is not the "
                                 f"filed number ({exc.detail})") from exc
-        except DataLayerError as exc:
+        except Exception as exc:  # noqa: BLE001 - nothing here may stop the research path
             unavailable(cid, exc)
             return cid, filed
         if _bits(served) != _bits(filed):

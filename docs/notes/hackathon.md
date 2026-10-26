@@ -102,7 +102,27 @@ one query; and the semantic layer's data-quality rules (each foreign key is a ru
 example that every support row cites a receipt in the manifest). That is the design's
 position (DESIGN-v1 section 7), unchanged.
 
-## What part B would change (accepted as contract v0.2.7, section 5a; D makes it at merge)
+## The hook in part B's register (contract v0.2.7, section 5a; made at merge, 26 Oct)
+
+Merged `main` (A, B, C) at 0f65706. `Register._inputs()` in `register/store.py` returns
+B's own lookup unless `STEMMA_DATALAYER=zetaris`; then it wraps it in
+`stemma.datalayer.input_lookup` (claims from the register itself), turns
+`InputMismatch` into B's `Refused("Refused: input_mismatch: ...")`, and writes
+`datalayer_unavailable` to the run's `events.jsonl` (source `register`). Any failure of
+the data layer, a bad setting included, files the claim with the register's numbers.
+`tests/datalayer/test_register_hook.py` runs the real `Register`: unchanged without
+Zetaris mode; unreachable (a closed loopback port) files with the register's numbers and
+writes both events; a one-input difference refuses without naming the numbers; matching
+numbers reach the re-run from the data layer. A test also shows D's SEC re-read agrees
+with A's parser on the same bytes. Full suite under every extras group: 978 passed,
+6 skipped (live tests); ruff and mypy --strict clean.
+
+Not done, outside the hook's scope (B's files): `datalayer_unavailable` is not yet in
+`driver/events.py`'s `LOUD` set, so the status page does not list it as an alert; and
+`mcp_server.py` does not yet call `stemma.datalayer.tools.register_tools`, so
+`query_data` is not served. One line each.
+
+### The original proposal
 
 B's `file_claim` re-runs a script in a sandbox with no network, and an agent's own Bash
 has no network either (B's probe notes: `allowedDomains: []`, raw sockets refused). So
