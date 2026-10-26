@@ -1,0 +1,1 @@
+{"mcpServers": {"stemma": {"command": "${PROBE_PY}", "args": ["${CLAUDE_PLUGIN_ROOT}/probe_server.py"], "alwaysLoad": true}}}

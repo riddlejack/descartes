@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "stemma": {
+      "command": "${STEMMA_PYTHON}",
+      "args": ["-I", "-m", "stemma.mcp_server"],
+      "alwaysLoad": true
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{"syncClaudeAiPlugins": false, "syncClaudeAiSkills": false, "disableClaudeAiConnectors": true, "disableBundledSkills": true,
+ "permissions": {"allow": ["Bash"]},
+ "sandbox": {"enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false, "autoAllowBashIfSandboxed": true,
+   "network": {"allowedDomains": []},
+   "filesystem": {"denyRead": ["<SCRATCH>"], "allowRead": ["<SCRATCH>", "<SCRATCH>", "<SCRATCH>"]}}}

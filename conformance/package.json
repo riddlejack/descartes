@@ -1,0 +1,12 @@
+{
+  "name": "stemma-world-model-conformance",
+  "private": true,
+  "type": "module",
+  "description": "Runs Meterless World Model's conformance runner, unmodified, against the Python engine through a logic-free bridge.",
+  "scripts": {
+    "conformance": "sh run.sh"
+  },
+  "devDependencies": {
+    "tsx": "4.23.0"
+  }
+}

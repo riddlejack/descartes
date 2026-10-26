@@ -1,0 +1,15 @@
+vendor/runner.ts is World Model's conformance runner, copied byte for byte and
+unmodified from the Meterless repository:
+
+  repository  https://github.com/Meterless/Meterless
+  commit      1742dec56a66e58eef9dda2d2b865823758ca8cd (2026-10-19)
+  path        engines/world-model/conformance/runner.ts
+  sha256      7cd3b80d62d45d16f3342c62a91c89abf819c9b46970187d2f36fb9e3050da82
+
+It is licensed under the Apache License, Version 2.0; vendor/LICENSE is that
+licence as it appears at the same commit (engines/world-model/LICENSE, sha256
+63e29fc8231b53757a77fbc371071c91d768621efa1e68b1d9ff8d1bb7c4a0ef).
+
+Nothing else from that repository is included in Stemma 2. The Python engine in
+src/stemma/register/wm/ was written from the specification's text, not
+translated from the reference implementation.

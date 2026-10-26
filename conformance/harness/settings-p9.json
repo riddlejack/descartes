@@ -1,0 +1,8 @@
+{"syncClaudeAiPlugins": false, "syncClaudeAiSkills": false, "disableClaudeAiConnectors": true,
+ "disableBundledSkills": true,
+ "enabledPlugins": {"cc-plugin-agents-md@builtin": false, "cc-plugin-telemetry@builtin": false, "cc-plugin-plugin-authoring@builtin": false},
+ "permissions": {"deny": ["WebFetch", "Agent(fork)", "Read(/<SCRATCH>)", "Edit(/<SCRATCH>)", "Write(/<SCRATCH>)"],
+                 "allow": ["Bash", "Read", "Grep", "Glob", "Write", "Edit"]},
+ "sandbox": {"enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false, "autoAllowBashIfSandboxed": true,
+   "network": {"allowedDomains": []},
+   "filesystem": {"denyWrite": ["<SCRATCH>", "<SCRATCH>"], "denyRead": ["<SCRATCH>"]}}}

@@ -1,0 +1,136 @@
+run folder: <SCRATCH>
+{
+ "driver_exit": 0,
+ "denials": [
+  "Refused: finish_run: the tree has no nodes; the blind framer's critique is not recorded; framer/lead-response.md does not exist; the deciders-eye-reviewer review of version 1 is not recorded; the evidence-auditor review of version 1 is not recorded; the mechanical-reader review of version 1 is not recorded; claim ee77fd878889 has verdict none."
+ ],
+ "launches": [
+  {
+   "role": "lead",
+   "prompt": "run:20261026-065636-1ab23f",
+   "model": "claude-opus-5-5",
+   "effort": "low"
+  },
+  {
+   "role": "blind-framer",
+   "prompt": "frame:own",
+   "model": "claude-opus-5-5",
+   "effort": "low"
+  },
+  {
+   "role": "claim-checker",
+   "prompt": "claim:ee77fd878889e521bb50cd7c8047df98e09c3b5c82a1899d5f459220a50dfdbe",
+   "model": "claude-opus-5-5",
+   "effort": "low"
+  },
+  {
+   "role": "deciders-eye-reviewer",
+   "prompt": "draft:1",
+   "model": "claude-opus-5-5",
+   "effort": "low"
+  },
+  {
+   "role": "evidence-auditor",
+   "prompt": "draft:1",
+   "model": "claude-opus-5-5",
+   "effort": "low"
+  },
+  {
+   "role": "mechanical-reader",
+   "prompt": "draft:1",
+   "model": "claude-opus-5-5",
+   "effort": "low"
+  },
+  {
+   "role": "branch-reviewer",
+   "prompt": "branch:b1",
+   "model": "claude-opus-5-5",
+   "effort": "low"
+  },
+  {
+   "role": "blind-framer",
+   "prompt": "frame:critique",
+   "model": "claude-opus-5-5",
+   "effort": "low"
+  },
+  {
+   "role": "retrospective-writer",
+   "prompt": "retro:run",
+   "model": "claude-opus-5-5",
+   "effort": "low"
+  }
+ ],
+ "event_kinds": [
+  "artifact_changed",
+  "artifact_landed",
+  "canary_passed",
+  "denied",
+  "driver_finished",
+  "file_write",
+  "register_read",
+  "register_write",
+  "resolved_model_effort",
+  "run_started",
+  "session_ended",
+  "session_launched",
+  "session_verified"
+ ],
+ "checks": {
+  "frame:own (blind-framer)": [
+   "ended",
+   "completed"
+  ],
+  "claim:ee77fd878889e521bb50cd7c8047df98e09c3b5c82a1899d5f459220a50dfdbe (claim-checker)": [
+   "ended",
+   "completed"
+  ],
+  "draft:1 (deciders-eye-reviewer)": [
+   "ended",
+   "completed"
+  ],
+  "draft:1 (evidence-auditor)": [
+   "ended",
+   "completed"
+  ],
+  "draft:1 (mechanical-reader)": [
+   "ended",
+   "completed"
+  ],
+  "branch:b1 (branch-reviewer)": [
+   "ended",
+   "completed"
+  ],
+  "frame:critique (blind-framer)": [
+   "ended",
+   "completed"
+  ],
+  "retro:run (retrospective-writer)": [
+   "ended",
+   "completed"
+  ]
+ },
+ "claims": [
+  {
+   "tag": "[[c:ee77fd878889]]",
+   "verdict": "holds",
+   "author": "stemma:lead"
+  }
+ ],
+ "finished": [
+  {
+   "at": "2026-10-26T06:57:29.965Z",
+   "version": 1,
+   "sha256": "7f9371f378d88cee594ef8a7ded1424e67f072ab9bd797a9dbc87a43e4eb8c45",
+   "sessions": [
+    "7a615694-7b04-42ea-903b-f0ac8a47255a",
+    "856c0337-628c-4f43-8d71-f9ed15891886",
+    "9ae8c37c-de1b-4832-8069-f05699a80cec",
+    "c48f0c62-6b04-437f-a594-8c43322a98ba",
+    "cb0db35d-2277-4606-915b-4c42542005bb",
+    "fe2433c7-0781-476a-8faf-fd74195f71d3"
+   ]
+  }
+ ],
+ "reader_exists": true
+}
+exit 0

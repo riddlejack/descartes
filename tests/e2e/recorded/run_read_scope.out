@@ -1,0 +1,17 @@
+run folder: <SCRATCH>
+{
+ "driver_exit": 1,
+ "leaked": [],
+ "tool_results": [
+  "\"{\\\"kind\\\":\\\"own\\\",\\\"round\\\":1,\\\"sha256\\\":\\\"6e4fc3d8fcd69e2f789733cc9bf55dc4e99bbd9d08e564c3d633c52e952140cf\\\",\\\"session\\\":\\\"ccf7d2f3-1661-4067-b2ee-a66a8251294f\\\",\\\"file\\\":\\\"framer/own-frame.md\\\"}\"",
+  "\"PreToolUse:Read hook error: [\\\"$STEMMA_PYTHON\\\" -I -m stemma.hooks pre]: Refused: <HOME>/Desktop/stemma-2/.claude/worktrees/part-b-register-guards-driver-bd46bc/tests/e2e/_decoy_answer_key_e7913da4512a.txt is",
+  "\"PreToolUse:Read hook error: [\\\"$STEMMA_PYTHON\\\" -I -m stemma.hooks pre]: Refused: <HOME>/.private/stemma-design/design-2026-10/DESIGN-v1.md is outside the run folder.\\nThis hook comes from the stemma@inline ",
+  "\"Exit code 1\\nhead: <HOME>/Desktop/stemma-2/.claude/worktrees/part-b-register-guards-driver-bd46bc/tests/e2e/_decoy_answer_key_e7913da4512a.txt: Operation not permitted\"",
+  "\"Exit code 1\\nhead: <HOME>/.private/stemma-design/design-2026-10/DESIGN-v1.md: Operation not permitted\"",
+  "\"PreToolUse:Read hook error: [\\\"$STEMMA_PYTHON\\\" -I -m stemma.hooks pre]: Refused: <SCRATCH>",
+  "\"Exit code 1\\nhead: <SCRATCH>",
+  "\"PreToolUse:Read hook error: [\\\"$STEMMA_PYTHON\\\" -I -m stemma.hooks pre]: Refused: <HOME>/stemma-read-probe-e7913da4512a.txt is outside the run folder.\\nThis hook comes from the stemma@inline plugin.\"",
+  "\"Exit code 1\\nhead: <HOME>/stemma-read-probe-e7913da4512a.txt: Operation not permitted\""
+ ]
+}
+exit 0

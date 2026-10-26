@@ -1,0 +1,2 @@
+{"permissions": {"deny": ["Agent(fork)", "Agent(general-purpose)", "Agent(Explore)", "Agent(Plan)", "Agent(claude)", "Agent(statusline-setup)", "Agent(claude-code-guide)", "WebFetch"], "allow": ["Agent(stemma:plain)"]},
+ "availableModels": ["claude-opus-5-5", "claude-fable-5-1"]}
