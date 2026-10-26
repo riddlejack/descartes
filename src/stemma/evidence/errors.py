@@ -77,6 +77,10 @@ class CaptureStatus(StrEnum):
     # `capture_file`: the file exists but cannot be opened or read.
     FILE_UNREADABLE = "file_unreadable"
 
+    # A fault in this service, recorded rather than raised so the attempt keeps its
+    # receipt. Evidences nothing.
+    INTERNAL_ERROR = "internal_error"
+
 
 # Invariant: the statuses whose receipt carries stored text that may be read,
 # searched and quoted.

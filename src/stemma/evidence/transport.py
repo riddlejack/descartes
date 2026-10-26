@@ -7,9 +7,12 @@ the network.
 
 from __future__ import annotations
 
+import contextlib
 import http.client
 import socket
 import ssl
+import threading
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Protocol
@@ -49,9 +52,11 @@ class Transport(Protocol):
         """Every address `host` answers with."""
 
     def request(
-        self, url: Url, address: str, headers: dict[str, str], timeout: float
+        self, url: Url, address: str, headers: dict[str, str], timeout: float, deadline: float
     ) -> RawResponse:
-        """Send GET for `url` to `address`; raise `TransportFailure` on no response."""
+        """Send GET for `url` to `address`; raise `TransportFailure` on no response.
+        `timeout` bounds each blocking call; `deadline` (a `time.monotonic()` value)
+        bounds the whole exchange, body included."""
 
 
 def _tls_context() -> ssl.SSLContext:
@@ -67,9 +72,11 @@ class _PinnedHTTPConnection(http.client.HTTPConnection):
     def __init__(self, host: str, port: int, address: str, timeout: float) -> None:
         super().__init__(host, port, timeout=timeout)
         self._address = address
+        self.raw_sock: socket.socket | None = None
 
     def connect(self) -> None:
-        self.sock = socket.create_connection((self._address, self.port), self.timeout)
+        self.sock = self.raw_sock = socket.create_connection((self._address, self.port),
+                                                             self.timeout)
 
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
@@ -78,14 +85,39 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         super().__init__(host, port, timeout=timeout, context=context)
         self._address = address
         self._tls = context
+        self.raw_sock: socket.socket | None = None
 
     def connect(self) -> None:
-        raw = socket.create_connection((self._address, self.port), self.timeout)
+        raw = self.raw_sock = socket.create_connection((self._address, self.port), self.timeout)
         try:
             self.sock = self._tls.wrap_socket(raw, server_hostname=self.host)
         except BaseException:
             raw.close()
             raise
+
+
+class _Watchdog:
+    """Ends an exchange at its total deadline, whatever it is waiting on (connect,
+    TLS, headers or a drip-fed body): at the deadline it shuts the socket down, so
+    the blocked read returns and the exchange fails as a timeout."""
+
+    def __init__(self, conn: _PinnedHTTPConnection | _PinnedHTTPSConnection,
+                 deadline: float) -> None:
+        self.expired = threading.Event()
+        self._conn = conn
+        self._timer = threading.Timer(max(0.0, deadline - time.monotonic()), self._fire)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _fire(self) -> None:
+        self.expired.set()
+        sock = self._conn.raw_sock
+        if sock is not None:
+            with contextlib.suppress(OSError):
+                sock.shutdown(socket.SHUT_RDWR)
+
+    def cancel(self) -> None:
+        self._timer.cancel()
 
 
 class StdlibTransport:
@@ -105,13 +137,22 @@ class StdlibTransport:
         return seen
 
     def request(
-        self, url: Url, address: str, headers: dict[str, str], timeout: float
+        self, url: Url, address: str, headers: dict[str, str], timeout: float, deadline: float
     ) -> RawResponse:
-        conn: http.client.HTTPConnection
+        conn: _PinnedHTTPConnection | _PinnedHTTPSConnection
         if url.is_https:
             conn = _PinnedHTTPSConnection(url.host, url.port, address, timeout)
         else:
             conn = _PinnedHTTPConnection(url.host, url.port, address, timeout)
+        watchdog = _Watchdog(conn, deadline)
+
+        def failure(code: str, exc: BaseException) -> TransportFailure:
+            conn.close()
+            watchdog.cancel()
+            if watchdog.expired.is_set():
+                return TransportFailure("timeout", "total deadline reached")
+            return TransportFailure(code, str(exc))
+
         try:
             conn.putrequest("GET", url.path_and_query, skip_host=True, skip_accept_encoding=True)
             conn.putheader("Host", url.host_header)
@@ -120,31 +161,34 @@ class StdlibTransport:
             conn.endheaders()
             resp = conn.getresponse()
         except ssl.SSLError as exc:
-            conn.close()
-            raise TransportFailure("tls_failed", str(exc)) from exc
+            raise failure("tls_failed", exc) from exc
         except TimeoutError as exc:
-            conn.close()
-            raise TransportFailure("timeout", str(exc)) from exc
+            raise failure("timeout", exc) from exc
         except (ConnectionError, OSError) as exc:
-            conn.close()
-            raise TransportFailure("connect_failed", str(exc)) from exc
+            raise failure("connect_failed", exc) from exc
         except (http.client.HTTPException, UnicodeError, ValueError) as exc:
-            conn.close()
-            raise TransportFailure("protocol_error", str(exc)) from exc
+            raise failure("protocol_error", exc) from exc
 
         def body() -> Iterator[bytes]:
             try:
                 while True:
                     try:
-                        chunk = resp.read(65536)
+                        chunk = resp.read1(65536)
                     except TimeoutError as exc:
-                        raise TransportFailure("timeout", str(exc)) from exc
-                    except (http.client.HTTPException, OSError) as exc:
-                        raise TransportFailure("protocol_error", str(exc)) from exc
+                        raise failure("timeout", exc) from exc
+                    except (http.client.HTTPException, OSError, ValueError) as exc:
+                        raise failure("protocol_error", exc) from exc
+                    if watchdog.expired.is_set():
+                        raise TransportFailure("timeout", "total deadline reached")
                     if not chunk:
                         return
                     yield chunk
             finally:
+                watchdog.cancel()
                 conn.close()
 
-        return RawResponse(resp.status, list(resp.getheaders()), body(), conn.close)
+        def closer() -> None:
+            watchdog.cancel()
+            conn.close()
+
+        return RawResponse(resp.status, list(resp.getheaders()), body(), closer)

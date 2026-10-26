@@ -66,7 +66,7 @@ class FakeTransport:
         return [PUBLIC_ADDRESS]
 
     def request(self, url: Url, address: str, headers: dict[str, str],
-                timeout: float) -> RawResponse:
+                timeout: float, deadline: float | None = None) -> RawResponse:
         self.calls.append((url.url, address, dict(headers)))
         route = self.routes.get(url.url)
         if route is None:

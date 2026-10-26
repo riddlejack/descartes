@@ -90,13 +90,16 @@ def parse_url(raw: str) -> Url:
     if port not in ALLOWED_PORTS:
         raise PolicyRefusal("port_not_allowed", f"port {port}")
     literal = _ip_literal(host)
-    if literal is None and _NUMERIC_LOOKING.match(host):
-        raise PolicyRefusal("ambiguous_numeric_host", f"host {host!r}")
     if literal is None:
+        # IDNA first: it maps fullwidth digits and ideographic full stops
+        # ("127。0。0。1") to ASCII, and the address rules must see that form.
         try:
-            host = host.encode("idna").decode("ascii")
+            host = host.encode("idna").decode("ascii").lower().removesuffix(".")
         except UnicodeError as exc:
             raise InvalidUrl(f"host {host!r} is not a valid name") from exc
+        literal = _ip_literal(host)
+    if literal is None and _NUMERIC_LOOKING.match(host):
+        raise PolicyRefusal("ambiguous_numeric_host", f"host {host!r}")
     if literal is not None:
         reason = blocked_address_reason(literal)
         if reason is not None:

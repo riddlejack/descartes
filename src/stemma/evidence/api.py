@@ -43,10 +43,13 @@ def check_quote(run_dir: str | Path, receipt_id: str, quote: str) -> dict[str, A
     """Is `quote` in the receipt's stored text, after `QUOTE_NORMALISATION`?
 
     Returns `found`, `matches` (start and end offsets, code points in the stored
-    text), `match_count`, `normalisation`, `receipt_id`, `sha256`.
+    text, and the flagged `regions` each lies in), `match_count`, `warnings` (one per
+    match in hidden or invisible text or a table with merged cells: a warning for
+    the checker, never a refusal), `normalisation`, `receipt_id`, `sha256`.
     """
     receipt, text = _stored_text(run_dir, receipt_id)
-    return dict(find_quote(text, quote), receipt_id=receipt_id, sha256=receipt["sha256"])
+    found = find_quote(text, quote, receipt.get("flagged_ranges"))
+    return dict(found, receipt_id=receipt_id, sha256=receipt["sha256"])
 
 
 def read_text(run_dir: str | Path, receipt_id: str) -> str:

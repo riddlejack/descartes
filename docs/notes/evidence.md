@@ -9,7 +9,7 @@ on `EvidenceService` (`service.py`) and as an MCP tool registered by
 
 ## What works, and how it was shown
 
-Unit tests: `pytest tests/evidence` runs 142 tests in about a second, with no
+Unit tests: `pytest tests/evidence` runs 198 tests in about a second, with no
 network (a fake transport, a fake SEC backend, invented pages, a PDF built by hand
 in `conftest.py`). `ruff check` and `mypy --strict` pass on `src/stemma/evidence`.
 The live tests are marked `live` and skipped unless `STEMMA_LIVE=1`; they were run
@@ -76,14 +76,19 @@ connection are two lookups; the plain fetch does not have this gap.
   substring search gives each hit's offsets. Agent queries are quoted, so FTS5
   syntax cannot be injected (tested with `" OR *`, `NEAR(...)` and others).
 - `check_quote`: exact match after one documented normalisation
-  (`whitespace-runs-to-one-space;typographic-quotes-to-ascii;token-boundaries;v2`):
+  (`whitespace-runs-to-one-space;typographic-quotes-to-ascii;token-and-number-edges;v3`):
   every run of Unicode whitespace becomes one space; curly and typographic quotation
-  marks become straight ones; and a match must sit on token boundaries (a quote
-  starting or ending with a letter or digit may not start or end inside a word or
-  number, nor split a combining mark), so "5% in the year" is not found in "rose
-  15% in the year" and "was 1,2" is not found in "was 1,250". Nothing else changes
-  (not case, dashes or digits). Offsets are in the stored text, before
-  normalisation. A receipt without text raises `no_text`.
+  marks become straight ones; a match must sit on token boundaries and never start
+  or end in the middle of a number (a digit, or digit-separator-digit, across
+  either edge, where `,` `.` `'` and the no-break and thin spaces are separators;
+  and not just after a lone minus or plus sign). So "250 jobs" is not found in
+  "1,250 jobs", "$1" not in "$1.5 billion", "25%" not in "0.25%", "3.2%" not in
+  "-3.2%". Nothing else changes (not case, dashes or digits). Offsets are in the
+  stored text, before normalisation. Each match lists the flagged `regions` it
+  lies in (hidden HTML, invisible or white PDF text, a table with merged cells),
+  and `warnings` says so: a warning for the checker, never a refusal. A receipt
+  without text raises `no_text`. Exact search uses the same whitespace and
+  quotation-mark normalisation, so a no-break space matches a space in both.
 - Stored text uses `\n` line endings; offsets are Unicode code points throughout.
 
 ### The request-keyed cache (`$STEMMA_CACHE`)
@@ -248,12 +253,72 @@ and its separate DNS lookup remains a known gap.
   `bad_receipt_id`, `no_text`, `empty_quote`) and returns `found: false` only when
   the text exists and the quote is not in it.
 
+## Merge-gate review fixes (26 October 2026)
+A non-author review of `b67296e` found ten problems and three suspected ones. Each
+is now reproduced as an attack in `tests/evidence/test_review_gate.py` (56 tests),
+and the reviewer's own 12 probe tests all pass (they failed 8 of 12 before):
+1. Quotes matched inside numbers: the number-edge rule above.
+2. markdownify fused figures: superscripts and subscripts are stored as `^...^`
+   and `~...~` (so "$5<sup>1</sup> billion" is "$5^1^ billion"); block-like
+   elements (header, footer, figure, nav, aside, address, details, summary,
+   option, title and more), MathML parts, namespaced elements and touching XML
+   elements are separated by a space. `<?xml?>` processing instructions are
+   markup and no longer appear as text. Nothing in the page's text is deleted.
+3. Charset: the WHATWG prescan (`charset.py`): real `<meta>` elements only (not
+   comments, attributes or script strings), UTF-16 in a meta means UTF-8,
+   `x-user-defined` means windows-1252, quoted header labels read, and the XML
+   declaration's encoding used for XML.
+4. Truncated bodies: the body must match Content-Length; a truncated gzip
+   stream or trailing non-gzip bytes fail typed; every gzip member is decoded. A
+   PDF without an end-of-file marker is `short_text` with a warning.
+5. The total deadline now holds across connect, TLS, headers and every body
+   read: a watchdog shuts the socket at the deadline (tested with drip-fed headers
+   and body on a loopback server).
+6. `capture_file` walks the path one component at a time with `O_NOFOLLOW`
+   (`openat`), so no symbolic link is followed at any level; the receipt's
+   `source_path` is the path actually opened. A 3-second symlink-swap race finds
+   nothing outside `task/`.
+7. "Implausibly short" counts visible words (link targets, image sources, hidden
+   ranges and zero-width characters left out): fewer than 40 is `short_text` and
+   tries the browser; none is `empty_text`.
+8. `sec_facts(form="10-K")` keeps 10-K/A facts, labelled by their own form, with
+   a warning counting them.
+9. A Content-Length that is not ASCII digits is a typed `transport_error` with a
+   receipt. Any unexpected fault inside a capture now leaves an `internal_error`
+   receipt instead of escaping.
+10. Hidden HTML (the `hidden` attribute, inline `display:none` or
+   `visibility:hidden`, `<template>`), invisible PDF text (render mode 3, or
+   transparent) and white PDF text are kept, with their ranges in the receipt's
+   `flagged_ranges`; so are tables with `rowspan` or `colspan`. `check_quote`
+   warns on a match inside any of them.
+Suspected, all real and fixed: in `as_of` runs a ticker or name lookup warns that
+today's mapping was used (pass the CIK); archive redirect hops must be https;
+exact search normalises like `check_quote`. Found while fixing: fullwidth dots
+and digits (`127。0。0。1`) now meet the address rules after IDNA mapping, before any
+lookup; a page's `<title>` no longer runs into its first body text.
+Live re-run after the fixes: the BLS page and PDF `ok`; Apple's 10-K `ok` with 27
+Item anchors, 63 merged-cell tables and its hidden XBRL header flagged; the
+browser fallback still `ok`.
+
+**Known limits, recorded rather than fixed.**
+- A PDF whose ToUnicode map lies (a glyph drawn as "1" but mapped to "9", so a
+  visible 1,250 is stored as 9,250) cannot be caught from the text layer. The
+  claim checker can view the page image with the Read tool.
+- Hiding by CSS classes, off-screen positioning, zero font size or text coloured
+  like its background in HTML is not detected (stylesheets are removed, and only
+  inline styles are read).
+- Ordinary inline elements (`span`, `small`, `time`, `label`) are left joined,
+  as a browser renders them: `<span>1</span><span>250</span>` is "1250" on the
+  page too.
+- The prescan skips `<script>` and `<style>` contents, a deliberate difference
+  from the standard (a string in a script never declares a charset).
+- Range edges can be off by surrounding whitespace.
+
 ## For the merge review: where I am least sure, and where to attack
 **Least sure of.**
 - Table fidelity. markdownify flattens `rowspan` and `colspan` without
-  re-aligning cells, and pypdfium2 reads multi-column PDF tables in text order.
-  A figure can then sit under the wrong column header in the stored text, and
-  a quote of that row still checks. Only simple tables were tested.
+  re-aligning cells (now flagged, and warned on a quote), and pypdfium2 reads
+  multi-column PDF tables in text order (not flagged).
 - The stdlib transport. It was shown on fakes and about 25 live hosts only.
 - The Item outline. It has run on one company's recent filings, and never on
   old plain-text filings.

@@ -27,6 +27,7 @@ from typing import Any
 
 from stemma.evidence import limits
 from stemma.evidence.errors import EvidenceError
+from stemma.evidence.quotes import normalise
 
 # Invariant: the spellings of the two kinds of id the store accepts from callers.
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -257,7 +258,8 @@ class Store:
                         "INSERT INTO fts_words(content, sha256, start, end) VALUES (?, ?, ?, ?)",
                         [(text[a:b], sha, a, b) for a, b in chunk_for_words(text)],
                     )
-                    db.execute("INSERT INTO fts_exact(content, sha256) VALUES (?, ?)", (text, sha))
+                    db.execute("INSERT INTO fts_exact(content, sha256) VALUES (?, ?)",
+                               (normalise(text)[0], sha))
                 db.execute("COMMIT")
             except BaseException:
                 db.execute("ROLLBACK")
@@ -288,7 +290,13 @@ class Store:
                 "query_too_short",
                 f"exact search needs at least {limits.EXACT_QUERY_MIN_CHARS} characters",
             )
-        match = '"' + query.replace('"', '""') + '"'
+        needle = normalise(query)[0].strip(" ")
+        if len(needle) < limits.EXACT_QUERY_MIN_CHARS:
+            raise EvidenceError(
+                "query_too_short",
+                f"exact search needs at least {limits.EXACT_QUERY_MIN_CHARS} characters",
+            )
+        match = '"' + needle.replace('"', '""') + '"'
         sql = "SELECT sha256 FROM fts_exact WHERE fts_exact MATCH ?"
         params: list[Any] = [match]
         if sha is not None:
@@ -300,13 +308,15 @@ class Store:
         context = limits.SNIPPET_CONTEXT_CHARS
         for doc in sorted(shas):
             text = self.get_text(doc)
-            position = text.find(query)
+            haystack, origin = normalise(text)
+            position = haystack.find(needle)
             while position != -1 and len(hits) < limit:
-                end = position + len(query)
-                snippet = (text[max(0, position - context):position] + "[" + query + "]"
+                start = origin[position]
+                end = origin[position + len(needle) - 1] + 1
+                snippet = (text[max(0, start - context):start] + "[" + text[start:end] + "]"
                            + text[end:end + context])
-                hits.append({"sha256": doc, "start": position, "end": end, "snippet": snippet})
-                position = text.find(query, end)
+                hits.append({"sha256": doc, "start": start, "end": end, "snippet": snippet})
+                position = haystack.find(needle, position + len(needle))
             if len(hits) >= limit:
                 break
         return hits

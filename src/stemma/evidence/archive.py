@@ -30,7 +30,8 @@ from stemma.evidence.fetch import Fetcher, FetchResult
 from stemma.evidence.netpolicy import Url
 
 CDX_ENDPOINT = "https://web.archive.org/cdx/search/cdx"
-_WAYBACK_HOP = re.compile(r"^https?://web\.archive\.org/web/(\d{4,14})(?:[a-z]{2}_)?/")
+# Only https to the archive's own host: a hop to plain http could be altered in transit.
+_WAYBACK_HOP = re.compile(r"^https://web\.archive\.org/web/(\d{4,14})(?:[a-z]{2}_)?/")
 # Resource limit: captures listed by one CDX lookup (the newest few before the date).
 _CDX_ROWS = 5
 

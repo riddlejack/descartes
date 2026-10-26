@@ -9,6 +9,7 @@ result. A body that passes its byte limit is dropped, never stored part-way.
 from __future__ import annotations
 
 import hashlib
+import re
 import threading
 import time
 import zlib
@@ -30,6 +31,7 @@ from stemma.evidence.transport import Transport, TransportFailure
 
 DEFAULT_USER_AGENT = "Stemma/0.0.1 (research capture; exact-bytes archive)"
 _REDIRECTS = frozenset({301, 302, 303, 307, 308})
+_ASCII_DIGITS = re.compile(r"[0-9]{1,20}")
 
 
 @dataclass
@@ -179,7 +181,7 @@ class Fetcher:
                 result.sec_identity_sent = True
             try:
                 resp = self.transport.request(
-                    url, address, headers, min(limits.READ_TIMEOUT_S, remaining)
+                    url, address, headers, min(limits.READ_TIMEOUT_S, remaining), deadline
                 )
             except TransportFailure as exc:
                 status = CaptureStatus.TIMEOUT if exc.code == "timeout" else (
@@ -222,9 +224,17 @@ class Fetcher:
         started: float,
         fail: Callable[[CaptureStatus, str], FetchResult],
     ) -> FetchResult:
-        declared = resp.header("Content-Length")
-        if (declared is not None and declared.strip().isdigit()
-                and int(declared) > limits.MAX_BODY_BYTES):
+        declared_text = resp.header("Content-Length")
+        declared: int | None = None
+        if declared_text is not None:
+            # ASCII digits only: str.isdigit() also accepts "²" and other digits.
+            if _ASCII_DIGITS.fullmatch(declared_text.strip()):
+                declared = int(declared_text.strip())
+            else:
+                resp.closer()
+                return fail(CaptureStatus.TRANSPORT_ERROR,
+                            f"unusable Content-Length {declared_text[:40]!r}")
+        if declared is not None and declared > limits.MAX_BODY_BYTES:
             resp.closer()
             return fail(
                 CaptureStatus.TOO_LARGE,
@@ -252,16 +262,24 @@ class Fetcher:
         finally:
             resp.closer()
         body = b"".join(chunks)
+        if declared is not None and len(body) != declared:
+            # A connection closed early is a truncated body, never a capture.
+            return fail(CaptureStatus.TRANSPORT_ERROR,
+                        f"body is {len(body)} bytes but Content-Length said {declared}; "
+                        "nothing stored")
         coding = (resp.header("Content-Encoding") or "").strip().lower()
         if coding and coding != "identity":
             result.content_encoding = coding
             result.wire_sha256 = hashlib.sha256(body).hexdigest()
-            decoded = _decode_content(coding, body)
-            if decoded is None:
+            if coding not in ("gzip", "x-gzip", "deflate"):
                 return fail(
                     CaptureStatus.UNSUPPORTED_CONTENT_ENCODING,
                     f"Content-Encoding {coding!r} not decoded",
                 )
+            decoded = _decode_content(coding, body)
+            if decoded is None:
+                return fail(CaptureStatus.TRANSPORT_ERROR,
+                            f"{coding} body is damaged or truncated; nothing stored")
             if len(decoded) > limits.MAX_DECODED_BYTES:
                 return fail(CaptureStatus.TOO_LARGE, "decoded body passed limit")
             body = decoded
@@ -271,25 +289,37 @@ class Fetcher:
 
 
 def _decode_content(coding: str, body: bytes) -> bytes | None:
-    """Undo gzip or deflate (sent though we asked for identity), bounded in size."""
+    """Undo gzip or deflate (sent though we asked for identity), bounded in size.
+    Every gzip member is decoded (a body may hold several); a stream that ends
+    before its end marker, or trailing bytes that are not another member, is None."""
+    cap = limits.MAX_DECODED_BYTES + 1
     if coding in ("gzip", "x-gzip"):
-        wbits = 16 + zlib.MAX_WBITS
-    elif coding == "deflate":
-        wbits = zlib.MAX_WBITS
-    else:
-        return None
-    try:
+        out = bytearray()
+        rest = body
+        while rest:
+            decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            try:
+                out += decoder.decompress(rest, cap - len(out))
+            except zlib.error:
+                return None
+            if len(out) >= cap:
+                return bytes(out)  # the caller reports the size limit
+            if not decoder.eof:
+                return None  # truncated member
+            rest = decoder.unused_data
+            if rest and not rest.startswith(b"\x1f\x8b"):
+                return None  # trailing bytes that are not a gzip member
+        return bytes(out)
+    for wbits in (zlib.MAX_WBITS, -zlib.MAX_WBITS):  # zlib-wrapped, then raw deflate
         decoder = zlib.decompressobj(wbits)
-        out = decoder.decompress(body, limits.MAX_DECODED_BYTES + 1)
-    except zlib.error:
-        if coding != "deflate":
-            return None
-        try:  # raw deflate, which some servers send under the name "deflate"
-            decoder = zlib.decompressobj(-zlib.MAX_WBITS)
-            out = decoder.decompress(body, limits.MAX_DECODED_BYTES + 1)
+        try:
+            data = decoder.decompress(body, cap)
         except zlib.error:
-            return None
-    return out
+            continue
+        if len(data) >= cap or (decoder.eof and not decoder.unused_data):
+            return data
+        return None
+    return None
 
 
 def _bounded_headers(headers: list[tuple[str, str]]) -> list[tuple[str, str]]:

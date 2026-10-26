@@ -15,43 +15,20 @@ Unicode code points in the stored text.
 
 from __future__ import annotations
 
-import codecs
 import re
 from dataclasses import dataclass, field
 from importlib import metadata
 from typing import Any
 
-from stemma.evidence import limits
+from stemma.evidence import charset, htmltext, limits
 from stemma.evidence.errors import CaptureStatus
 
-# Invariant: the charset labels we decode, mapped to the codec each means. An
-# allowlist, because Python will also decode `utf-7` and other escape-interpreting
-# codecs, which can turn bytes into markup the bytes do not contain. Labels follow
-# the WHATWG Encoding Standard; ISO-8859-1 and ASCII mean windows-1252 there.
-CHARSET_ALLOWLIST: dict[str, str] = {
-    "utf-8": "utf-8", "utf8": "utf-8", "unicode-1-1-utf-8": "utf-8",
-    "utf-16": "utf-16", "utf-16le": "utf-16-le", "utf-16be": "utf-16-be",
-    "iso-8859-1": "cp1252", "latin1": "cp1252", "l1": "cp1252", "iso8859-1": "cp1252",
-    "ascii": "cp1252", "us-ascii": "cp1252", "windows-1252": "cp1252", "cp1252": "cp1252",
-    "iso-8859-2": "iso8859-2", "iso-8859-3": "iso8859-3", "iso-8859-4": "iso8859-4",
-    "iso-8859-5": "iso8859-5", "iso-8859-6": "iso8859-6", "iso-8859-7": "iso8859-7",
-    "iso-8859-8": "iso8859-8", "iso-8859-9": "cp1254", "iso-8859-10": "iso8859-10",
-    "iso-8859-13": "iso8859-13", "iso-8859-14": "iso8859-14", "iso-8859-15": "iso8859-15",
-    "iso-8859-16": "iso8859-16",
-    "windows-1250": "cp1250", "windows-1251": "cp1251", "windows-1253": "cp1253",
-    "windows-1254": "cp1254", "windows-1255": "cp1255", "windows-1256": "cp1256",
-    "windows-1257": "cp1257", "windows-1258": "cp1258",
-    "koi8-r": "koi8-r", "koi8-u": "koi8-u", "macintosh": "mac-roman",
-    "shift_jis": "shift_jis", "sjis": "shift_jis", "windows-31j": "cp932",
-    "euc-jp": "euc_jp", "euc-kr": "euc_kr", "gbk": "gbk", "gb2312": "gbk",
-    "gb18030": "gb18030", "big5": "big5",
-}
-
-# Resource limit: leading bytes searched for a `<meta charset>` declaration.
-_META_SNIFF_BYTES = 4096
-_META_CHARSET = re.compile(rb"""<meta[^>]{0,512}?charset\s*=\s*["']?\s*([A-Za-z0-9_.:+-]+)""", re.IGNORECASE)
-_HEADER_CHARSET = re.compile(r"charset\s*=\s*\"?([A-Za-z0-9_.:+-]+)\"?", re.IGNORECASE)
 _ATX = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
+# Invariant: characters that take no space on the page (zero-width marks, soft hyphen).
+_ZERO_WIDTH = re.compile("[\u00ad\u200b-\u200f\u2060-\u2064\ufeff]")
+_MD_IMAGE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
+_MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_AUTOLINK = re.compile(r"<[a-z][a-z0-9+.-]*:[^>\s]*>", re.IGNORECASE)
 
 HTML_TYPES = frozenset({"text/html", "application/xhtml+xml"})
 XML_TYPES = frozenset({"text/xml", "application/xml", "application/rss+xml",
@@ -72,6 +49,9 @@ class Extraction:
     extractor: dict[str, str] = field(default_factory=dict)
     detail: str | None = None
     pages: int | None = None
+    # Regions of the stored text a reader would not see, or tables whose cells the
+    # converter may have misaligned: [{start, end, kind}].
+    flagged: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _version(dist: str) -> str:
@@ -92,7 +72,7 @@ def extractor_versions() -> dict[str, str]:
 
 
 # Invariant: bumped whenever this module's rules change the text it produces.
-EXTRACT_RULES_VERSION = "3"
+EXTRACT_RULES_VERSION = "4"
 
 
 def sniff_content_type(declared: str | None, body: bytes, name_hint: str = "") -> str:
@@ -119,62 +99,32 @@ def sniff_content_type(declared: str | None, body: bytes, name_hint: str = "") -
     return media or "application/octet-stream"
 
 
-def _decode(body: bytes, header_type: str | None, markup: bool) -> tuple[str | None, str | None, list[str]]:
-    """Charset order: BOM, then the Content-Type header, then `<meta>`, then strict
-    UTF-8, then windows-1252 with replacement (warned). Returns (text, label, warnings)."""
-    warnings: list[str] = []
-    for bom, label in ((codecs.BOM_UTF8, "utf-8"), (codecs.BOM_UTF16_LE, "utf-16le"),
-                       (codecs.BOM_UTF16_BE, "utf-16be")):
-        if body.startswith(bom):
-            codec = CHARSET_ALLOWLIST[label]
-            return body[len(bom):].decode(codec, errors="replace"), label, warnings
-    declared: str | None = None
-    if header_type:
-        found = _HEADER_CHARSET.search(header_type)
-        if found:
-            declared = found.group(1).lower()
-    if declared is None and markup:
-        found_meta = _META_CHARSET.search(body[:_META_SNIFF_BYTES])
-        if found_meta:
-            declared = found_meta.group(1).decode("ascii", "replace").lower()
-    if declared is not None:
-        chosen = CHARSET_ALLOWLIST.get(declared)
-        if chosen is None:
-            return None, declared, warnings
-        text = body.decode(chosen, errors="replace")
-        if "\ufffd" in text and chosen == "utf-8":
-            warnings.append("invalid_bytes_for_declared_charset_replaced")
-        return text, declared, warnings
-    try:
-        return body.decode("utf-8"), "utf-8", warnings
-    except UnicodeDecodeError:
-        warnings.append("charset_undeclared_decoded_as_windows-1252")
-        return body.decode("cp1252", errors="replace"), "windows-1252", warnings
-
-
 def _normalise_newlines(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def html_to_text(markup: str) -> str:
-    from bs4 import BeautifulSoup
-    from markdownify import MarkdownConverter
+    """The stored text of an HTML document (ranges and warnings dropped)."""
+    return htmltext.html_to_text(markup)[0]
 
-    soup = BeautifulSoup(markup, "html.parser")
-    for tag in soup.find_all(["script", "style"]):
-        tag.decompose()
-    converter = MarkdownConverter(
-        heading_style="ATX",
-        escape_asterisks=False,
-        escape_underscores=False,
-        escape_misc=False,
-        bullets="-",
-    )
-    text = converter.convert_soup(soup)
-    text = _normalise_newlines(text)
-    # Collapse runs of blank lines that markdownify leaves between blocks.
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip("\n") + ("\n" if text.strip() else "")
+
+def visible_words(text: str, flagged: list[dict[str, Any]] | None = None) -> int:
+    """Words a reader would see: hidden ranges, link and image syntax (URLs) and
+    zero-width characters left out."""
+    if flagged:
+        kept: list[str] = []
+        cursor = 0
+        for region in sorted(flagged, key=lambda r: int(r["start"])):
+            if region["kind"] in ("hidden", "invisible_pdf_text", "white_pdf_text"):
+                kept.append(text[cursor:int(region["start"])])
+                cursor = max(cursor, int(region["end"]))
+        kept.append(text[cursor:])
+        text = " ".join(kept)
+    text = _MD_IMAGE.sub(r" \1 ", text)
+    text = _MD_LINK.sub(r" \1 ", text)
+    text = _AUTOLINK.sub(" ", text)
+    text = _ZERO_WIDTH.sub("", text)
+    return len(re.findall(r"\w+", text))
 
 
 def markdown_outline(text: str) -> list[dict[str, Any]]:
@@ -204,14 +154,82 @@ def markdown_outline(text: str) -> list[dict[str, Any]]:
     return outline
 
 
-def pdf_to_text(body: bytes) -> tuple[str, list[dict[str, Any]], int, list[str]]:
+# Invariant: PDF text render mode 3 draws nothing (ISO 32000, 9.3.6).
+_RENDER_INVISIBLE = 3
+# Extraction flag: a fill colour with every channel at or above this is "white"
+# (drawn but not seen on a white page). It flags; it never removes text.
+_WHITE_MIN = 250
+
+
+def _page_chars(textpage: Any, raw: Any) -> tuple[str, list[str | None]]:
+    """A page's text with, per character, why it is not visible (or None)."""
+    import ctypes
+
+    count = raw.FPDFText_CountChars(textpage.raw)
+    text = textpage.get_text_range(0, count) if count > 0 else ""
+    if len(text) != count:
+        return text, [None] * len(text)  # surrogate pairs: no per-character flags
+    flags: list[str | None] = []
+    r, g, b, a = (ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint())
+    for index in range(count):
+        why: str | None = None
+        obj = raw.FPDFText_GetTextObject(textpage.raw, index)
+        if obj and raw.FPDFTextObj_GetTextRenderMode(obj) == _RENDER_INVISIBLE:
+            why = "invisible_pdf_text"
+        elif raw.FPDFText_GetFillColor(textpage.raw, index, r, g, b, a) and (
+                a.value == 0 or min(r.value, g.value, b.value) >= _WHITE_MIN):
+            why = "white_pdf_text" if a.value else "invisible_pdf_text"
+        flags.append(why)
+    return text, flags
+
+
+def _normalise_with_flags(text: str, flags: list[str | None]) -> tuple[str, list[str | None]]:
+    out: list[str] = []
+    kept: list[str | None] = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\r":
+            out.append("\n")
+            kept.append(flags[index])
+            if index + 1 < len(text) and text[index + 1] == "\n":
+                index += 1
+        else:
+            out.append(char)
+            kept.append(flags[index])
+        index += 1
+    return "".join(out), kept
+
+
+def _flag_ranges(flags: list[str | None], base: int, text: str) -> list[dict[str, Any]]:
+    ranges: list[dict[str, Any]] = []
+    start: int | None = None
+    kind: str | None = None
+    for index, why in enumerate([*flags, None]):
+        # Whitespace inside a flagged run does not break it.
+        if why is None and start is not None and index < len(text) and text[index].isspace():
+            continue
+        if why != kind:
+            if kind is not None and start is not None:
+                end = index
+                while end > start and text[end - 1].isspace():
+                    end -= 1
+                ranges.append({"start": base + start, "end": base + end, "kind": kind})
+            start, kind = (index, why) if why is not None else (None, None)
+    return ranges
+
+
+def pdf_to_text(body: bytes) -> tuple[str, list[dict[str, Any]], int, list[str],
+                                      list[dict[str, Any]]]:
     import pypdfium2 as pdfium  # type: ignore[import-untyped]
+    from pypdfium2 import raw  # type: ignore[import-untyped,unused-ignore]
 
     warnings: list[str] = []
     pdf = pdfium.PdfDocument(body)
     try:
         parts: list[str] = []
         outline: list[dict[str, Any]] = []
+        flagged: list[dict[str, Any]] = []
         offset = 0
         page_starts: list[int] = []
         count = len(pdf)
@@ -219,7 +237,7 @@ def pdf_to_text(body: bytes) -> tuple[str, list[dict[str, Any]], int, list[str]]
             page = pdf[index]
             textpage = page.get_textpage()
             try:
-                page_text = _normalise_newlines(textpage.get_text_bounded())
+                page_text, flags = _normalise_with_flags(*_page_chars(textpage, raw))
             finally:
                 textpage.close()
                 page.close()
@@ -228,6 +246,7 @@ def pdf_to_text(body: bytes) -> tuple[str, list[dict[str, Any]], int, list[str]]
                 offset += 2
             page_starts.append(offset)
             parts.append(page_text)
+            flagged.extend(_flag_ranges(flags, offset, page_text))
             outline.append({"anchor": f"p{index + 1}", "kind": "page", "level": 1,
                             "title": f"Page {index + 1}", "start": offset,
                             "end": offset + len(page_text)})
@@ -243,24 +262,38 @@ def pdf_to_text(body: bytes) -> tuple[str, list[dict[str, Any]], int, list[str]]
                                 "start": start, "end": outline[page_index]["end"]})
         except Exception:  # noqa: BLE001 - bookmarks are a convenience; failure is warned
             warnings.append("pdf_bookmarks_unreadable")
-        return "".join(parts), outline, count, warnings
+        if b"%%EOF" not in body[-2048:]:
+            warnings.append("pdf_truncated: no end-of-file marker; pages may be missing")
+        invisible = sum(1 for r in flagged if r["kind"] == "invisible_pdf_text")
+        white = sum(1 for r in flagged if r["kind"] == "white_pdf_text")
+        if invisible:
+            warnings.append(f"invisible_pdf_text_kept: {invisible} ranges")
+        if white:
+            warnings.append(f"white_pdf_text_kept: {white} ranges")
+        return "".join(parts), outline, count, warnings, flagged
     finally:
         pdf.close()
 
 
-def _sanity(text: str, body_len: int, markup: bool) -> tuple[CaptureStatus, list[str]]:
+def _sanity(text: str, body_len: int, markup: bool,
+            flagged: list[dict[str, Any]]) -> tuple[CaptureStatus, list[str]]:
+    """Extraction sanity flags. They mark a receipt loudly and trigger the browser
+    fallback; they never discard text."""
     if not text.strip():
         return CaptureStatus.EMPTY_TEXT, ["extraction_empty"]
+    words = visible_words(text, flagged)
+    if words == 0:
+        return CaptureStatus.EMPTY_TEXT, [
+            "extraction_empty: no visible words (only markup, links, hidden or zero-width text)"]
     if markup:
-        chars = len(text.strip())
-        if chars < limits.SHORT_TEXT_MIN_CHARS:
+        if words < limits.SHORT_TEXT_MIN_WORDS:
             return CaptureStatus.SHORT_TEXT, [
-                f"extraction_short: {chars} chars of text from {body_len} bytes"
-            ]
-        if body_len >= limits.SHORT_TEXT_RATIO_MIN_BYTES and chars / body_len < limits.SHORT_TEXT_MIN_RATIO:
+                f"extraction_short: {words} visible words from {body_len} bytes"]
+        visible_chars = len(_ZERO_WIDTH.sub("", _MD_LINK.sub(r"\1", _MD_IMAGE.sub(r"\1", text))))
+        if (body_len >= limits.SHORT_TEXT_RATIO_MIN_BYTES
+                and visible_chars / body_len < limits.SHORT_TEXT_MIN_RATIO):
             return CaptureStatus.SHORT_TEXT, [
-                f"extraction_short: {chars} chars of text from {body_len} bytes"
-            ]
+                f"extraction_short: {visible_chars} visible chars from {body_len} bytes"]
     return CaptureStatus.OK, []
 
 
@@ -272,41 +305,49 @@ def extract(body: bytes, declared_type: str | None, name_hint: str = "") -> Extr
         extractor = {"name": "pypdfium2", "version": versions["pypdfium2"],
                      "rules": EXTRACT_RULES_VERSION}
         try:
-            text, outline, pages, warnings = pdf_to_text(body)
+            text, outline, pages, warnings, pdf_flagged = pdf_to_text(body)
         except Exception as exc:  # noqa: BLE001 - any extractor failure becomes a typed status
             return Extraction(CaptureStatus.EXTRACTION_FAILED, content_type,
                               extractor=extractor, detail=f"pypdfium2: {exc}")
-        status, flags = _sanity(text, len(body), markup=False)
+        status, flags = _sanity(text, len(body), False, pdf_flagged)
+        visible = len(_ZERO_WIDTH.sub("", text).strip())
         if status is CaptureStatus.EMPTY_TEXT:
             flags.append("pdf_has_no_text_layer: OCR is not available")
-        elif pages and len(text.strip()) / pages < limits.PDF_MIN_CHARS_PER_PAGE:
+        elif pages and visible / pages < limits.PDF_MIN_CHARS_PER_PAGE:
             status = CaptureStatus.SHORT_TEXT
-            flags.append(f"extraction_short: {len(text.strip())} chars over {pages} pages; "
+            flags.append(f"extraction_short: {visible} chars over {pages} pages; "
                          "pages may be scanned images and OCR is not available")
+        if any(w.startswith("pdf_truncated") for w in warnings) and status is CaptureStatus.OK:
+            status = CaptureStatus.SHORT_TEXT
         return Extraction(status, content_type, text, outline, warnings + flags, None,
-                          extractor, pages=pages)
+                          extractor, pages=pages, flagged=pdf_flagged)
+    xml = content_type in XML_TYPES or content_type == "application/xhtml+xml"
     markup = content_type in HTML_TYPES or content_type in XML_TYPES
     if markup or content_type in TEXT_TYPES or content_type.startswith("text/"):
-        decoded, label, warnings = _decode(body, declared_type, markup)
+        kind = "xml" if xml else ("html" if markup else "text")
+        decoded, label, warnings = charset.decode(body, declared_type, kind)
         if decoded is None:
             return Extraction(CaptureStatus.UNSUPPORTED_CHARSET, content_type, charset=label,
                               detail=f"charset {label!r} is not on the allowlist")
+        flagged: list[dict[str, Any]] = []
         if markup:
             extractor = {"name": "markdownify", "version": versions["markdownify"],
                          "beautifulsoup4": versions["beautifulsoup4"],
                          "rules": EXTRACT_RULES_VERSION}
             try:
-                text = html_to_text(decoded)
+                text, flagged, convert_warnings = htmltext.html_to_text(decoded, xml=xml)
             except Exception as exc:  # noqa: BLE001 - any extractor failure becomes a typed status
                 return Extraction(CaptureStatus.EXTRACTION_FAILED, content_type, charset=label,
                                   extractor=extractor, detail=f"markdownify: {exc}")
+            warnings += convert_warnings
             outline = markdown_outline(text)
         else:
             extractor = {"name": "decode", "version": EXTRACT_RULES_VERSION,
                          "rules": EXTRACT_RULES_VERSION}
             text = _normalise_newlines(decoded)
             outline = []
-        status, flags = _sanity(text, len(body), markup)
-        return Extraction(status, content_type, text, outline, warnings + flags, label, extractor)
+        status, flags = _sanity(text, len(body), markup, flagged)
+        return Extraction(status, content_type, text, outline, warnings + flags, label, extractor,
+                          flagged=flagged)
     return Extraction(CaptureStatus.UNSUPPORTED_CONTENT_TYPE, content_type,
                       detail=f"no text extractor for {content_type}")

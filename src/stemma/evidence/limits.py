@@ -31,9 +31,10 @@ ARCHIVE_MIN_INTERVAL_S = 1.0
 # Resource limit: attempts at one archive lookup when the archive answers 429 or 5xx.
 ARCHIVE_ATTEMPTS = 3
 
-# Extraction sanity flag: an HTML or XML capture with fewer text characters than
-# this is marked `short_text` (kept whole) and tries the browser fallback.
-SHORT_TEXT_MIN_CHARS = 200
+# Extraction sanity flag: an HTML or XML capture with fewer visible words than this
+# (markup, link targets, hidden and zero-width text not counted) is marked
+# `short_text` (kept whole) and tries the browser fallback.
+SHORT_TEXT_MIN_WORDS = 40
 # Extraction sanity flag: an HTML capture at least this many bytes long ...
 SHORT_TEXT_RATIO_MIN_BYTES = 50_000
 # ... whose text is a smaller share of its bytes than this is marked `short_text`.

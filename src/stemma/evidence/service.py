@@ -6,12 +6,14 @@ thin wrappers over these methods; part B's register uses `stemma.evidence.api`.
 
 from __future__ import annotations
 
+import contextlib
+import errno
 import json
 import os
 import stat
 import time
 from datetime import date
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from stemma.evidence import limits, sec_outline
@@ -50,6 +52,43 @@ def _http_failure(status: int) -> CaptureStatus:
     return CaptureStatus.HTTP_ERROR
 
 
+def _open_beneath(root: Path, parts: list[str]) -> int | tuple[CaptureStatus, str]:
+    """Open `root/parts...` one component at a time, never following a symbolic link
+    (O_NOFOLLOW on every directory and the file), so a link swapped in at any level
+    cannot lead outside `root`. Returns a file descriptor or (status, detail)."""
+    flags_dir = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        current = os.open(root, flags_dir)
+    except OSError as exc:
+        return CaptureStatus.FILE_NOT_FOUND, f"no task/ folder: {exc.strerror}"
+    try:
+        for index, name in enumerate(parts):
+            last = index == len(parts) - 1
+            try:
+                follow_free = os.O_RDONLY | os.O_NOFOLLOW | (0 if last else os.O_DIRECTORY)
+                fd = os.open(name, follow_free, dir_fd=current)
+            except OSError as exc:
+                try:
+                    is_link = stat.S_ISLNK(os.stat(name, dir_fd=current,
+                                                   follow_symlinks=False).st_mode)
+                except OSError:
+                    is_link = False
+                if is_link or exc.errno == errno.ELOOP:
+                    return (CaptureStatus.PATH_OUTSIDE_TASK,
+                            (f"{'/'.join(parts[:index + 1])} is a symbolic link; links are "
+                            "not followed"))
+                if exc.errno in (errno.ENOENT, errno.ENOTDIR):
+                    return CaptureStatus.FILE_NOT_FOUND, "no such file under task/"
+                return CaptureStatus.FILE_UNREADABLE, f"cannot open: {exc.strerror}"
+            os.close(current)
+            current = fd
+        result, current = current, -1
+        return result
+    finally:
+        if current != -1:
+            os.close(current)
+
+
 def _printable(value: object) -> str:
     """Agent-supplied text made safe to write into a UTF-8 receipt."""
     return str(value).encode("utf-8", "replace").decode("utf-8")[:2000]
@@ -76,6 +115,7 @@ class EvidenceService:
         renderer: Renderer | None = _UNSET,
         throttle: bool = True,
     ) -> None:
+        self._run_dir_given = Path(os.path.abspath(run_dir))
         self.run_dir = Path(run_dir).resolve()
         if not self.run_dir.is_dir():
             raise EvidenceError("bad_run_dir", f"{run_dir} is not a folder")
@@ -147,6 +187,7 @@ class EvidenceService:
             "outline": [],
             "outline_truncated": False,
             "pages": None,
+            "flagged_ranges": [],
             "warnings": [],
             "served_from_cache": False,
             "original_fetched_at": None,
@@ -194,6 +235,7 @@ class EvidenceService:
         receipt["charset"] = result.charset
         receipt["extractor"] = result.extractor or None
         receipt["pages"] = result.pages
+        receipt["flagged_ranges"] = result.flagged
         receipt["warnings"].extend(result.warnings)
         if result.detail:
             receipt["detail"] = result.detail
@@ -206,6 +248,7 @@ class EvidenceService:
                     "content_type": result.content_type, "charset": result.charset,
                     "extractor": result.extractor or None, "pages": result.pages,
                     "detail": result.detail, "warnings": list(result.warnings),
+                    "flagged_ranges": result.flagged,
                 })
             except EvidenceError as exc:
                 # A concurrent writer extracted the same bytes differently first.
@@ -238,6 +281,7 @@ class EvidenceService:
         same bytes later arrive under another content type or charset."""
         for key in ("status", "content_type", "charset", "extractor", "pages", "detail"):
             receipt[key] = earlier[key]
+        receipt["flagged_ranges"] = earlier.get("flagged_ranges", [])
         receipt["warnings"].extend(earlier["warnings"])
         receipt["warnings"].append(f"text_reused_from_receipt {earlier['receipt_id']} (same bytes)")
         outline = self.store.get_outline(sha)
@@ -325,8 +369,29 @@ class EvidenceService:
 
     # Tools ---------------------------------------------------------------------------
 
+    def _receipted(self, kind: str, reason: str, requested: dict[str, Any],
+                   work: Any) -> dict[str, Any]:
+        """Run a capture; an unexpected exception still leaves a receipt, with status
+        `internal_error` naming it. Typed errors (EvidenceError) pass through."""
+        try:
+            result: dict[str, Any] = work()
+            return result
+        except EvidenceError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - recorded on a receipt, never swallowed
+            receipt = self._base_receipt(kind, reason)
+            receipt.update({k: _printable(v) for k, v in requested.items()})
+            receipt["status"] = CaptureStatus.INTERNAL_ERROR
+            receipt["detail"] = _printable(f"{type(exc).__name__}: {exc}")
+            return self._finish(receipt, None, None)
+
     def capture(self, url: str, reason: str) -> dict[str, Any]:
         """Capture a web page or document; in `as_of` mode, from an archived copy."""
+        self._base_receipt("web", reason)  # a missing reason is refused before any work
+        return self._receipted("web", reason, {"requested_url": url},
+                               lambda: self._capture(url, reason))
+
+    def _capture(self, url: str, reason: str) -> dict[str, Any]:
         as_of = self.as_of
         kind = "archive" if as_of else "web"
         receipt = self._base_receipt(kind, reason)
@@ -382,6 +447,11 @@ class EvidenceService:
 
     def capture_file(self, path: str, reason: str) -> dict[str, Any]:
         """Capture one of the user's attachments, which live under the run's `task/`."""
+        self._base_receipt("file", reason)
+        return self._receipted("file", reason, {"requested_path": path},
+                               lambda: self._capture_file(path, reason))
+
+    def _capture_file(self, path: str, reason: str) -> dict[str, Any]:
         receipt = self._base_receipt("file", reason)
         receipt["requested_path"] = _printable(path)
 
@@ -390,27 +460,14 @@ class EvidenceService:
             receipt["detail"] = detail
             return self._finish(receipt, None, None)
 
-        task_dir = (self.run_dir / "task").resolve()
         try:
-            if not isinstance(path, str) or "\x00" in path:
-                raise ValueError("path holds a NUL character")
-            path.encode("utf-8")
-            candidate = Path(path)
-            if not candidate.is_absolute():
-                candidate = self.run_dir / candidate
-            resolved = candidate.resolve(strict=False)
-        except (ValueError, UnicodeError, RuntimeError, OSError) as exc:
-            return refuse(CaptureStatus.PATH_OUTSIDE_TASK, f"path not usable: {exc}")
-        if not resolved.is_relative_to(task_dir):
-            return refuse(CaptureStatus.PATH_OUTSIDE_TASK,
-                          "attachments are read only from the run's task/ folder")
-        try:
-            fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW)
-        except FileNotFoundError:
-            return refuse(CaptureStatus.FILE_NOT_FOUND, "no such file under task/")
-        except OSError as exc:
-            return refuse(CaptureStatus.FILE_UNREADABLE, f"cannot open: {exc.strerror}")
-        with os.fdopen(fd, "rb") as handle:
+            parts = self._task_relative_parts(path)
+        except ValueError as exc:
+            return refuse(CaptureStatus.PATH_OUTSIDE_TASK, str(exc))
+        opened = _open_beneath(self.run_dir / "task", parts)
+        if isinstance(opened, tuple):
+            return refuse(*opened)
+        with os.fdopen(opened, "rb") as handle:
             info = os.fstat(handle.fileno())
             if not stat.S_ISREG(info.st_mode):
                 return refuse(CaptureStatus.FILE_NOT_FOUND, "not a regular file under task/")
@@ -427,9 +484,32 @@ class EvidenceService:
                 return refuse(CaptureStatus.FILE_UNREADABLE, f"cannot read: {exc.strerror}")
         if len(body) > limits.MAX_BODY_BYTES:
             return refuse(CaptureStatus.TOO_LARGE, f"over limit {limits.MAX_BODY_BYTES}")
-        receipt["source_path"] = str(resolved.relative_to(self.run_dir))
+        # The path actually opened, component by component, with no link followed.
+        receipt["source_path"] = "/".join(["task", *parts])
         receipt["fetched_at"] = utc_now()
-        return self._finish(receipt, body, None, name_hint=resolved.name)
+        return self._finish(receipt, body, None, name_hint=parts[-1])
+
+    def _task_relative_parts(self, path: str) -> list[str]:
+        """The components of `path` below `task/`, judged by spelling alone (no
+        link is resolved here; `_open_beneath` refuses links while opening)."""
+        if not isinstance(path, str) or not path or "\x00" in path:
+            raise ValueError("path is empty or holds a NUL character")
+        try:
+            path.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ValueError("path is not valid Unicode text") from exc
+        given = PurePosixPath(path)
+        if given.is_absolute():
+            for root in (self.run_dir, self._run_dir_given):
+                with contextlib.suppress(ValueError):
+                    given = PurePosixPath(given.relative_to(PurePosixPath(root)))
+                    break
+            else:
+                raise ValueError("attachments are read only from the run's task/ folder")
+        parts = [p for p in given.parts if p not in ("", ".")]
+        if not parts or parts[0] != "task" or len(parts) < 2 or ".." in parts:
+            raise ValueError("attachments are read only from the run's task/ folder")
+        return parts[1:]
 
     # SEC -----------------------------------------------------------------------------
 
@@ -464,6 +544,19 @@ class EvidenceService:
         self._remember(ref)
         return ref
 
+    def _resolve_company(self, backend: SecBackend, company: str,
+                         warnings: list[str]) -> Any:
+        """Resolve a company. A ticker or name goes through today's SEC mapping; in an
+        `as_of` run that mapping may not be what it was then, so it is warned."""
+        ref = backend.resolve(company)
+        is_cik = str(company).strip().isascii() and str(company).strip().isdigit()
+        if self.as_of is not None and not is_cik:
+            warnings.append(
+                f"{company!r} was resolved to CIK {ref.cik} ({ref.name}) with today's ticker "
+                "and name mapping, which may differ from the as_of date; pass the CIK to be "
+                "sure")
+        return ref
+
     def sec_filings(self, company: str, form: str | None = None, filed_after: str | None = None,
                     filed_before: str | None = None) -> dict[str, Any]:
         """Filings with accession numbers and filing dates, newest first.
@@ -472,7 +565,7 @@ class EvidenceService:
         after = _check_date(filed_after, "filed_after")
         before = self._filed_before(filed_before, warnings)
         backend = self._sec()
-        ref = backend.resolve(company)
+        ref = self._resolve_company(backend, company, warnings)
         rows = [f for f in backend.filings(ref.cik, form)
                 if (before is None or f.filing_date < before)
                 and (after is None or f.filing_date > after)]
@@ -493,6 +586,10 @@ class EvidenceService:
             check_document(document)
         self._require_sec_identity()
         ref = self._filing_ref(accession)
+        return self._receipted("sec", reason, {"requested_accession": accession},
+                               lambda: self._sec_capture(ref, document, reason))
+
+    def _sec_capture(self, ref: FilingRef, document: str | None, reason: str) -> dict[str, Any]:
         receipt = self._base_receipt("sec", reason)
         receipt["sec"] = dict(ref.as_dict(), document=document or ref.primary_document)
         as_of = receipt["as_of"]
@@ -517,7 +614,7 @@ class EvidenceService:
         before = self._filed_before(filed_before, warnings)
         taxonomy, tag = parse_concept(concept)
         backend = self._sec()
-        ref = backend.resolve(company)
+        ref = self._resolve_company(backend, company, warnings)
         url = concept_url(ref.cik, taxonomy, tag)
         as_of = self.as_of
         receipt = self._base_receipt("sec_api", f"XBRL facts for {taxonomy}:{tag}")
@@ -538,9 +635,15 @@ class EvidenceService:
             data = json.loads(body.decode("utf-8"))
         except ValueError as exc:
             raise EvidenceError("sec_facts_unavailable", f"answer was not JSON: {exc}") from exc
+        def form_matches(fact_form: object) -> bool:
+            # `form="10-K"` keeps amendments too ("10-K/A"), labelled by their own form.
+            return form is None or str(fact_form).upper() in (form.upper(), f"{form.upper()}/A")
+
         facts = [f for f in facts_from_concept_json(data)
-                 if (before is None or str(f["filed"]) < before)
-                 and (form is None or f["form"] == form)]
+                 if (before is None or str(f["filed"]) < before) and form_matches(f["form"])]
+        amended = sum(1 for f in facts if str(f["form"]).upper().endswith("/A"))
+        if form is not None and amended:
+            warnings.append(f"{amended} facts come from amendments ({form}/A), labelled as such")
         if before is not None:
             # SEC re-assigns `frame` to the latest filing for a period, so it can
             # point at a filing after the cutoff. It is dropped from dated answers.
@@ -647,7 +750,8 @@ class EvidenceService:
         if receipt["status"] not in HAS_TEXT or not receipt.get("sha256"):
             raise EvidenceError("no_text", f"receipt {receipt_id} has status "
                                 f"{receipt['status']} and no quotable text")
-        result = find_quote(self.store.get_text(receipt["sha256"]), quote)
+        result = find_quote(self.store.get_text(receipt["sha256"]), quote,
+                            receipt.get("flagged_ranges"))
         return dict(result, receipt_id=receipt_id, sha256=receipt["sha256"])
 
     def read_text(self, receipt_id: str) -> str:
@@ -661,6 +765,8 @@ class EvidenceService:
         from stemma.evidence import tables as docling_tables
 
         check_sha256(sha256)
+        if not self.store.bytes_path(sha256).exists():
+            raise EvidenceError("unknown_sha256", f"no stored bytes {sha256}")
         version = docling_tables.docling_version()
         if version is None:
             return {"sha256": sha256, "status": "not_installed",
