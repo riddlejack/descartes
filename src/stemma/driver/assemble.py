@@ -20,7 +20,7 @@ from typing import Any, Final
 
 from stemma.driver import frontmatter
 from stemma.driver.errors import AgentFileInvalid, FragmentMissing, PluginInvalid
-from stemma.driver.task import FRAGMENT_SWITCHES, fragment_value
+from stemma.driver.task import FRAGMENT_SWITCHES, NOT_APPLICABLE, fragment_value
 from stemma.register import roles
 
 PLUGIN_NAME: Final = roles.PLUGIN
@@ -91,6 +91,8 @@ def _copy_tree(src: Path, dst: Path) -> None:
 def _fragments(src_dir: Path, prefix: str, switches: dict[str, Any]) -> list[Path]:
     out = []
     for name in FRAGMENT_SWITCHES:
+        if switches[name] == NOT_APPLICABLE:
+            continue  # no fragment for a switch the run's shape makes moot
         frag = src_dir / f"{prefix}{name}.{fragment_value(switches, name)}.md"
         if not frag.is_file():
             raise FragmentMissing(f"missing fragment {frag.relative_to(src_dir.parent)} "

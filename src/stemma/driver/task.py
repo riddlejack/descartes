@@ -42,6 +42,7 @@ MAX_EFFORT_ROLES: Final = frozenset({roles.short(roles.LEAD)} |
                                     {roles.short(r) for r in roles.FINAL_REVIEWERS})
 ALL_ROLE_NAMES: Final = tuple(sorted(roles.short(r) for r in roles.ALL_ROLES))
 
+NOT_APPLICABLE: Final = "not_applicable"  # a switch that the run's shape makes moot
 _TASK_KEYS: Final = frozenset({"question", "intake", "attachments", "as_of", "switches"})
 
 
@@ -110,6 +111,9 @@ def fill_switches(given: Any) -> dict[str, Any]:
         else:
             v = SWITCH_DEFAULTS[name]
         out[name] = v == "true" if name == "s3_hypothesis_in_briefs" else v
+    if out["s2_shape"] == "single_loop":
+        # s3 needs workers; with one author it is recorded not applicable (section 7).
+        out["s3_hypothesis_in_briefs"] = NOT_APPLICABLE
     out["s5_models"] = _models(given.get("s5_models"))
     return out
 

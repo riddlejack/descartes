@@ -79,6 +79,7 @@ class LaunchSpec:
     resume: bool
     tools: ToolSets
     request_id: str | None = None  # set for checking sessions
+    deny_agent: bool = False  # the lead under s2 single_loop may start no subagent
 
 
 @dataclass
@@ -191,7 +192,8 @@ def launch(cfg: DriverConfig, run_dir: Path, plugin_dir: Path, spec: LaunchSpec,
         settings_path=settings_dir / f"{spec.name}.json", plugin_dir=plugin_dir,
         agent=f"stemma:{spec.role}",
         settings_extra=stemma_settings_extra(run_dir, spec.role, spec.prompt, spec.tools,
-                                             cfg.claude_config),
+                                             cfg.claude_config, cache_dir=cfg.cache_dir,
+                                             deny_agent=spec.deny_agent),
         env_extra=driver_env(cfg, run_dir), session_id=spec.session_id, resume=spec.resume)
     argv = cl.argv
     stream_path = sessions_dir / f"{spec.name}.stream.jsonl"

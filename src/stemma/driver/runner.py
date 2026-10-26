@@ -208,8 +208,9 @@ class Driver:
               request_id: str | None) -> LaunchSpec:
         m = self.models[role]
         tools: ToolSets = tools_for_role(role, self.tools)
+        deny_agent = role == "lead" and self.run["switches"]["s2_shape"] == "single_loop"
         return LaunchSpec(name, role, prompt, m["model"], m["effort"], session_id, resume,
-                          tools, request_id)
+                          tools, request_id, deny_agent)
 
     def start_lead(self, resume: bool) -> None:
         lead = self.state["lead"]

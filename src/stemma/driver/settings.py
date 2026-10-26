@@ -24,6 +24,8 @@ MCP_PREFIX: Final = roles.MCP_PREFIX
 # Kept in --tools and allowed for every session: harmless now that the plugin's MCP server
 # sets alwaysLoad (probe p11), and the canary expects only the agent's own tools.
 ALWAYS_TOOLS: Final = ("ToolSearch",)
+# Plugin roles no session may start as a subagent (invariant: section 6, v0.2.4).
+HOST_STARTED_ROLES: Final = tuple(sorted(roles.CHECKING_ROLES | {roles.LEAD}))
 # Built-in agent types that must never start (invariant: section 6).
 DENIED_AGENT_TYPES: Final = (
     "fork", "general-purpose", "Explore", "Plan", "claude", "statusline-setup",
@@ -155,20 +157,33 @@ def _deciders_eye_denials(run_dir: Path, prompt: str) -> list[str]:
 
 
 def build_settings(run_dir: Path, role: str, prompt: str, tools: ToolSets,
-                   claude_config: Path) -> dict[str, Any]:
+                   claude_config: Path, *, cache_dir: Path | None = None,
+                   deny_agent: bool = False) -> dict[str, Any]:
     """The whole settings JSON of one session: the clean base plus Stemma's rules."""
-    return merge_settings(stemma_settings_extra(run_dir, role, prompt, tools, claude_config))
+    return merge_settings(stemma_settings_extra(run_dir, role, prompt, tools, claude_config,
+                                                cache_dir=cache_dir, deny_agent=deny_agent))
 
 
 def stemma_settings_extra(run_dir: Path, role: str, prompt: str, tools: ToolSets,
-                          claude_config: Path) -> dict[str, Any]:
+                          claude_config: Path, *, cache_dir: Path | None = None,
+                          deny_agent: bool = False) -> dict[str, Any]:
     """Stemma's rules on top of the clean base: permissions and the sandbox.
-    `run_dir` must be the resolved real path."""
+    `run_dir` must be the resolved real path. `deny_agent` denies the Agent tool outright
+    (the lead under s2 single_loop)."""
     deny: list[str] = ["WebFetch"] + [f"Agent({a})" for a in DENIED_AGENT_TYPES]
+    # Only the host starts checking roles and the lead (section 6, v0.2.4).
+    deny += [f"Agent({r})" for r in HOST_STARTED_ROLES]
+    if deny_agent:
+        deny.append("Agent")
     deny_write_abs: list[str] = []
     for pat in TOOL_ONLY:
         deny += [_rule("Write", run_dir, pat), _rule("Edit", run_dir, pat)]
         deny_write_abs.append(_abs(run_dir, pat))
+    if cache_dir is not None:
+        # A later run is served the cache's entries, so no agent may write them.
+        deny += [_rule_abs("Write", cache_dir, folder=True),
+                 _rule_abs("Edit", cache_dir, folder=True)]
+        deny_write_abs.append(str(cache_dir))
     reads = read_denials(run_dir, role, prompt)
     for pat in reads:
         deny.append(_rule("Read", run_dir, pat))

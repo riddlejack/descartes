@@ -43,6 +43,12 @@ def test_bad_switches_refused(given: dict[str, object]) -> None:
         fill_switches(given)
 
 
+def test_single_loop_makes_s3_not_applicable() -> None:
+    assert fill_switches({"s2_shape": "single_loop"})["s3_hypothesis_in_briefs"] == \
+        "not_applicable"
+    assert fill_switches({"s2_shape": "team"})["s3_hypothesis_in_briefs"] is False
+
+
 def test_s5_override() -> None:
     m = fill_switches({"s5_models": {"stemma:worker": {"model": "claude-fable-5-1"}}})["s5_models"]
     assert m["worker"] == {"model": "claude-fable-5-1", "effort": "high"}

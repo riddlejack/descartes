@@ -11,8 +11,27 @@ from stemma.driver import events
 from stemma.driver.runfolder import write_json_atomic
 
 
+def _latest_verdict(run_dir: Path, branch_id: str) -> dict[str, Any] | None:
+    """The newest `verdicts/<n>.json` of a branch (at any depth under branches/)."""
+    if not branch_id or "/" in branch_id or branch_id.startswith("."):
+        return None
+    best: tuple[int, dict[str, Any]] | None = None
+    for d in [run_dir / "branches" / branch_id, *(run_dir / "branches").glob(f"**/sub/{branch_id}")]:
+        for f in (d / "verdicts").glob("*.json"):
+            if not f.stem.isdigit():
+                continue
+            try:
+                v = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(v, dict) and (best is None or int(f.stem) > best[0]):
+                best = (int(f.stem), v)
+    return best[1] if best else None
+
+
 def waiting_on_user(run_dir: Path) -> list[dict[str, Any]]:
-    """Tree nodes whose status is `waiting_user` (section 5). Absent tree: none."""
+    """Tree nodes whose status is `waiting_user` (section 5), each with its question: the
+    reason of the branch's latest verdict when that verdict is `ask_user`."""
     try:
         tree = json.loads((run_dir / "tree.json").read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
@@ -22,8 +41,15 @@ def waiting_on_user(run_dir: Path) -> list[dict[str, Any]]:
         nodes = list(nodes.values())
     if not isinstance(nodes, list):
         return []
-    return [{"id": n.get("id"), "statement": n.get("statement")} for n in nodes
-            if isinstance(n, dict) and n.get("status") == "waiting_user"]
+    out = []
+    for n in nodes:
+        if not isinstance(n, dict) or n.get("status") != "waiting_user":
+            continue
+        v = _latest_verdict(run_dir, str(n.get("branch_id") or ""))
+        question = v.get("reason") if v and v.get("verdict") == "ask_user" else None
+        out.append({"id": n.get("id"), "statement": n.get("statement"),
+                    "branch_id": n.get("branch_id"), "question": question})
+    return out
 
 
 def build(run_dir: Path, run_id: str, state: str, lead: dict[str, Any],
@@ -63,7 +89,9 @@ def render_html(st: dict[str, Any]) -> str:
                 + (f", outcome {e(str(c.get('outcome')))}" if c.get("outcome") else ""))
     running = [lead_line] if lead.get("running") else []
     running += [check_line(c) for c in st["checks"]["running"]]
-    waits = [f"{e(str(n.get('id')))}: {e(str(n.get('statement')))}"
+    waits = [f"{e(str(n.get('id')))} ({e(str(n.get('statement')))}): "
+             + (e(str(n["question"])) if n.get("question")
+                else "no question recorded (the branch's latest verdict is not ask_user)")
              for n in st["waiting_on_user"]]
     if st["state"] != "running" and st.get("lead_last_message"):
         waits.append("The lead's last message: " + e(str(st["lead_last_message"])))

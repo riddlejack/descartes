@@ -49,6 +49,24 @@ def test_canary_settings_and_denials() -> None:
                                          "mcp__plugin_stemma_stemma__get_claim"]
 
 
+def test_host_started_roles_and_cache_denied() -> None:
+    for role, prompt in (("lead", "run:x"), ("claim-checker", "claim:a"),
+                         ("blind-framer", "frame:own")):
+        deny = _settings(role, prompt)["permissions"]["deny"]
+        for r in ("lead", "blind-framer", "claim-checker", "branch-reviewer",
+                  "deciders-eye-reviewer", "evidence-auditor", "mechanical-reader",
+                  "retrospective-writer"):
+            assert f"Agent(stemma:{r})" in deny, (role, r)
+        assert "Agent(stemma:worker)" not in deny and "Agent" not in deny
+    tools = split_tools([["Read"]])
+    s = build_settings(RUN, "lead", "run:x", tools, CONFIG, cache_dir=Path("/cache"),
+                       deny_agent=True)
+    deny = s["permissions"]["deny"]
+    assert "Write(//cache/**)" in deny and "Edit(//cache/**)" in deny and "Agent" in deny
+    assert "/cache" in s["sandbox"]["filesystem"]["denyWrite"]
+    assert "/cache" not in str(_settings("lead", "run:x")["sandbox"])
+
+
 def test_claim_checker_is_blind() -> None:
     s = _settings("claim-checker")
     deny, dr = s["permissions"]["deny"], s["sandbox"]["filesystem"]["denyRead"]

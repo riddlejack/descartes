@@ -277,11 +277,26 @@ def test_status_and_cli(cfg: DriverConfig, tmp: Path, fake: Fake, limits: Limits
     assert kinds(run, "evidence_stub_on")[0]["value"] == "1"
     assert not kinds(run, "evidence_stub_mismatch")
     (run / "tree.json").write_text(json.dumps({"nodes": [
-        {"id": "n1", "status": "waiting_user", "statement": "Which region counts?"},
-        {"id": "n2", "status": "answered", "statement": "x"}]}))
+        {"id": "n1", "status": "waiting_user", "statement": "Region share", "branch_id": "b1"},
+        {"id": "n3", "status": "waiting_user", "statement": "Deep one", "branch_id": "b9"},
+        {"id": "n2", "status": "answered", "statement": "x", "branch_id": "b2"}]}))
+    vdir = run / "branches" / "b1" / "verdicts"
+    vdir.mkdir(parents=True)
+    for n, (verdict, reason) in enumerate((("find_more", "look again"),
+                                           ("ask_user", "Which region counts?")), start=1):
+        (vdir / f"{n}.json").write_text(json.dumps({"branch_id": "b1", "verdict": verdict,
+                                                    "reason": reason}))
+    deep = run / "branches" / "b1" / "sub" / "b9" / "verdicts"
+    deep.mkdir(parents=True)
+    for n in (2, 10):  # numeric order, not text order
+        (deep / f"{n}.json").write_text(json.dumps(
+            {"branch_id": "b9", "verdict": "ask_user", "reason": f"question {n}"}))
     assert main(["--plugin-src", str(cfg.plugin_src), "status", str(run)]) == 0
     st = json.loads(capsys.readouterr().out)
-    assert st["waiting_on_user"] == [{"id": "n1", "statement": "Which region counts?"}]
+    assert st["waiting_on_user"] == [
+        {"id": "n1", "statement": "Region share", "branch_id": "b1",
+         "question": "Which region counts?"},
+        {"id": "n3", "statement": "Deep one", "branch_id": "b9", "question": "question 10"}]
     assert st["lead_last_message"] == "Which market did you mean?"
     assert st["lead"]["outcome"] == "completed"
     html = (run / "status.html").read_text()
@@ -290,6 +305,24 @@ def test_status_and_cli(cfg: DriverConfig, tmp: Path, fake: Fake, limits: Limits
     monkeypatch.delenv("STEMMA_CLAUDE_BIN")
     assert main(["status", str(run)]) == 2
     assert "STEMMA_CLAUDE_BIN is not set" in capsys.readouterr().err
+
+
+def test_single_loop_lead_may_start_no_agent(cfg: DriverConfig, tmp: Path, fake: Fake,
+                                            limits: Limits) -> None:
+    fake.configure({})
+    run = new_run(cfg, tmp, limits, switches={"s2_shape": "single_loop",
+                                              "s3_hypothesis_in_briefs": True})
+    rj = json.loads((run / "run.json").read_text())
+    assert rj["switches"]["s3_hypothesis_in_briefs"] == "not_applicable"
+    lead_text = (run / PLUGIN_DIR / "agents" / "lead.md").read_text()
+    assert "s3_hypothesis_in_briefs" not in lead_text
+    assert "LEAD-FRAGMENT s2_shape=single_loop" in lead_text
+    assert all("s3_" not in f for f in rj["plugin"]["assembled"]["agents/lead.md"]["from"])
+    assert start(cfg, run, checks_api, limits) == 0
+    lead = json.loads((run / ".stemma/settings/lead.json").read_text())
+    assert "Agent" in lead["permissions"]["deny"]
+    framer = next(run.glob(".stemma/settings/check-*.json"))
+    assert "Agent" not in json.loads(framer.read_text())["permissions"]["deny"]
 
 
 def test_second_driver_on_same_run_refused(cfg: DriverConfig, tmp: Path, fake: Fake,
