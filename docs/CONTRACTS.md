@@ -1,4 +1,4 @@
-# Contracts between the parts (v0.2)
+# Contracts between the parts (v0.2.2)
 
 These are the interfaces the parts agree on, so they can be built in parallel. The
 design (`DESIGN-v1.md`, cited as "step n") says what the system does; this file says
@@ -43,8 +43,13 @@ ran" (commitment 3) made structural.
    `--agent stemma:lead`, the run folder as working directory, that plugin, the
    pinned binary (`STEMMA_CLAUDE_BIN`), the clean config (`STEMMA_CLAUDE_CONFIG`),
    per-run settings (section 6) and the standing rules written as the run folder's
-   `CLAUDE.md`. Nothing else loads, checked by a canary at launch. Never `--bare`
-   (it skips plugin hooks). The driver sets `STEMMA_RUN_DIR` and `STEMMA_PYTHON`
+   `CLAUDE.md`. The lead gets `--model` and `--effort` on its command line (a
+   `--agent` main session ignores frontmatter effort). Nothing else loads, checked
+   by a canary at launch: every session starts from `env -i` plus an allowlisted
+   environment (the desktop app's inherited environment breaks the sign-in), with
+   per-launch settings that switch off the clean config's claude.ai-synced plugins,
+   skills and connectors, bundled skills and built-in plugins, and with `--tools`
+   naming the built-in tools allowed. Never `--bare` (it skips plugin hooks). The driver sets `STEMMA_RUN_DIR` and `STEMMA_PYTHON`
    (the interpreter with every part's dependencies) for every session; the MCP
    server and hooks find the run folder and the interpreter through them.
 2. The driver watches the register and the tree, and launches each checking session
@@ -60,7 +65,9 @@ ran" (commitment 3) made structural.
 3. Authors wait for checks with `await_checks(ids, max_wait_s)`, which returns the
    verdicts that have landed and lists the ones still running. It never invents one.
 4. All agents reach the evidence service and the register through one MCP server,
-   `stemma` (tools named `mcp__plugin_stemma_stemma__<tool>`, *B verifies*).
+   `stemma` (tools named `mcp__plugin_stemma_stemma__<tool>`, verified). MCP tools
+   load deferred in 2.1.308: unless B finds a setting that loads them at start, a
+   role's first use of a tool is preceded by `ToolSearch` with `select:<name>`.
 5. Agents exchange work through files in the run folder (section 3), never through
    retold figures: a figure crosses a hand-off as a claim id.
 6. The run ends when `finish_run` is accepted (section 6).
@@ -220,27 +227,33 @@ from the harness), `created_at`, each code check's result, `supersedes`,
 
 ## 6. What code guarantees, and who produces what it reads
 Each guard has a producer in the live path, or it would block every run.
-- **Every guard hook fails closed** (`onFailure: "block"`, *B verifies*): a crashed
-  guard stops the tool; it never lets it through.
+- **Every guard hook fails closed** (`onFailure: "block"`, verified): a crashed or
+  timed-out guard stops the tool. A hook that exits 0 with unreadable output counts
+  as allow, so every guard catches its own errors and denies (exit 2 or deny JSON);
+  a test feeds each guard malformed input.
 - **Bash runs sandboxed** with no network and no write access to tool-only paths
   (`store/`, `register/`, `tree.json`, `verdicts/`, `events.jsonl`, `run.json`),
-  *B verifies*. Write and Edit to those paths are denied by permission rules. The MCP
+  verified, including refusal of a request to run unsandboxed. Write and Edit to those paths are denied by permission rules. The MCP
   server runs outside the sandbox. WebFetch is denied.
-- **Subagents:** forks denied (`Agent(fork)`, *B verifies*); built-in agent types
+- **Subagents:** forks denied (`Agent(fork)`, verified); built-in agent types
   (general-purpose, Explore, Plan and any other) denied, so only plugin roles start;
   only approved models allowed (`availableModels`: Opus 5.5, Fable 5.1); model and
-  effort arguments on an Agent call stripped or refused by a hook;
+  effort arguments on an Agent call stripped by a hook (verified: an effort argument
+  is otherwise obeyed);
   `CLAUDE_CODE_EFFORT_LEVEL` never set in a run's environment. MCP tools the role
   needs are allowed explicitly (headless runs deny what is not allowed).
-- **Identity comes from the harness, never from a tool argument.** A hook stamps the
-  caller's `agent_type` onto every register write and every file-write event. Only a
+- **Identity comes from the harness, never from a tool argument.** A PreToolUse hook
+  records the caller's `agent_type` keyed by the tool use id, which the MCP request
+  also carries in its `_meta`; the register reads identity from that stamp, never
+  from an argument the model wrote (verified feasible). Only a
   `stemma:claim-checker` session records claim verdicts; only a
   `stemma:branch-reviewer` session records branch verdicts.
 - **Blind roles stay blind:** the claim checker cannot read `branches/*/record.md`,
   `order.md`, `frame.md` or drafts; the decider's-eye reviewer reads only `task/`,
   `intake.md` and the draft under review; the blind framer cannot read `frame.md`,
-  `tree.json` or `branches/` until `framer/own-frame.md` exists. Enforced on Read,
-  Grep, Glob and Bash (sandbox read denials per session), *B verifies*.
+  `tree.json` or `branches/` until `framer/own-frame.md` exists. Enforced on Read
+  and Bash (Grep and Glob are not tools in 2.1.308) by each session's own settings,
+  verified.
 - **A branch reaches `answered` or `gap_accepted` only by a branch verdict saying so.**
   Producer: the branch-reviewer session the driver starts on `propose_branch_done`.
 - **`finish_run` refuses** unless:
@@ -304,16 +317,17 @@ Each guard has a producer in the live path, or it would block every run.
   optional `as_of`, optional `switches`. The sealed side adapts its task package to
   this; the driver never reads benchmark material itself.
 - It launches the lead and every checking session, verifies the resolved model and
-  effort of each (for the lead's subagents, from their transcripts in the run's
-  config folder), waits, records artifact-landed events, keeps `status.json` and
+  effort of each (for the lead's subagents, from their transcripts, which land in
+  the clean config's `projects/<cwd-slug>/`; a copied config folder is not signed
+  in), waits, records artifact-landed events, keeps `status.json` and
   `status.html`, and resumes a stopped run.
 - It runs the system under test only through the isolated runner configuration, and
   reads only transcripts of sessions it launched.
 
 ## 10. Open questions each builder answers in their report
-- B: every *B verifies* item above, each shown by a run; whether a PreToolUse hook can
-  add a key absent from an MCP tool's schema (if not, how identity reaches the
-  register); nesting depth available to workers.
+- B: answered by run on 26 Oct (probe notes and kit in B's branch). Nesting: the
+  lead is depth 0 and a depth-3 agent has no Agent tool, so a worker may have two
+  levels below it. Still open: a setting that loads MCP tools at start.
 - A: which archive service gives a copy before a date, and how reliably.
 - C: which lines depend on the pending E6a reviewer study (reviewers stay goal-only
   until it reports).
