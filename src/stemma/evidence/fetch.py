@@ -69,6 +69,13 @@ class FetchResult:
                 return value
         return None
 
+    def header_values(self, name: str) -> list[str]:
+        wanted = name.lower()
+        return [value for key, value in self.headers if key.lower() == wanted]
+
+    def recorded_headers(self) -> list[tuple[str, str]]:
+        return _bounded_headers(self.headers)
+
     def limits_record(self) -> dict[str, Any]:
         return {
             "max_body_bytes": limits.MAX_BODY_BYTES,
@@ -190,7 +197,14 @@ class Fetcher:
                 return fail(status, f"{exc.code}: {exc.detail}")
             hop.http_status = resp.status
             result.http_status = resp.status
-            result.headers = _bounded_headers(resp.headers)
+            header_bytes = sum(len(k) + len(v) + 4 for k, v in resp.headers)
+            if header_bytes > limits.MAX_HEADER_BYTES:
+                resp.closer()
+                return fail(CaptureStatus.TRANSPORT_ERROR,
+                            f"response headers passed the limit of {limits.MAX_HEADER_BYTES} bytes")
+            # Every header is kept for the checks (a Memento-Datetime may come late);
+            # the receipt records a bounded copy.
+            result.headers = list(resp.headers)
             if resp.status in _REDIRECTS:
                 resp.closer()
                 location = resp.header("Location")

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import FakeSec, FakeTransport, Reply, html, make_pdf, set_as_of
+from conftest import FakeSec, FakeTransport, Reply, enable_fallback, html, make_pdf, set_as_of
 
 from stemma.evidence import api, limits, netpolicy
 from stemma.evidence import fetch as fetch_mod
@@ -304,7 +304,8 @@ def test_script_shell_is_short_and_zero_width_is_empty() -> None:
     assert extract(hidden_only, "text/html").status is CaptureStatus.EMPTY_TEXT
 
 
-def test_shell_triggers_browser_fallback(make_service: Factory) -> None:
+def test_shell_triggers_browser_fallback(make_service: Factory, run_dir: Path) -> None:
+    enable_fallback(run_dir)
     calls: list[str] = []
 
     class Spy:

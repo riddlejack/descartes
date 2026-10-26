@@ -57,18 +57,23 @@ def test_memento_without_zone_is_read_as_gmt(make_service: Factory, run_dir: Pat
         "no_snapshot_before_as_of")
 
 
-def test_same_bytes_other_type_reuses_first_text(make_service: Factory) -> None:
+def test_same_bytes_read_another_way_get_their_own_text(make_service: Factory) -> None:
+    # Superseded rule: the same bytes under another content type or charset no longer
+    # reuse the first text (the cross-family review); each reading gets its own text
+    # identity, and the same reading again reuses it.
     t = FakeTransport({"https://a.example.org/": Reply(200, [("Content-Type", "text/html")], PAGE),
                        "https://b.example.org/": Reply(200, [("Content-Type", "text/plain")], PAGE),
-                       "https://c.example.org/": Reply(200, [("Content-Type",
-                                                              "text/html; charset=koi8-r")], PAGE)})
+                       "https://c.example.org/": Reply(200, [("Content-Type", "text/html")], PAGE)})
     svc = make_service(t, cache_dir=None)
-    first = svc.capture("https://a.example.org/", "html")
-    for url in ("https://b.example.org/", "https://c.example.org/"):
-        again = svc.capture(url, "same bytes, other headers")
-        assert again["status"] == first["status"] and again["text_chars"] == first["text_chars"]
-        assert again["content_type"] == "text/html"
-        assert any(w.startswith("text_reused_from_receipt") for w in again["warnings"])
+    html_first = svc.capture("https://a.example.org/", "html")
+    as_plain = svc.capture("https://b.example.org/", "same bytes as plain text")
+    html_again = svc.capture("https://c.example.org/", "html again")
+    assert html_first["sha256"] == as_plain["sha256"] == html_again["sha256"]
+    assert html_first["text_id"] == html_first["sha256"]
+    assert as_plain["text_id"] != html_first["text_id"] and as_plain["content_type"] == "text/plain"
+    assert "<p>" in svc.read_text(as_plain["receipt_id"])  # plain text keeps the markup
+    assert html_again["text_id"] == html_first["text_id"]
+    assert any(w.startswith("text_reused_from_receipt") for w in html_again["warnings"])
 
 
 @pytest.mark.parametrize("url", ["http://example.org/café", "http://example.org/?q=€",

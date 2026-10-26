@@ -114,8 +114,18 @@ def run_dir(tmp_path: Path) -> Path:
     return folder
 
 
+def enable_fallback(run_dir: Path) -> None:
+    """Turn the browser fallback on for this run (it is off by default)."""
+    data = json.loads((run_dir / "run.json").read_text())
+    data["evidence"] = {"browser_fallback": True}
+    (run_dir / "run.json").write_text(json.dumps(data))
+
+
 def set_as_of(run_dir: Path, as_of: str | None) -> None:
-    (run_dir / "run.json").write_text(json.dumps({"run_id": "t", "as_of": as_of}))
+    path = run_dir / "run.json"
+    data = json.loads(path.read_text()) if path.exists() else {"run_id": "t"}
+    data["as_of"] = as_of
+    path.write_text(json.dumps(data))
 
 
 @pytest.fixture

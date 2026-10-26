@@ -176,6 +176,11 @@ def prescan(body: bytes) -> str | None:
     return None
 
 
+def choose(body: bytes, header_type: str | None, kind: str) -> str | None:
+    """The charset label `decode` would use, without keeping the text."""
+    return decode(body, header_type, kind)[1]
+
+
 def decode(body: bytes, header_type: str | None, kind: str) -> tuple[str | None, str | None, list[str]]:
     """Decode by the order above. `kind` is "html", "xml" or "text". Returns
     (text or None if the declared charset is not allowed, label, warnings)."""

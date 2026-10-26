@@ -8,7 +8,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
-from conftest import FakeTransport, Reply, html, set_as_of
+from conftest import FakeTransport, Reply, enable_fallback, html, set_as_of
 
 from stemma.evidence.archive import cdx_query_url
 from stemma.evidence.service import EvidenceService
@@ -130,7 +130,9 @@ def test_no_browser_fallback_in_as_of_mode(make_service: Factory, run_dir: Path)
             raise AssertionError("must not render in as_of mode")
 
     routes = {cdx_query_url(URL, AS_OF): cdx("20240530000000"),
-              snap("20240530000000"): Reply(200, [("Content-Type", "text/html")], b"<html></html>")}
+              snap("20240530000000"): Reply(200, [("Content-Type", "text/html"), (
+                  "Memento-Datetime", "Thu, 30 May 2024 00:00:00 GMT")], b"<html></html>")}
+    enable_fallback(run_dir)
     set_as_of(run_dir, AS_OF)
     svc = make_service(FakeTransport(routes), renderer=Spy())
     r = svc.capture(URL, "probe")

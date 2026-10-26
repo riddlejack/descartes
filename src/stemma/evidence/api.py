@@ -36,7 +36,7 @@ def _stored_text(run_dir: str | Path, receipt_id: str) -> tuple[dict[str, Any], 
         raise EvidenceError(
             "no_text", f"receipt {receipt_id} has status {receipt['status']} and no stored text"
         )
-    return receipt, store.get_text(receipt["sha256"])
+    return receipt, store.get_text(receipt.get("text_id") or receipt["sha256"])
 
 
 def check_quote(run_dir: str | Path, receipt_id: str, quote: str) -> dict[str, Any]:

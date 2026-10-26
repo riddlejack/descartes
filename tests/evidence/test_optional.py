@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import FakeTransport, Reply, html
+from conftest import FakeTransport, Reply, enable_fallback, html
 
 from stemma.evidence import tables as tables_mod
 from stemma.evidence import tools
@@ -35,7 +35,8 @@ class FakeRenderer:
         return self.result
 
 
-def test_fallback_runs_only_on_loud_text(make_service: Factory) -> None:
+def test_fallback_runs_only_on_loud_text(make_service: Factory, run_dir: Path) -> None:
+    enable_fallback(run_dir)
     renderer = FakeRenderer(Rendered(FULL, "https://app.example.org/", ["http://10.0.0.1/x"]))
     t = FakeTransport({"https://app.example.org/": Reply(200, [("Content-Type", "text/html")], SPA),
                        "https://ok.example.org/": Reply(200, [("Content-Type", "text/html")], FULL)})
@@ -51,7 +52,8 @@ def test_fallback_runs_only_on_loud_text(make_service: Factory) -> None:
     assert renderer.calls == ["https://app.example.org/"]
 
 
-def test_fallback_failure_is_recorded(make_service: Factory) -> None:
+def test_fallback_failure_is_recorded(make_service: Factory, run_dir: Path) -> None:
+    enable_fallback(run_dir)
     renderer = FakeRenderer(RuntimeError("browser crashed"))
     t = FakeTransport({"https://app.example.org/": Reply(200, [("Content-Type", "text/html")], SPA)})
     r = make_service(t, renderer=renderer).capture("https://app.example.org/", "dashboard")
@@ -59,7 +61,8 @@ def test_fallback_failure_is_recorded(make_service: Factory) -> None:
     assert any(w.startswith("browser_fallback_failed: receipt r_") for w in r["warnings"])
 
 
-def test_fallback_absent_is_warned(make_service: Factory) -> None:
+def test_fallback_absent_is_warned(make_service: Factory, run_dir: Path) -> None:
+    enable_fallback(run_dir)
     t = FakeTransport({"https://app.example.org/": Reply(200, [("Content-Type", "text/html")], SPA),
                        "https://ok.example.org/": Reply(200, [("Content-Type", "text/html")], FULL)})
     svc = make_service(t, renderer=None)

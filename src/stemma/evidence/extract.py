@@ -15,7 +15,10 @@ Unicode code points in the stored text.
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from importlib import metadata
 from typing import Any
@@ -72,7 +75,7 @@ def extractor_versions() -> dict[str, str]:
 
 
 # Invariant: bumped whenever this module's rules change the text it produces.
-EXTRACT_RULES_VERSION = "4"
+EXTRACT_RULES_VERSION = "5"
 
 
 def sniff_content_type(declared: str | None, body: bytes, name_hint: str = "") -> str:
@@ -154,125 +157,51 @@ def markdown_outline(text: str) -> list[dict[str, Any]]:
     return outline
 
 
-# Invariant: PDF text render mode 3 draws nothing (ISO 32000, 9.3.6).
-_RENDER_INVISIBLE = 3
-# Extraction flag: a fill colour with every channel at or above this is "white"
-# (drawn but not seen on a white page). It flags; it never removes text.
-_WHITE_MIN = 250
+class PdfExtractionError(Exception):
+    pass
 
 
-def _page_chars(textpage: Any, raw: Any) -> tuple[str, list[str | None]]:
-    """A page's text with, per character, why it is not visible (or None)."""
-    import ctypes
-
-    count = raw.FPDFText_CountChars(textpage.raw)
-    text = textpage.get_text_range(0, count) if count > 0 else ""
-    if len(text) != count:
-        return text, [None] * len(text)  # surrogate pairs: no per-character flags
-    flags: list[str | None] = []
-    r, g, b, a = (ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint())
-    for index in range(count):
-        why: str | None = None
-        obj = raw.FPDFText_GetTextObject(textpage.raw, index)
-        if obj and raw.FPDFTextObj_GetTextRenderMode(obj) == _RENDER_INVISIBLE:
-            why = "invisible_pdf_text"
-        elif raw.FPDFText_GetFillColor(textpage.raw, index, r, g, b, a) and (
-                a.value == 0 or min(r.value, g.value, b.value) >= _WHITE_MIN):
-            why = "white_pdf_text" if a.value else "invisible_pdf_text"
-        flags.append(why)
-    return text, flags
-
-
-def _normalise_with_flags(text: str, flags: list[str | None]) -> tuple[str, list[str | None]]:
-    out: list[str] = []
-    kept: list[str | None] = []
-    index = 0
-    while index < len(text):
-        char = text[index]
-        if char == "\r":
-            out.append("\n")
-            kept.append(flags[index])
-            if index + 1 < len(text) and text[index + 1] == "\n":
-                index += 1
-        else:
-            out.append(char)
-            kept.append(flags[index])
-        index += 1
-    return "".join(out), kept
-
-
-def _flag_ranges(flags: list[str | None], base: int, text: str) -> list[dict[str, Any]]:
-    ranges: list[dict[str, Any]] = []
-    start: int | None = None
-    kind: str | None = None
-    for index, why in enumerate([*flags, None]):
-        # Whitespace inside a flagged run does not break it.
-        if why is None and start is not None and index < len(text) and text[index].isspace():
-            continue
-        if why != kind:
-            if kind is not None and start is not None:
-                end = index
-                while end > start and text[end - 1].isspace():
-                    end -= 1
-                ranges.append({"start": base + start, "end": base + end, "kind": kind})
-            start, kind = (index, why) if why is not None else (None, None)
-    return ranges
+def _pdf_worker_argv() -> list[str]:
+    """The child process that runs PDFium (see `pdfworker`). `-I`: isolated mode,
+    so the child ignores PYTHON* variables and the current folder."""
+    return [sys.executable, "-I", "-m", "stemma.evidence.pdfworker", str(limits.PDF_MAX_TEXT_CHARS)]
 
 
 def pdf_to_text(body: bytes) -> tuple[str, list[dict[str, Any]], int, list[str],
                                       list[dict[str, Any]]]:
-    import pypdfium2 as pdfium  # type: ignore[import-untyped]
-    from pypdfium2 import raw  # type: ignore[import-untyped,unused-ignore]
-
-    warnings: list[str] = []
-    pdf = pdfium.PdfDocument(body)
+    """Run PDFium in a child process under a recorded time limit and output limit."""
     try:
-        parts: list[str] = []
-        outline: list[dict[str, Any]] = []
-        flagged: list[dict[str, Any]] = []
-        offset = 0
-        page_starts: list[int] = []
-        count = len(pdf)
-        for index in range(count):
-            page = pdf[index]
-            textpage = page.get_textpage()
-            try:
-                page_text, flags = _normalise_with_flags(*_page_chars(textpage, raw))
-            finally:
-                textpage.close()
-                page.close()
-            if index > 0:
-                parts.append("\n\n")
-                offset += 2
-            page_starts.append(offset)
-            parts.append(page_text)
-            flagged.extend(_flag_ranges(flags, offset, page_text))
-            outline.append({"anchor": f"p{index + 1}", "kind": "page", "level": 1,
-                            "title": f"Page {index + 1}", "start": offset,
-                            "end": offset + len(page_text)})
-            offset += len(page_text)
-        try:
-            for number, item in enumerate(pdf.get_toc(max_depth=4)):
-                page_index = item.page_index
-                if page_index is None or not 0 <= page_index < count:
-                    continue
-                start = page_starts[page_index]
-                outline.append({"anchor": f"t{number + 1}", "kind": "bookmark",
-                                "level": int(item.level) + 1, "title": str(item.title)[:200],
-                                "start": start, "end": outline[page_index]["end"]})
-        except Exception:  # noqa: BLE001 - bookmarks are a convenience; failure is warned
-            warnings.append("pdf_bookmarks_unreadable")
-        if b"%%EOF" not in body[-2048:]:
-            warnings.append("pdf_truncated: no end-of-file marker; pages may be missing")
-        invisible = sum(1 for r in flagged if r["kind"] == "invisible_pdf_text")
-        white = sum(1 for r in flagged if r["kind"] == "white_pdf_text")
-        if invisible:
-            warnings.append(f"invisible_pdf_text_kept: {invisible} ranges")
-        if white:
-            warnings.append(f"white_pdf_text_kept: {white} ranges")
-        return "".join(parts), outline, count, warnings, flagged
-    finally:
-        pdf.close()
+        done = subprocess.run(_pdf_worker_argv(), input=body, capture_output=True,
+                              timeout=limits.PDF_EXTRACT_TIMEOUT_S, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise PdfExtractionError(
+            f"PDF extraction passed its time limit of {limits.PDF_EXTRACT_TIMEOUT_S} s") from exc
+    if len(done.stdout) > limits.PDF_MAX_OUTPUT_BYTES:
+        raise PdfExtractionError("PDF extraction output passed its byte limit")
+    try:
+        result = json.loads(done.stdout.decode("ascii"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        detail = done.stderr.decode("utf-8", "replace")[-300:]
+        raise PdfExtractionError(
+            f"PDF worker exited {done.returncode} without a result: {detail}") from exc
+    if "error" in result:
+        kind = result["error"]
+        detail = str(result.get("detail", ""))
+        if kind == "too_much_text":
+            raise PdfExtractionError(f"{detail} (output limit)")
+        raise PdfExtractionError(detail)
+    ok = result["ok"]
+    warnings: list[str] = list(ok["warnings"])
+    flagged: list[dict[str, Any]] = list(ok["flagged"])
+    if b"%%EOF" not in body[-2048:]:
+        warnings.append("pdf_truncated: no end-of-file marker; pages may be missing")
+    invisible = sum(1 for r in flagged if r["kind"] == "invisible_pdf_text")
+    white = sum(1 for r in flagged if r["kind"] == "white_pdf_text")
+    if invisible:
+        warnings.append(f"invisible_pdf_text_kept: {invisible} ranges")
+    if white:
+        warnings.append(f"white_pdf_text_kept: {white} ranges")
+    return str(ok["text"]), list(ok["outline"]), int(ok["pages"]), warnings, flagged
 
 
 def _sanity(text: str, body_len: int, markup: bool,
@@ -306,7 +235,7 @@ def extract(body: bytes, declared_type: str | None, name_hint: str = "") -> Extr
                      "rules": EXTRACT_RULES_VERSION}
         try:
             text, outline, pages, warnings, pdf_flagged = pdf_to_text(body)
-        except Exception as exc:  # noqa: BLE001 - any extractor failure becomes a typed status
+        except PdfExtractionError as exc:
             return Extraction(CaptureStatus.EXTRACTION_FAILED, content_type,
                               extractor=extractor, detail=f"pypdfium2: {exc}")
         status, flags = _sanity(text, len(body), False, pdf_flagged)

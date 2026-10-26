@@ -32,6 +32,9 @@ from stemma.evidence.quotes import normalise
 # Invariant: the spellings of the two kinds of id the store accepts from callers.
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RECEIPT_ID_RE = re.compile(r"^r_[0-9]{8}T[0-9]{6}_[0-9a-f]{12}$")
+# A stored text's identity: the bytes' sha256, plus "~<variant>" when the same bytes
+# were also read under another content type or charset (see service._variant).
+TEXT_ID_RE = re.compile(r"^[0-9a-f]{64}(?:~[0-9a-f]{12})?$")
 
 # Resource limit: seconds a writer waits for the SQLite lock.
 _SQLITE_TIMEOUT_S = 60.0
@@ -71,6 +74,13 @@ def new_receipt_id() -> str:
 def check_sha256(value: str) -> str:
     if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
         raise EvidenceError("bad_sha256", "expected 64 lower-case hex characters")
+    return value
+
+
+def check_text_id(value: str) -> str:
+    if not isinstance(value, str) or not TEXT_ID_RE.fullmatch(value):
+        raise EvidenceError("bad_sha256", "expected a sha256 (64 lower-case hex characters), "
+                            "optionally followed by ~ and a 12-character text variant")
     return value
 
 
@@ -186,23 +196,23 @@ class Store:
 
     def get_extraction(self, sha: str) -> dict[str, Any] | None:
         """How the stored text of these bytes was made, or None if never extracted."""
-        path = self.text_dir / f"{check_sha256(sha)}.extraction.json"
+        path = self.text_dir / f"{check_text_id(sha)}.extraction.json"
         if not path.exists():
             return None
         loaded: dict[str, Any] = json.loads(path.read_text("utf-8"))
         return loaded
 
     def has_text(self, sha: str) -> bool:
-        return (self.text_dir / f"{check_sha256(sha)}.txt").exists()
+        return (self.text_dir / f"{check_text_id(sha)}.txt").exists()
 
     def get_text(self, sha: str) -> str:
-        path = self.text_dir / f"{check_sha256(sha)}.txt"
+        path = self.text_dir / f"{check_text_id(sha)}.txt"
         if not path.exists():
             raise EvidenceError("no_text", f"no stored text for {sha}")
         return _read_text_cached(str(path), path.stat().st_mtime_ns)
 
     def get_outline(self, sha: str) -> list[dict[str, Any]]:
-        path = self.text_dir / f"{check_sha256(sha)}.outline.json"
+        path = self.text_dir / f"{check_text_id(sha)}.outline.json"
         if not path.exists():
             raise EvidenceError("no_text", f"no stored text for {sha}")
         loaded: list[dict[str, Any]] = json.loads(path.read_text("utf-8"))
@@ -274,14 +284,18 @@ class Store:
         sql = ("SELECT sha256, start, end, snippet(fts_words, 0, '[', ']', '…', 24), "
                "bm25(fts_words) FROM fts_words WHERE fts_words MATCH ?")
         params: list[Any] = [match]
-        if sha is not None:
+        if sha is not None and "~" in sha:
             sql += " AND sha256 = ?"
             params.append(sha)
+        elif sha is not None:  # a bytes sha256 covers every text read from those bytes
+            sql += " AND (sha256 = ? OR sha256 LIKE ?)"
+            params.extend([sha, sha + "~%"])
         sql += " ORDER BY bm25(fts_words) LIMIT ?"
         params.append(limit)
         with self._db() as db:
             rows = db.execute(sql, params).fetchall()
-        return [{"sha256": r[0], "start": int(r[1]), "end": int(r[2]), "snippet": r[3],
+        return [{"sha256": str(r[0]).split("~")[0], "text_id": r[0], "start": int(r[1]),
+                 "end": int(r[2]), "snippet": r[3],
                  "rank": round(float(r[4]), 4)} for r in rows]
 
     def search_exact(self, query: str, sha: str | None, limit: int) -> list[dict[str, Any]]:
@@ -299,9 +313,12 @@ class Store:
         match = '"' + needle.replace('"', '""') + '"'
         sql = "SELECT sha256 FROM fts_exact WHERE fts_exact MATCH ?"
         params: list[Any] = [match]
-        if sha is not None:
+        if sha is not None and "~" in sha:
             sql += " AND sha256 = ?"
             params.append(sha)
+        elif sha is not None:  # a bytes sha256 covers every text read from those bytes
+            sql += " AND (sha256 = ? OR sha256 LIKE ?)"
+            params.extend([sha, sha + "~%"])
         with self._db() as db:
             shas = [str(r[0]) for r in db.execute(sql, params).fetchall()]
         hits: list[dict[str, Any]] = []
@@ -315,7 +332,8 @@ class Store:
                 end = origin[position + len(needle) - 1] + 1
                 snippet = (text[max(0, start - context):start] + "[" + text[start:end] + "]"
                            + text[end:end + context])
-                hits.append({"sha256": doc, "start": start, "end": end, "snippet": snippet})
+                hits.append({"sha256": doc.split("~")[0], "text_id": doc, "start": start,
+                             "end": end, "snippet": snippet})
                 position = haystack.find(needle, position + len(needle))
             if len(hits) >= limit:
                 break

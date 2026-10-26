@@ -1,14 +1,22 @@
 """The browser fallback (Playwright 1.64.1, optional extra `evidence-render`).
 
-Tried only when a plain HTML capture comes back `empty_text` or `short_text`. The
-rendered page (the DOM after scripts ran, serialised as HTML) is stored as its own
-bytes with its own receipt, linked to the plain capture's receipt; nothing replaces
-the plain capture. Every request the browser makes is checked by the same address
-rule as a plain fetch, and refused requests are aborted; WebSockets are never
-connected; redirect hops, which the browser follows without asking the gate, are
-checked afterwards and a render with a refused hop is discarded. Known gap: the
-browser resolves names itself, so its lookup and the gate's are separate, and a
-redirect hop's request has already been sent when it is checked.
+**Off unless the run turns it on** (`run.json`: `"evidence": {"browser_fallback":
+true}`): B1 found no page that needed it, and a browser is the one fetch path
+whose network the service cannot fully control. When on, it is tried only after a
+plain HTML capture comes back `empty_text` or `short_text`, and never in `as_of`
+mode.
+
+Hardening, so the browser fetches nothing the plain fetch would not:
+- the page's host is resolved and checked by the plain fetch's address rule, and
+  Chromium is started with `--host-resolver-rules` mapping that host to the
+  checked address and every other name to nothing, so Chromium's own lookups
+  cannot reach anything else;
+- every request except the one main-frame navigation to the checked URL is
+  aborted: no redirects, no subresources, no other frames; WebSockets are never
+  connected. So it renders only what the page's own inline scripts write;
+- a non-success HTTP status is a typed failure (`RenderHttpError`), never text.
+The rendered DOM is stored as its own bytes with its own receipt, linked to the
+plain capture's receipt; nothing replaces the plain capture.
 """
 
 from __future__ import annotations
@@ -40,15 +48,23 @@ class RenderUnavailable(Exception):
     pass
 
 
-def _allowed(url: str, transport: StdlibTransport) -> bool:
-    if url.startswith(("data:", "blob:", "about:")):
-        return True
-    try:
-        parsed = parse_url(url)
-        check_resolved(parsed.host, transport.resolve(parsed.host))
-    except (InvalidUrl, PolicyRefusal, TransportFailure):
+class RenderHttpError(Exception):
+    """The main document answered with a non-success HTTP status."""
+
+    def __init__(self, status: int, body: bytes = b"") -> None:
+        super().__init__(f"HTTP {status}")
+        self.status = status
+        self.body = body
+
+
+def _gate_decision(request_url: str, main_url: str, is_main_navigation: bool) -> bool:
+    """Allow only the main-frame navigation to the checked URL itself."""
+    if not is_main_navigation:
         return False
-    return True
+    try:
+        return parse_url(request_url).url == parse_url(main_url).url
+    except (InvalidUrl, PolicyRefusal):
+        return False
 
 
 class PlaywrightRenderer:
@@ -67,46 +83,48 @@ class PlaywrightRenderer:
     def render(self, url: str) -> Rendered:
         from playwright.sync_api import sync_playwright  # type: ignore[import-not-found,unused-ignore]
 
-        transport = StdlibTransport()
+        try:
+            parsed = parse_url(url)
+            address = check_resolved(parsed.host, StdlibTransport().resolve(parsed.host))
+        except (InvalidUrl, PolicyRefusal, TransportFailure) as exc:
+            raise RenderUnavailable(f"address refused: {exc}") from exc
+        pinned = f"[{address}]" if ":" in address else address
+        resolver_rules = f"MAP {parsed.host} {pinned}, MAP * ~NOTFOUND"
         blocked: list[str] = []
 
         def gate(route: Any) -> None:
-            target = route.request.url
-            if _allowed(target, transport):
+            request = route.request
+            main = request.is_navigation_request() and request.frame.parent_frame is None
+            if _gate_decision(request.url, parsed.url, main):
                 route.continue_()
             else:
-                blocked.append(target[:300])
+                blocked.append(request.url[:300])
                 route.abort()
 
         timeout_ms = int(limits.TOTAL_DEADLINE_S * 1000 / 2)
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
+                browser = p.chromium.launch(
+                    headless=True, args=[f"--host-resolver-rules={resolver_rules}"])
                 try:
                     context = browser.new_context(java_script_enabled=True,
                                                   accept_downloads=False,
                                                   service_workers="block")
-                    # WebSockets are never connected: a handler that does not call
-                    # connect_to_server keeps the socket inside the browser.
                     context.route_web_socket("**/*", lambda _ws: None)
                     context.route("**/*", gate)
                     page = context.new_page()
-                    response = page.goto(url, wait_until="load", timeout=timeout_ms)
-                    # Redirect hops are followed inside the browser without passing
-                    # the gate; check the chain afterwards and refuse the render if
-                    # any hop names an address the rule refuses.
-                    hop = response.request if response is not None else None
-                    while hop is not None:
-                        if not _allowed(hop.url, transport):
-                            raise RenderUnavailable(f"redirect hop refused: {hop.url[:300]}")
-                        hop = hop.redirected_from
+                    response = page.goto(parsed.url, wait_until="load", timeout=timeout_ms)
+                    if response is None:
+                        raise RenderUnavailable("no response for the main document")
+                    if not 200 <= response.status < 300:
+                        raise RenderHttpError(response.status)
                     with contextlib.suppress(Exception):  # idle is best effort after load
                         page.wait_for_load_state("networkidle", timeout=10_000)
                     html = page.content().encode("utf-8")
                     final_url = page.url
                 finally:
                     browser.close()
-        except RenderUnavailable:
+        except (RenderUnavailable, RenderHttpError):
             raise
         except Exception as exc:
             raise RenderUnavailable(f"render failed: {exc}") from exc

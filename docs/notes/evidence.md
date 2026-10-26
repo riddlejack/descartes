@@ -9,7 +9,7 @@ on `EvidenceService` (`service.py`) and as an MCP tool registered by
 
 ## What works, and how it was shown
 
-Unit tests: `pytest tests/evidence` runs 198 tests in about a second, with no
+Unit tests: `pytest tests/evidence` runs 234 tests in about a second, with no
 network (a fake transport, a fake SEC backend, invented pages, a PDF built by hand
 in `conftest.py`). `ruff check` and `mypy --strict` pass on `src/stemma/evidence`.
 The live tests are marked `live` and skipped unless `STEMMA_LIVE=1`; they were run
@@ -76,7 +76,7 @@ connection are two lookups; the plain fetch does not have this gap.
   substring search gives each hit's offsets. Agent queries are quoted, so FTS5
   syntax cannot be injected (tested with `" OR *`, `NEAR(...)` and others).
 - `check_quote`: exact match after one documented normalisation
-  (`whitespace-runs-to-one-space;typographic-quotes-to-ascii;token-and-number-edges;v3`):
+  (`whitespace-runs-to-one-space;typographic-quotes-to-ascii;token-and-quantity-edges;v4`):
   every run of Unicode whitespace becomes one space; curly and typographic quotation
   marks become straight ones; a match must sit on token boundaries and never start
   or end in the middle of a number (a digit, or digit-separator-digit, across
@@ -249,6 +249,10 @@ and its separate DNS lookup remains a known gap.
 - In `as_of` runs, part B may want to deny agents' Read of `store/bytes/` (raw
   bytes of withheld SEC answers); the tools never show them.
 - Receipt ids look like `r_20261026T040948_8c50c0396d96` (UTC time plus random).
+- Tools taking `sha256` for stored text also accept a `text_id`
+  (`sha256~<variant>`); receipts carry `text_id`.
+- The browser fallback is a run setting, `run.json` `"evidence":
+  {"browser_fallback": true}`, off by default (driver, part B).
 - `check_quote` raises typed errors for unusable input (`unknown_receipt`,
   `bad_receipt_id`, `no_text`, `empty_quote`) and returns `found: false` only when
   the text exists and the quote is not in it.
@@ -300,6 +304,47 @@ Live re-run after the fixes: the BLS page and PDF `ok`; Apple's 10-K `ok` with 2
 Item anchors, 63 merged-cell tables and its hidden XBRL header flagged; the
 browser fallback still `ok`.
 
+## Cross-family review fixes (26 October 2026)
+A Codex review of `cbefb29` found eight problems and two suspected ones, all real.
+Each is reproduced first in `tests/evidence/test_review_codex.py` (36 tests; 28
+failed before the fixes):
+1. PDF visibility flags: text is now built per PDFium character index, so a NUL
+   glyph (stored as U+FFFD) cannot misalign or switch off the flags, and render
+   mode 7 (clip only) counts as invisible with mode 3.
+2. Quote edges: no match may start or end where the neighbouring character would
+   change the quantity or its sign: a decimal point (".5"), a sign after a space
+   or in an exponent ("-$5", "1e-3"), a currency sign ("$5", "5€"), a percent or
+   per-mille sign, an exponent marker. Mirror cases at the end are covered.
+   Normalisation is now `...;token-and-quantity-edges;v4`.
+3. Digits from two different elements never meet: a space is put between them
+   and recorded as an `element_split` range; `check_quote` refuses a match with an
+   edge at a split (CSS may show the digits joined), and warns on one spanning it.
+4. TLS: the watchdog now shuts the wrapped socket (wrapping had detached the raw
+   one), so a TLS header drip stops at the deadline (tested over real TLS on
+   loopback with a throwaway certificate).
+5. The browser fallback is off unless `run.json` says
+   `"evidence": {"browser_fallback": true}`. When on, Chromium's resolution is
+   pinned to the checked address (`--host-resolver-rules`, every other name
+   unresolvable) and every request but the main-frame navigation to the checked
+   URL is aborted. Negative result, live: the World Bank page that the earlier
+   fallback recovered (5,980 to 24,026 characters) now stays `short_text`, since
+   its figures come from external scripts (13 requests refused).
+6. Every response header is read for the checks (up to a recorded 256 KiB; past
+   it, a typed failure); the receipt records a bounded copy. An archive replay must
+   carry a Memento-Datetime and every one must be before `as_of` (a missing one
+   refuses). Live: Wayback sends one, and the `as_of` capture still works.
+7. A non-success status in the browser path is a typed failure (`forbidden`,
+   `not_found`, `http_error`) with no text.
+8. The final attachment component opens with `O_NONBLOCK`, so a FIFO under
+   `task/` is refused at once as not a regular file.
+Suspected, both real and fixed: PDFium now runs in a child process
+(`pdfworker.py`, `python -I`) under a recorded 120-second limit and a text limit;
+and stored text is keyed by the bytes plus the content type, the charset chosen
+and the SEC form (`text_id`: the sha256, or `sha256~<variant>` for another
+reading of the same bytes), so the same bytes read another way get their own text
+instead of reusing the first. `outline`, `read`, `read_section` and `search_store`
+accept a `text_id` wherever they take a sha256; hits carry both.
+
 **Known limits, recorded rather than fixed.**
 - A PDF whose ToUnicode map lies (a glyph drawn as "1" but mapped to "9", so a
   visible 1,250 is stored as 9,250) cannot be caught from the text layer. The
@@ -307,9 +352,8 @@ browser fallback still `ok`.
 - Hiding by CSS classes, off-screen positioning, zero font size or text coloured
   like its background in HTML is not detected (stylesheets are removed, and only
   inline styles are read).
-- Ordinary inline elements (`span`, `small`, `time`, `label`) are left joined,
-  as a browser renders them: `<span>1</span><span>250</span>` is "1250" on the
-  page too.
+- Inline elements whose digits meet are now split and recorded (item 3 above),
+  so a quote cannot start or end there even where the page shows them joined.
 - The prescan skips `<script>` and `<style>` contents, a deliberate difference
   from the standard (a string in a script never declares a charset).
 - Range edges can be off by surrounding whitespace.
@@ -343,4 +387,5 @@ browser fallback still `ok`.
   a soft 404 or a holding page. It passes every date check.
 - Name the company ambiguously. `sec_facts` trusts edgartools' resolution of the
   company to a CIK, and SEC's `filed` field.
-- In the browser fallback, rebind DNS between the gate's lookup and Chromium's.
+- The browser fallback, if a run enables it: Chromium's resolver is pinned and only
+  the main document loads, but the page's inline scripts still run.

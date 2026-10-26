@@ -18,6 +18,8 @@ MAX_REDIRECTS = 5
 READ_TIMEOUT_S = 30.0
 # Resource limit: seconds one whole capture attempt (every hop) may take.
 TOTAL_DEADLINE_S = 120.0
+# Resource limit: bytes of response headers accepted (all are read for the checks).
+MAX_HEADER_BYTES = 256 * 1024
 # Resource limit: bytes of response headers recorded on a receipt.
 MAX_RECORDED_HEADER_BYTES = 16 * 1024
 # Resource limit: ports a capture may connect to. The public web, nothing else.
@@ -43,6 +45,13 @@ SHORT_TEXT_MIN_RATIO = 0.005
 # Extraction sanity flag: a PDF averaging fewer text characters a page than this is
 # marked `short_text` (its pages may be scanned images). Text is kept whole.
 PDF_MIN_CHARS_PER_PAGE = 100
+
+# Resource limit: seconds the PDF extraction child process may run.
+PDF_EXTRACT_TIMEOUT_S = 120.0
+# Resource limit: characters of text one PDF may yield.
+PDF_MAX_TEXT_CHARS = 50_000_000
+# Resource limit: bytes of JSON the PDF extraction child may write.
+PDF_MAX_OUTPUT_BYTES = 8 * PDF_MAX_TEXT_CHARS
 
 # Resource limit: code points returned by one `read` or `read_section` call.
 READ_MAX_CHARS = 20_000

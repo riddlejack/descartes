@@ -8,7 +8,8 @@ site served them, without the archive's toolbar or link rewriting.
 Every hop of that fetch must be a Wayback URL whose timestamp is before `as_of`:
 Wayback redirects to the nearest capture it has, which can be later than asked. A
 hop anywhere else, or dated on or after `as_of`, ends the attempt. The final
-response's `Memento-Datetime` header, when present, must also be before `as_of`.
+response must carry a `Memento-Datetime`, and every one it carries (all headers are
+read) must be before `as_of`; a missing or unreadable one refuses.
 
 "Before `as_of`" means strictly before 00:00:00 UTC on the `as_of` date.
 """
@@ -156,20 +157,25 @@ class Archive:
         ):
             return ArchiveOutcome(fetched, CaptureStatus.NO_SNAPSHOT_BEFORE_AS_OF,
                                   fetched.detail, record)
-        if fetched.failure is None:
-            memento = fetched.header("Memento-Datetime")
-            if memento:
-                record["memento_datetime"] = memento
+        if fetched.failure is None and 200 <= (fetched.http_status or 0) < 300:
+            # The replay must say when its copy was made, and every such header must
+            # be before as_of; a missing or unreadable date refuses.
+            mementos = fetched.header_values("Memento-Datetime")
+            record["memento_datetime"] = mementos
+            if not mementos:
+                return ArchiveOutcome(fetched, CaptureStatus.NO_SNAPSHOT_BEFORE_AS_OF,
+                                      "archive replay gave no Memento-Datetime", record)
+            for memento in mementos:
                 try:
                     when = parsedate_to_datetime(memento)
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, IndexError):
                     when = None
                 if when is not None and when.tzinfo is None:
                     when = when.replace(tzinfo=UTC)  # HTTP dates are GMT
                 if when is None or when >= cutoff:
                     return ArchiveOutcome(
                         fetched, CaptureStatus.NO_SNAPSHOT_BEFORE_AS_OF,
-                        f"archived copy is dated {memento}, not before as_of", record)
+                        f"archived copy is dated {memento!r}, not before as_of", record)
             final = _WAYBACK_HOP.match(fetched.final_url or "")
             if final is not None:
                 record["served_timestamp"] = final.group(1)

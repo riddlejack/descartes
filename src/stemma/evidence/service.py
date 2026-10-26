@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import hashlib
 import json
 import os
 import stat
@@ -16,14 +17,22 @@ from datetime import date
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from stemma.evidence import limits, sec_outline
+from stemma.evidence import charset, limits, sec_outline
 from stemma.evidence.archive import Archive
 from stemma.evidence.cache import RequestCache, request_key
 from stemma.evidence.errors import HAS_TEXT, CaptureStatus, EvidenceError
-from stemma.evidence.extract import HTML_TYPES, XML_TYPES, extract, extractor_versions
+from stemma.evidence.extract import (
+    HTML_TYPES,
+    PDF_TYPE,
+    TEXT_TYPES,
+    XML_TYPES,
+    extract,
+    extractor_versions,
+    sniff_content_type,
+)
 from stemma.evidence.fetch import Fetcher, FetchResult
 from stemma.evidence.quotes import find_quote
-from stemma.evidence.render import Renderer, default_renderer
+from stemma.evidence.render import Renderer, RenderHttpError, default_renderer
 from stemma.evidence.sec import (
     EdgarToolsBackend,
     FilingRef,
@@ -34,7 +43,7 @@ from stemma.evidence.sec import (
     facts_from_concept_json,
     parse_concept,
 )
-from stemma.evidence.store import Store, check_sha256, new_receipt_id, utc_now
+from stemma.evidence.store import Store, check_sha256, check_text_id, new_receipt_id, utc_now
 from stemma.evidence.transport import StdlibTransport, Transport
 
 _UNSET: Any = object()
@@ -65,7 +74,10 @@ def _open_beneath(root: Path, parts: list[str]) -> int | tuple[CaptureStatus, st
         for index, name in enumerate(parts):
             last = index == len(parts) - 1
             try:
-                follow_free = os.O_RDONLY | os.O_NOFOLLOW | (0 if last else os.O_DIRECTORY)
+                # O_NONBLOCK on the file: opening a FIFO must not wait for a writer;
+                # the regular-file check comes straight after.
+                follow_free = os.O_RDONLY | os.O_NOFOLLOW | (
+                    os.O_NONBLOCK if last else os.O_DIRECTORY)
                 fd = os.open(name, follow_free, dir_fd=current)
             except OSError as exc:
                 try:
@@ -130,7 +142,8 @@ class EvidenceService:
             cache_dir = os.environ.get("STEMMA_CACHE") or None
         self.cache = RequestCache(Path(cache_dir)) if cache_dir else None
         self._sec_backend = sec_backend
-        self._renderer: Renderer | None = default_renderer() if renderer is _UNSET else renderer
+        # Built only when a run enables the browser fallback and a page needs it.
+        self._renderer: Any = renderer
 
     # Run facts --------------------------------------------------------------------
 
@@ -188,6 +201,7 @@ class EvidenceService:
             "outline_truncated": False,
             "pages": None,
             "flagged_ranges": [],
+            "text_id": None,
             "warnings": [],
             "served_from_cache": False,
             "original_fetched_at": None,
@@ -216,14 +230,36 @@ class EvidenceService:
         self.store.put_receipt(receipt)
         return receipt
 
+    @staticmethod
+    def _variant(body: bytes, declared_type: str | None, name_hint: str,
+                 form: str | None) -> tuple[str, str, str | None]:
+        """What decides the stored text besides the bytes: the content type, the
+        charset chosen, and (for SEC filings) the form that adds Item anchors."""
+        content_type = sniff_content_type(declared_type, body, name_hint)
+        label: str | None = None
+        if content_type != PDF_TYPE and (content_type in HTML_TYPES or content_type in XML_TYPES
+                                         or content_type in TEXT_TYPES
+                                         or content_type.startswith("text/")):
+            xml = content_type in XML_TYPES or content_type == "application/xhtml+xml"
+            kind = "xml" if xml else ("html" if content_type in HTML_TYPES else "text")
+            label = charset.choose(body, declared_type, kind)
+        sec_form = form if sec_outline.applies_to(form) else None
+        material = f"{content_type}\n{label}\n{sec_form}"
+        return hashlib.sha256(material.encode()).hexdigest()[:12], content_type, label
+
     def _extract_into(self, receipt: dict[str, Any], sha: str, body: bytes,
                       declared_type: str | None, name_hint: str) -> None:
-        earlier = self.store.get_extraction(sha)
-        if earlier is not None:
-            self._reuse_extraction(receipt, sha, earlier)
-            return
-        result = extract(body, declared_type, name_hint)
         form = (receipt.get("sec") or {}).get("form")
+        variant, _, _ = self._variant(body, declared_type, name_hint, form)
+        # Reuse a stored text only when the same bytes were read the same way.
+        for text_id in (sha, f"{sha}~{variant}"):
+            earlier = self.store.get_extraction(text_id)
+            if earlier is not None and earlier.get("variant") == variant:
+                self._reuse_extraction(receipt, text_id, earlier)
+                return
+        base_taken = self.store.get_extraction(sha) is not None
+        target = f"{sha}~{variant}" if base_taken else sha
+        result = extract(body, declared_type, name_hint)
         if result.text and sec_outline.applies_to(form):
             items = sec_outline.item_outline(result.text)
             if items:
@@ -242,51 +278,60 @@ class EvidenceService:
         if result.text is not None and result.status in (
             CaptureStatus.OK, CaptureStatus.SHORT_TEXT, CaptureStatus.EMPTY_TEXT
         ):
-            try:
-                self.store.put_text(sha, result.text, result.outline, {
-                    "receipt_id": receipt["receipt_id"], "status": str(result.status),
-                    "content_type": result.content_type, "charset": result.charset,
-                    "extractor": result.extractor or None, "pages": result.pages,
-                    "detail": result.detail, "warnings": list(result.warnings),
-                    "flagged_ranges": result.flagged,
-                })
-            except EvidenceError as exc:
-                # A concurrent writer extracted the same bytes differently first.
-                if exc.code != "store_corrupt":
-                    raise
-                earlier = self._await_extraction(sha)
-                receipt["warnings"] = [w for w in receipt["warnings"]
-                                       if w not in result.warnings]
-                self._reuse_extraction(receipt, sha, earlier)
-                return
-            receipt["text_path"] = self.store.text_rel_path(sha)
+            record = {
+                "receipt_id": receipt["receipt_id"], "status": str(result.status),
+                "content_type": result.content_type, "charset": result.charset,
+                "extractor": result.extractor or None, "pages": result.pages,
+                "detail": result.detail, "warnings": list(result.warnings),
+                "flagged_ranges": result.flagged, "variant": variant,
+            }
+            for attempt in (target, f"{sha}~{variant}"):
+                try:
+                    self.store.put_text(attempt, result.text, result.outline, record)
+                    target = attempt
+                    break
+                except EvidenceError as exc:
+                    # A concurrent writer stored text for these bytes first.
+                    if exc.code != "store_corrupt":
+                        raise
+                    earlier = self._await_extraction(attempt)
+                    if earlier.get("variant") == variant:
+                        receipt["warnings"] = [w for w in receipt["warnings"]
+                                               if w not in result.warnings]
+                        self._reuse_extraction(receipt, attempt, earlier)
+                        return
+            else:
+                raise EvidenceError("store_corrupt", f"no free text slot for {sha}")
+            receipt["text_id"] = target
+            receipt["text_path"] = self.store.text_rel_path(target)
             receipt["text_chars"] = len(result.text)
             receipt["outline"] = result.outline[: limits.RECEIPT_OUTLINE_MAX]
             receipt["outline_truncated"] = len(result.outline) > limits.RECEIPT_OUTLINE_MAX
             if result.text:
-                self.store.index_document(sha, result.text, result.content_type,
+                self.store.index_document(target, result.text, result.content_type,
                                           receipt["receipt_id"])
 
-    def _await_extraction(self, sha: str) -> dict[str, Any]:
+    def _await_extraction(self, text_id: str) -> dict[str, Any]:
         for _ in range(_EXTRACTION_WAIT_STEPS):
-            earlier = self.store.get_extraction(sha)
+            earlier = self.store.get_extraction(text_id)
             if earlier is not None:
                 return earlier
             time.sleep(0.05)
-        raise EvidenceError("store_corrupt", f"stored text for {sha} conflicts and has no record")
+        raise EvidenceError("store_corrupt",
+                            f"stored text {text_id} conflicts and has no record")
 
-    def _reuse_extraction(self, receipt: dict[str, Any], sha: str,
+    def _reuse_extraction(self, receipt: dict[str, Any], text_id: str,
                           earlier: dict[str, Any]) -> None:
-        """One stored text per set of bytes: the first extraction stands, even if the
-        same bytes later arrive under another content type or charset."""
+        """The same bytes read the same way: reuse the stored text and its record."""
         for key in ("status", "content_type", "charset", "extractor", "pages", "detail"):
             receipt[key] = earlier[key]
         receipt["flagged_ranges"] = earlier.get("flagged_ranges", [])
         receipt["warnings"].extend(earlier["warnings"])
         receipt["warnings"].append(f"text_reused_from_receipt {earlier['receipt_id']} (same bytes)")
-        outline = self.store.get_outline(sha)
-        receipt["text_path"] = self.store.text_rel_path(sha)
-        receipt["text_chars"] = len(self.store.get_text(sha))
+        outline = self.store.get_outline(text_id)
+        receipt["text_id"] = text_id
+        receipt["text_path"] = self.store.text_rel_path(text_id)
+        receipt["text_chars"] = len(self.store.get_text(text_id))
         receipt["outline"] = outline[: limits.RECEIPT_OUTLINE_MAX]
         receipt["outline_truncated"] = len(outline) > limits.RECEIPT_OUTLINE_MAX
 
@@ -296,7 +341,7 @@ class EvidenceService:
             "requested_url": fetched.requested_url,
             "final_url": fetched.final_url,
             "status": fetched.http_status,
-            "headers": [list(pair) for pair in fetched.headers],
+            "headers": [list(pair) for pair in fetched.recorded_headers()],
             "hops": [hop.as_dict() for hop in fetched.hops],
             "elapsed_s": fetched.elapsed_s,
             "bytes_read": fetched.bytes_read,
@@ -407,31 +452,58 @@ class EvidenceService:
         body, content_type = self._fetch_cached(kind, url, receipt, do_fetch)
         markup_like = False
         note: str | None = None
+        renderer: Renderer | None = None
         if body is not None:
             media = (content_type or "").split(";")[0].strip().lower()
             markup_like = media in HTML_TYPES or media in XML_TYPES or media == ""
             if markup_like and as_of:
                 note = "browser_fallback_not_used_in_as_of_mode"
-            elif markup_like and self._renderer is None:
-                note = "browser_fallback_not_installed"
+            elif markup_like and not self.browser_fallback_enabled:
+                note = "browser_fallback_off_for_this_run"
+            elif markup_like:
+                renderer = self._get_renderer()
+                if renderer is None:
+                    note = "browser_fallback_not_installed"
         plain = self._finish(receipt, body, content_type, loud_note=note)
         needs_fallback = plain["status"] in (CaptureStatus.EMPTY_TEXT, CaptureStatus.SHORT_TEXT)
-        if needs_fallback and markup_like and not as_of and self._renderer is not None:
-            return self._render_fallback(plain, reason)
+        if needs_fallback and renderer is not None:
+            return self._render_fallback(renderer, plain, reason)
         return plain
 
-    def _render_fallback(self, plain: dict[str, Any], reason: str) -> dict[str, Any]:
-        assert self._renderer is not None
+    @property
+    def browser_fallback_enabled(self) -> bool:
+        """A recorded run setting, off unless `run.json` turns it on."""
+        path = self.run_dir / "run.json"
+        if not path.exists():
+            return False
+        try:
+            settings = json.loads(path.read_text("utf-8")).get("evidence") or {}
+        except (OSError, ValueError, AttributeError):
+            return False
+        return isinstance(settings, dict) and settings.get("browser_fallback") is True
+
+    def _get_renderer(self) -> Renderer | None:
+        if self._renderer is _UNSET:
+            self._renderer = default_renderer()
+        renderer: Renderer | None = self._renderer
+        return renderer
+
+    def _render_fallback(self, renderer: Renderer, plain: dict[str, Any],
+                         reason: str) -> dict[str, Any]:
         receipt = self._base_receipt("rendered", reason)
         receipt["requested_url"] = plain.get("final_url") or plain["requested_url"]
         receipt["fallback_of"] = plain["receipt_id"]
-        receipt["renderer"] = {"name": self._renderer.name, "version": self._renderer.version}
+        receipt["renderer"] = {"name": renderer.name, "version": renderer.version}
         receipt["fetched_at"] = utc_now()
         try:
-            rendered = self._renderer.render(receipt["requested_url"])
+            rendered = renderer.render(receipt["requested_url"])
         except Exception as exc:  # noqa: BLE001 - recorded on a receipt, never swallowed
-            receipt["status"] = CaptureStatus.TRANSPORT_ERROR
-            receipt["detail"] = f"browser fallback failed: {exc}"
+            if isinstance(exc, RenderHttpError):
+                receipt["status"] = _http_failure(exc.status)
+                receipt["detail"] = f"browser fallback: main document answered HTTP {exc.status}"
+            else:
+                receipt["status"] = CaptureStatus.TRANSPORT_ERROR
+                receipt["detail"] = f"browser fallback failed: {exc}"
             failed = self._finish(receipt, None, None)
             plain = dict(plain)
             plain["warnings"] = plain["warnings"] + [
@@ -686,7 +758,7 @@ class EvidenceService:
     # Reading in parts ------------------------------------------------------------------
 
     def outline(self, sha256: str) -> dict[str, Any]:
-        check_sha256(sha256)
+        check_text_id(sha256)
         outline = self.store.get_outline(sha256)
         text = self.store.get_text(sha256)
         return {"sha256": sha256, "text_chars": len(text),
@@ -694,7 +766,7 @@ class EvidenceService:
                 "truncated": len(outline) > limits.OUTLINE_MAX}
 
     def read(self, sha256: str, start: int = 0, length: int = limits.READ_MAX_CHARS) -> dict[str, Any]:
-        check_sha256(sha256)
+        check_text_id(sha256)
         text = self.store.get_text(sha256)
         if not isinstance(start, int) or start < 0 or start > len(text):
             raise EvidenceError("bad_range", f"start must be between 0 and {len(text)}")
@@ -706,7 +778,7 @@ class EvidenceService:
                 "text": text[start:end], "next_start": end if end < len(text) else None}
 
     def read_section(self, sha256: str, anchor: str) -> dict[str, Any]:
-        check_sha256(sha256)
+        check_text_id(sha256)
         for item in self.store.get_outline(sha256):
             if item["anchor"] == anchor:
                 text = self.store.get_text(sha256)
@@ -723,7 +795,7 @@ class EvidenceService:
     def search_store(self, query: str, mode: str = "words", sha256: str | None = None,
                      limit: int = 10) -> dict[str, Any]:
         if sha256 is not None:
-            check_sha256(sha256)
+            check_text_id(sha256)
         if not isinstance(query, str) or not query.strip():
             raise EvidenceError("bad_query", "the query is empty")
         if "\x00" in query:
@@ -750,7 +822,7 @@ class EvidenceService:
         if receipt["status"] not in HAS_TEXT or not receipt.get("sha256"):
             raise EvidenceError("no_text", f"receipt {receipt_id} has status "
                                 f"{receipt['status']} and no quotable text")
-        result = find_quote(self.store.get_text(receipt["sha256"]), quote,
+        result = find_quote(self.store.get_text(receipt.get("text_id") or receipt["sha256"]), quote,
                             receipt.get("flagged_ranges"))
         return dict(result, receipt_id=receipt_id, sha256=receipt["sha256"])
 
@@ -759,7 +831,7 @@ class EvidenceService:
         if receipt["status"] not in HAS_TEXT or not receipt.get("sha256"):
             raise EvidenceError("no_text", f"receipt {receipt_id} has status "
                                 f"{receipt['status']} and no stored text")
-        return self.store.get_text(receipt["sha256"])
+        return self.store.get_text(receipt.get("text_id") or receipt["sha256"])
 
     def tables(self, sha256: str) -> dict[str, Any]:
         from stemma.evidence import tables as docling_tables

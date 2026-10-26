@@ -90,10 +90,12 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     def connect(self) -> None:
         raw = self.raw_sock = socket.create_connection((self._address, self.port), self.timeout)
         try:
-            self.sock = self._tls.wrap_socket(raw, server_hostname=self.host)
+            wrapped = self._tls.wrap_socket(raw, server_hostname=self.host)
         except BaseException:
             raw.close()
             raise
+        # Wrapping detaches the raw socket; the watchdog must shut the wrapped one.
+        self.sock = self.raw_sock = wrapped
 
 
 class _Watchdog:

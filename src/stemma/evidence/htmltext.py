@@ -28,7 +28,8 @@ from typing import Any
 # Invariant: private-use characters marking regions during conversion.
 _HIDDEN_OPEN, _HIDDEN_CLOSE = "", ""
 _TABLE_OPEN, _TABLE_CLOSE = "", ""
-_MARKERS = (_HIDDEN_OPEN, _HIDDEN_CLOSE, _TABLE_OPEN, _TABLE_CLOSE)
+_SPLIT = "\ue004"
+_MARKERS = (_HIDDEN_OPEN, _HIDDEN_CLOSE, _TABLE_OPEN, _TABLE_CLOSE, _SPLIT)
 
 # Elements a browser renders as separate boxes that markdownify would run together.
 _SEPARATE = frozenset({
@@ -110,6 +111,37 @@ def _separate_touching(soup: Any, only_namespaced: bool) -> None:
             tag.insert_after(soup.new_string(" "))
 
 
+def _split_meeting_digits(soup: Any, mark: str) -> None:
+    """Wherever text from two different elements would meet digit to digit, put a
+    split mark between them. CSS can draw them apart (`display:block`) or together,
+    and code cannot tell which, so it fails in the direction that evidences
+    nothing: a split real number makes a quote fail, a fused one would invent a
+    figure. Splits are recorded, and `check_quote` refuses a match with an edge at
+    one."""
+    from bs4.element import NavigableString
+
+    def script_box(node: Any) -> Any:
+        """The nearest <sup> or <sub> around a string: markdownify already marks its
+        edges (^...^, ~...~), so digits there never meet."""
+        for parent in node.parents:
+            if parent.name in ("sup", "sub"):
+                return parent
+        return None
+
+    previous: Any = None
+    for node in list(soup.descendants):
+        if type(node) is not NavigableString:  # comments, CDATA, doctypes are not text
+            continue
+        text = str(node)
+        if not text:
+            continue
+        if (previous is not None and str(previous)[-1:].isdigit() and text[:1].isdigit()
+                and previous.parent is not node.parent
+                and script_box(previous) is script_box(node)):
+            node.insert_before(soup.new_string(mark))
+        previous = node
+
+
 def _prepare(soup: Any, xml: bool) -> bool:
     """Apply the separations and markers. Returns False if markers cannot be used."""
     from bs4 import ProcessingInstruction
@@ -137,6 +169,7 @@ def _prepare(soup: Any, xml: bool) -> bool:
         if name == "mfrac" and len(children) == 2:
             children[1].insert_before(soup.new_string("/"))
     _separate_touching(soup, only_namespaced=not xml)
+    _split_meeting_digits(soup, _SPLIT if usable else " ")
     if usable:
         for tag in soup.find_all(True):
             if _is_hidden(tag):
@@ -148,13 +181,22 @@ def _prepare(soup: Any, xml: bool) -> bool:
 
 
 def _collect_ranges(text: str) -> tuple[str, list[dict[str, Any]], bool]:
-    """Remove markers; return the text, ranges in it, and whether they balanced."""
+    """Remove markers; return the text, ranges in it, and whether they balanced. A
+    split mark becomes one space (recorded as an `element_split` range) unless the
+    text on either side is already whitespace, where it is simply dropped."""
     out: list[str] = []
     ranges: list[dict[str, Any]] = []
     stacks: dict[str, list[int]] = {"hidden": [], "table_merged_cells": []}
     balanced = True
     position = 0
-    for char in text:
+    for index, char in enumerate(text):
+        if char == _SPLIT:
+            after = next((c for c in text[index + 1:] if c not in _MARKERS), "")
+            if out and not out[-1].isspace() and after and not after.isspace():
+                out.append(" ")
+                ranges.append({"start": position, "end": position + 1, "kind": "element_split"})
+                position += 1
+            continue
         if char in (_HIDDEN_OPEN, _TABLE_OPEN):
             stacks["hidden" if char == _HIDDEN_OPEN else "table_merged_cells"].append(position)
             continue
@@ -215,4 +257,8 @@ def html_to_text(markup: str, *, xml: bool = False) -> tuple[str, list[dict[str,
         warns.append(f"hidden_text_kept: {hidden} ranges a reader would not see")
     if tables:
         warns.append(f"tables_with_merged_cells: {tables}; columns may be misaligned")
+    splits = sum(1 for r in ranges if r["kind"] == "element_split")
+    if splits:
+        warns.append(f"element_splits: {splits} places where digits from two elements met "
+                     "were split; a quote may not start or end at one")
     return text, ranges, warns
