@@ -6,7 +6,7 @@ Every answer below was shown by a tiny headless run of the pinned binary
 `--plugin-dir <probe plugin named "stemma">`, `--agent stemma:lead`, `-p`,
 `--output-format stream-json --verbose`. The probe kit (plugin, hooks, MCP server,
 settings files, runner) and each run's `out.jsonl` and `probe.log` are in
-`B-probe-kit/` beside this file. Run names are in brackets.
+`conformance/harness/` (runs under `conformance/harness/runs/`). Run names are in brackets.
 
 ## Launch environment
 - **Scrub the environment.** Launched with the desktop app's inherited environment
@@ -117,9 +117,13 @@ settings files, runner) and each run's `out.jsonl` and `probe.log` are in
   <run>/draft/answer.v2.md]` lets exactly those be read; `answer.v1.md`, `frame.md`
   and `ls .` are refused. This is how the decider's-eye reviewer reads only its inputs.
 
-## Reproducing
-`kit/run.sh <name> '<prompt>' [claude flags...]` launches the pinned binary with a
-scrubbed environment and the probe plugin (`kit/plugin`), writing
-`runs/<name>/out.jsonl`; `kit/show.py runs/<name>` prints init, tool calls and
-results. Paths inside the kit point at the session scratchpad it was written in;
-edit `S` in `run.sh` to rerun elsewhere.
+- **p13:** `--strict-mcp-config` drops the plugin's own MCP server (init `mcp: []`,
+  the tool gone), so Stemma sessions cannot use it; a bare baseline may.
+
+## Reproducing (when the harness version changes)
+`conformance/harness/run.sh <name> '<prompt>' [claude flags...]` with
+`STEMMA_CLAUDE_BIN`, `STEMMA_CLAUDE_CONFIG` and `STEMMA_PYTHON` set launches the
+binary with a scrubbed environment and the probe plugin, writing
+`runs-local/<name>/out.jsonl`; `python3 show.py runs-local/<name>` prints init, tool
+calls and results. Each probe above names its flags and settings file; the prompts
+are in the recorded `out.jsonl` (first assistant turn) and in this file.
