@@ -5,7 +5,9 @@ Source: the harness's own records. Each assistant message in a session's transcr
 carries `message.usage`: input, output, cache-creation and cache-read tokens. A message
 written in several entries (one per content block) carries the same usage on each, so a
 message counts once, by its id. Summed this way, a session's main thread reproduces the
-`usage` of its stream-json `result` exactly (checked on the walking-skeleton run). The
+`usage` of its stream-json `result` exactly, and main thread plus subagents reproduce
+the result's `modelUsage` exactly (`usage` covers the main thread only; checked on the
+walking-skeleton run and live, tests/e2e/usage_probe.py). The
 transcript is the source because a resumed lead appends to one transcript, so each
 launch counts only the messages written while it ran, and because a session stopped
 before its result still has its transcript.
@@ -282,8 +284,8 @@ def summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         row["wall_s"] = round(row["wall_s"], 1)
     return {"source": "transcripts of every session and subagent; see usage.jsonl",
             "cost_note": COST_NOTE + "; subagents' cost is inside their parent session's",
-            "phase_note": "phases cut at the first request_frame_critique, submit_draft "
-                          "and finish_run",
+            "phase_note": "cut at the first request_frame_critique, submit_draft and "
+                          "finish_run",
             "tokens": total, "cost_estimate_usd": round(cost, 4),
             "sessions_without_cost": no_cost, "by_role": by_role,
             "by_phase": {ph: by_phase[ph] for ph, _m in PHASES if ph in by_phase}}
