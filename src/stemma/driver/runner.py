@@ -24,9 +24,16 @@ from pathlib import Path
 from types import FrameType
 from typing import Any, Final, Protocol, cast
 
-from stemma.driver import canary, events, frontmatter, hostio, status, verify
+from stemma.driver import canary, events, frontmatter, hostio, status, usage, verify
 from stemma.driver.assemble import folder_digest, sha256_bytes
-from stemma.driver.config import LOCK_FILE, PLUGIN_DIR, STATE_FILE, DriverConfig, Limits
+from stemma.driver.config import (
+    LOCK_FILE,
+    PLUGIN_DIR,
+    SESSIONS_DIR,
+    STATE_FILE,
+    DriverConfig,
+    Limits,
+)
 from stemma.driver.errors import DriverBusy, DriverError, HarnessError, RunStateError
 from stemma.driver.launch import LaunchSpec, Session, expectation, launch
 from stemma.driver.runfolder import load_run
@@ -203,6 +210,12 @@ class Driver:
         # Checks to launch again, by request id, with the end of their last session; they
         # wait their turn with the pending checks (see step).
         self.relaunch_due: dict[str, tuple[CheckRequestLike, str | None, str | None]] = {}
+        self.usage_pending: list[dict[str, Any]] = []  # records not yet written
+        self._usage_deferred = False
+        self.usage_summary: dict[str, Any] = {}
+        self._refresh_usage_summary(report_skipped=True)
+        self.milestones = usage.Milestones(self.run_dir / events.EVENTS)
+        self._reg: Any = None  # the register, opened when a claim's branch is first needed
         self.exit_code = 0
 
     # ----- state -------------------------------------------------------------------
@@ -431,6 +444,11 @@ class Driver:
         s.reap(self.limits.stop_grace_s)
         self._scan_transcripts(live, final=True)
         outcome = self._outcome(s)
+        try:
+            self._record_usage(name, live, outcome)
+        except Exception as exc:  # noqa: BLE001 - accounting never stops a run; it is loud
+            events.emit(self.run_dir, "usage_not_recorded", session=name,
+                        error=f"{type(exc).__name__}: {exc}")
         if outcome == "rate_limited":
             self.state["usage_limited"] = True
         code = s.proc.returncode if s.proc.returncode is not None else -1
@@ -477,6 +495,151 @@ class Driver:
         last: dict[str, Any] = {"result": str(r.get("result") or "")[:4000], **summary}
         lead.update({"running": False, "exit_code": code, "outcome": outcome, "result": last})
         self._save_state()
+
+    # ----- token accounting -------------------------------------------------------------
+    def _branch_of(self, prompt: str) -> tuple[str | None, str | None]:
+        if prompt.startswith("branch:"):
+            return prompt.split(":", 1)[1], "the check's prompt"
+        if prompt.startswith("claim:"):
+            try:
+                if self._reg is None:
+                    from stemma.register.store import open_register  # the register (part B)
+
+                    self._reg = open_register(self.run_dir)
+                return self._reg.get_claim(prompt.split(":", 1)[1]).get("branch_id"), \
+                    "the claim's branch_id"
+            except Exception:  # noqa: BLE001 - an unknown claim leaves the branch unknown
+                return None, None
+        return None, None
+
+    def _refresh_usage_summary(self, report_skipped: bool = False) -> None:
+        """The summary from usage.jsonl plus the records still waiting to be written.
+        Never raises: accounting observes the run and never stops it."""
+        try:
+            loaded = usage.load(self.run_dir)
+            self.usage_summary = usage.summary(loaded.records + self.usage_pending)
+            self.usage_summary["skipped_lines"] = loaded.skipped
+            if report_skipped and loaded.skipped:
+                events.emit(self.run_dir, "usage_records_skipped", lines=loaded.skipped)
+        except Exception as exc:  # noqa: BLE001 - loud, never fatal
+            events.emit(self.run_dir, "usage_not_recorded", what="summary",
+                        error=f"{type(exc).__name__}: {exc}")
+
+    def _usage_records(self, name: str, session_id: str, role: str, prompt: str,
+                       request_id: str | None, model: str, effort: str, started: float,
+                       end: float, outcome: str, main: Path | None,
+                       subs: list[verify.Subagent], result: dict[str, Any] | None,
+                       recovered: bool = False) -> list[dict[str, Any]]:
+        """One record for the session's own thread and one per subagent, counted from
+        their transcripts within [started, end]."""
+        starts = usage.phase_starts(self.milestones.update())
+        branch, branch_source = self._branch_of(prompt)
+        base = {"session": name, "session_id": session_id, "request_id": request_id,
+                "prompt": prompt, "expected_model": model, "expected_effort": effort,
+                "launched_at": usage.iso(started), "ended_at": usage.iso(end),
+                "outcome": outcome, "recovered": recovered}
+        mine = usage.in_window(usage.read_messages(main), started, end) if main else []
+        records = [{"kind": "session", "role": role, **base,
+                    "branch": branch, "branch_source": branch_source,
+                    "wall_s": round(end - started, 1), "transcript_found": main is not None,
+                    "harness": usage.harness_figures(result), "cost_note": usage.COST_NOTE,
+                    **usage.tally(mine, starts)}]
+        for sub in sorted(subs, key=lambda x: x.agent_id):
+            msgs = usage.in_window(usage.read_messages(sub.tail.path), started, end)
+            if not msgs:
+                continue  # an earlier launch's subagent, already counted then
+            records.append({"kind": "subagent", "role": roles.short(sub.agent_type or "unknown"),
+                            **base, "agent_id": sub.agent_id, "agent_type": sub.agent_type,
+                            "spawn_depth": sub.spawn_depth,
+                            "branch": usage.branch_from_brief(sub.tail.path),
+                            "branch_source": "the first branches/<id>/ its brief names",
+                            "wall_s": round(msgs[-1].at - msgs[0].at, 1), "harness": None,
+                            "cost_note": "inside the parent session's cost estimate",
+                            **usage.tally(msgs, starts)})
+        return records
+
+    def _record_usage(self, name: str, live: Live, outcome: str) -> None:
+        s = live.session
+        sid = (s.init or {}).get("session_id") or s.spec.session_id
+        main = live.tail.path if live.tail is not None else verify.find_transcript(
+            self.cfg.claude_config, self.run_dir, s.init, sid)
+        self.usage_pending += self._usage_records(
+            name, sid, s.spec.role, s.spec.prompt, s.spec.request_id, s.spec.model,
+            s.spec.effort, s.started_wall, time.time(), outcome, main,
+            list(live.subagents.values()), s.result)
+        self._flush_usage()
+
+    def _flush_usage(self) -> None:
+        """Write the waiting records if usage.jsonl's lock comes within its bounded wait;
+        otherwise keep them for the next pass (recorded once per deferral)."""
+        if not self.usage_pending:
+            return
+        try:
+            written = usage.append_bounded(self.run_dir, self.usage_pending)
+        except Exception as exc:  # noqa: BLE001 - loud, never fatal; kept for later
+            events.emit(self.run_dir, "usage_not_recorded", what="usage.jsonl",
+                        records=len(self.usage_pending), error=f"{type(exc).__name__}: {exc}")
+            written = False
+        if written:
+            self.usage_pending = []
+            self._usage_deferred = False
+        elif not self._usage_deferred:
+            self._usage_deferred = True
+            events.emit(self.run_dir, "usage_write_deferred", records=len(self.usage_pending),
+                        wait_s=usage.LOCK_WAIT_S)
+        self._refresh_usage_summary()
+
+    def recover_usage(self) -> None:
+        """On resume: count every launch this run recorded whose usage was never written
+        (the driver stopped first), from its transcript and saved stream."""
+        try:
+            have = {(r["session"], r.get("session_id")) for r in usage.read_records(self.run_dir)
+                    if r["kind"] == "session"}
+            evs = events.read(self.run_dir)
+            ended = {(e.get("session"), e.get("session_id")): e for e in evs
+                     if e.get("event") == "session_ended"}
+            for e in evs:
+                if e.get("event") != "session_launched":
+                    continue
+                name, sid = str(e.get("session")), str(e.get("session_id"))
+                if (name, sid) in have:
+                    continue
+                started = usage._ts(e.get("at"))
+                if started is None:
+                    continue
+                end_ev = ended.get((name, sid))
+                end = usage._ts(end_ev.get("at")) if end_ev else None
+                main = verify.find_transcript(self.cfg.claude_config, self.run_dir, None, sid)
+                subs = verify.subagents(main, {}) if main is not None else []
+                self.usage_pending += self._usage_records(
+                    name, sid, str(e.get("role")), str(e.get("prompt") or ""),
+                    e.get("request_id"), str(e.get("model")), str(e.get("effort")), started,
+                    end if end is not None else time.time(),
+                    str(end_ev.get("outcome")) if end_ev else "not recorded (driver stopped)",
+                    main, subs, self._saved_result(name), recovered=True)
+                have.add((name, sid))
+            self._flush_usage()
+        except Exception as exc:  # noqa: BLE001 - loud, never fatal
+            events.emit(self.run_dir, "usage_not_recorded", what="recovery",
+                        error=f"{type(exc).__name__}: {exc}")
+
+    def _saved_result(self, name: str) -> dict[str, Any] | None:
+        """The last result message of a session's saved stream, if it wrote one."""
+        try:
+            data = safeio.read_bytes(self.run_dir, f"{SESSIONS_DIR}/{name}.stream.jsonl")
+        except (FileNotFoundError, safeio.UnsafePath, NotADirectoryError):
+            return None
+        result = None
+        for raw in data.splitlines():
+            if b'"result"' not in raw:
+                continue
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(msg, dict) and msg.get("type") == "result":
+                result = msg
+        return result
 
     def _revoke_and_relaunch(self, s: Session, code: int) -> None:
         rid = s.spec.request_id
@@ -562,7 +725,8 @@ class Driver:
         landed = [{"path": k, "at": v[3]} for k, v in sorted(self.state["artifacts"].items(),
                                                              key=lambda kv: kv[1][3])]
         status.write(self.run_dir, status.build(self.run_dir, self.run_id, state, lead, checks,
-                                                landed, outcome or self.state.get("outcome")))
+                                                landed, outcome or self.state.get("outcome"),
+                                                usage=self.usage_summary))
 
     def _live_checks(self) -> int:
         return sum(1 for lv in self.live.values() if lv.session.spec.request_id is not None)
@@ -571,6 +735,8 @@ class Driver:
         """One pass. Returns False when nothing is running and nothing is due."""
         now = time.monotonic()
         self._police(now)
+        if self.usage_pending:
+            self._flush_usage()
         for name, live in list(self.live.items()):
             if not live.session.running():
                 self._end(name, live)
@@ -675,6 +841,12 @@ class Driver:
         events.emit(self.run_dir, "driver_finished", exit_code=code, outcome=outcome,
                     lead_outcome=self.state["lead"].get("outcome"))
         self.write_status("finished" if outcome == "released" else "stopped", outcome)
+        try:  # the run's outcome and exit code never depend on its accounting
+            self._flush_usage()
+            usage.write_md(self.run_dir, self.run_id, self.usage_summary)
+        except Exception as exc:  # noqa: BLE001 - loud, never fatal
+            events.emit(self.run_dir, "usage_not_recorded", what="usage.md",
+                        error=f"{type(exc).__name__}: {exc}")
         return code
 
 
@@ -697,6 +869,7 @@ def resume(cfg: DriverConfig, run_dir: Path, api: ChecksApi | None = None,
         d = Driver(cfg, run_dir, api, limits, released=released, revoke=revoke)
         events.emit(d.run_dir, "run_resumed", run_id=d.run_id,
                     lead_session_id=d.state["lead"].get("session_id"))
+        d.recover_usage()
         d.start_lead(resume=True)
         d.relaunch_unended_checks()
         return d.watch()

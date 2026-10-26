@@ -6,7 +6,7 @@ the harness builds it (the agent's own tools within --tools, agents and skills f
 writes a transcript under CLAUDE_CONFIG_DIR, and prints a result. Behaviour per role
 comes from `<its folder>/fake-config.json`: {"<role>" or "<role>@resume": {...}} with
 keys init_overrides, sleep_s, exit_code, transcript_model, transcript_effort, subagents,
-no_init, compact, write_files.
+no_init, compact, write_files, usage, cost.
 """
 
 from __future__ import annotations
@@ -50,9 +50,15 @@ def main() -> int:
     calls = HERE / "calls"
     calls.mkdir(exist_ok=True)
     rec_path = calls / f"{time.time_ns()}-{os.getpid()}.json"
+
+    def save(rec: dict[str, object]) -> None:
+        # Atomic: a fake the driver kills mid-write never leaves a half-written record.
+        tmp = rec_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(rec))
+        os.replace(tmp, rec_path)
     record = {"argv": argv, "env": dict(os.environ), "cwd": os.getcwd(), "start": start,
               "role": role, "session_id": sid}
-    rec_path.write_text(json.dumps(record))
+    save(record)
 
     def out(msg: dict[str, object]) -> None:
         sys.stdout.write(json.dumps(msg) + "\n")
@@ -102,18 +108,29 @@ def main() -> int:
     model = cfg.get("transcript_model", opt(argv, "--model"))
     effort = cfg.get("transcript_effort", opt(argv, "--effort"))
     proj.mkdir(parents=True, exist_ok=True)
+    usage = cfg.get("usage", {"input_tokens": 3, "output_tokens": 50,
+                              "cache_creation_input_tokens": 1000,
+                              "cache_read_input_tokens": 4000})
+    now = time.time()
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now)) + f".{int(now % 1 * 1000):03d}Z"
+    mid = f"msg_{uuid.uuid4().hex[:12]}"
     with open(proj / f"{sid}.jsonl", "a") as t:
         t.write(json.dumps({"type": "user", "message": {"role": "user", "content": "x"}}) + "\n")
-        t.write(json.dumps({"type": "assistant", "effort": effort,
-                            "message": {"model": model, "content": []}}) + "\n")
+        entry = json.dumps({"type": "assistant", "effort": effort, "timestamp": stamp,
+                            "message": {"id": mid, "model": model, "content": [],
+                                        "usage": usage}}) + "\n"
+        t.writelines([entry, entry])  # one message in two entries, as the harness writes it
         t.write(json.dumps({"type": "assistant", "message": {"model": "<synthetic>"}}) + "\n")
     for n, sub in enumerate(cfg.get("subagents", [])):
         d = proj / sid / "subagents"
         d.mkdir(parents=True, exist_ok=True)
         aid = f"a{n}{os.getpid()}"
-        (d / f"agent-{aid}.jsonl").write_text(json.dumps(
-            {"type": "assistant", "effort": sub["effort"],
-             "message": {"model": sub["model"], "content": []}}) + "\n")
+        brief = {"type": "user", "message": {"role": "user", "content":
+                 f"Your order is branches/{sub.get('branch', 'b1')}/order.md"}}
+        (d / f"agent-{aid}.jsonl").write_text(json.dumps(brief) + "\n" + json.dumps(
+            {"type": "assistant", "effort": sub["effort"], "timestamp": stamp,
+             "message": {"id": f"msg_sub{n}{os.getpid()}", "model": sub["model"],
+                         "content": [], "usage": sub.get("usage", usage)}}) + "\n")
         (d / f"agent-{aid}.meta.json").write_text(json.dumps(
             {"agentType": sub["agentType"], "spawnDepth": sub.get("depth", 1)}))
     for rel, text in cfg.get("write_files", {}).items():
@@ -130,16 +147,23 @@ def main() -> int:
         out({"type": "result", "subtype": "success", "is_error": False, "result": "",
              "session_id": sid, "num_turns": 0, "permission_denials": []})
         record["end"] = time.time()
-        rec_path.write_text(json.dumps(record))
+        save(record)
         return 1
     out({"type": "assistant", "message": {"model": model, "content": [
         {"type": "text", "text": "ok"}]}, "session_id": sid})
     code = int(cfg.get("exit_code", 0))
     out({"type": "result", "subtype": "success" if code == 0 else "error_during_execution",
          "is_error": code != 0, "result": cfg.get("result", "done"), "session_id": sid,
-         "num_turns": 1, "permission_denials": []})
+         "num_turns": 1, "permission_denials": [], "usage": usage,
+         "total_cost_usd": cfg.get("cost", 0.25), "duration_ms": 1000,
+         "modelUsage": {str(model): {"inputTokens": usage["input_tokens"],
+                                     "outputTokens": usage["output_tokens"],
+                                     "cacheReadInputTokens": usage["cache_read_input_tokens"],
+                                     "cacheCreationInputTokens":
+                                         usage["cache_creation_input_tokens"],
+                                     "costUSD": cfg.get("cost", 0.25), "costBasis": "list"}}})
     record["end"] = time.time()
-    rec_path.write_text(json.dumps(record))
+    save(record)
     return code
 
 

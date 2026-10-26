@@ -100,6 +100,7 @@ class Session:
     killed_reason: str | None = None
     revoke_reason: str | None = None  # a check that ran on the wrong model or effort
     rate_limited: dict[str, Any] | None = None  # the account's usage limit refused it
+    started_wall: float = field(default_factory=time.time)  # for its transcript window
     reader: threading.Thread | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
