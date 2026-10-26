@@ -109,3 +109,74 @@ def test_usage_limit_stops_launching_and_resume_reruns_the_checks(
     assert all(s.status == "ended" and s.outcome == "completed" for s in states), [
         (s.request.prompt, s.status, s.outcome) for s in states]
     assert kinds(run, "check_relaunch")
+
+
+def _usage_stopped_run(cfg: DriverConfig, tmp: Path, fake: Fake, limits: Limits,
+                       n_claims: int) -> Path:
+    """A run the account's usage limit stopped, with `n_claims` claim checks queued."""
+    fake.configure({"lead": {"sleep_s": 0.5, "rate_limited": True},
+                    "blind-framer": {"rate_limited": True}})
+    run = create_run(cfg, write_task(tmp), limits=limits)
+    for i in range(n_claims):
+        checks_api.request_check(run, "claim-checker", "claim:" + f"{i:x}" * 64, "file_claim")
+    assert start(cfg, run, checks_api, limits) == OUTCOME_CODES["usage_limited"]
+    return run
+
+
+def test_resume_relaunches_within_the_concurrency_limit(
+        cfg: DriverConfig, tmp: Path, fake: Fake, limits: Limits) -> None:
+    # Walking-skeleton resume: 138 checks relaunched at once; under that load the MCP
+    # server was still starting at init and 73 sessions failed the canary.
+    from stemma.driver.runner import resume
+
+    fake.configure({"lead": {"sleep_s": 2.0}, "claim-checker": {"exit_code": 1}})
+    run = create_run(cfg, write_task(tmp), limits=limits)
+    for i in range(6):
+        checks_api.request_check(run, "claim-checker", "claim:" + f"{i:x}" * 64, "file_claim")
+    start(cfg, run, checks_api, limits)
+    assert sum(s.outcome == "failed" for s in checks_api.states(run).values()) == 6
+    before = len(fake.calls())
+    fake.configure({"lead": {"sleep_s": 1.0}, "claim-checker": {"sleep_s": 0.3}})
+    resume(cfg, run, checks_api, limits)
+    checks = [c for c in fake.calls()[before:] if c["role"] != "lead"]
+    spans = [(c["start"], c["end"]) for c in checks]
+    most = max(sum(1 for a, b in spans if a <= t < b) for t, _ in spans)
+    assert most <= limits.max_concurrent_checks
+    states = checks_api.states(run).values()
+    assert all(s.outcome == "completed" for s in states)
+
+
+def test_resume_skips_a_round_a_later_round_replaced(
+        cfg: DriverConfig, tmp: Path, fake: Fake, limits: Limits) -> None:
+    # Walking-skeleton resume relaunched a round-1 branch review whose branch was already
+    # in round 2; the register rightly refused its verdict.
+    from stemma.driver.runner import resume
+
+    run = _usage_stopped_run(cfg, tmp, fake, limits, 0)
+    prompt = "claim:" + "a" * 64
+    old = checks_api.request_check(run, "claim-checker", prompt, "file_claim", round_no=1)
+    checks_api.mark_launched(run, old.request_id, "s-old", "m", "e")
+    checks_api.mark_ended(run, old.request_id, 1, "failed")
+    new = checks_api.request_check(run, "claim-checker", prompt, "file_claim", round_no=2)
+    fake.configure({"lead": {"sleep_s": 0.5}})
+    resume(cfg, run, checks_api, limits)
+    st = checks_api.states(run)
+    assert st[old.request_id].outcome == "failed"
+    assert st[new.request_id].outcome == "completed"
+    skipped = kinds(run, "check_not_relaunched")
+    assert [e["request_id"] for e in skipped] == [old.request_id]
+    assert "round 2 replaced round 1" in skipped[0]["reason"]
+
+
+def test_a_check_stopped_by_its_canary_is_launched_again_up_to_its_attempts(
+        cfg: DriverConfig, tmp: Path, fake: Fake, limits: Limits) -> None:
+    fake.configure({"lead": {"sleep_s": 2.0}, "blind-framer": {"init_overrides": {
+        "mcp_servers": [{"name": "plugin:stemma:stemma", "status": "pending",
+                         "source": "plugin"}]}}})
+    run = create_run(cfg, write_task(tmp), limits=limits)
+    start(cfg, run, checks_api, limits)
+    framers = [c for c in fake.calls() if c["role"] == "blind-framer"]
+    assert len(framers) == limits.max_check_attempts
+    assert len(kinds(run, "check_relaunch")) == limits.max_check_attempts - 1
+    given_up = kinds(run, "check_not_relaunched")
+    assert len(given_up) == 1 and given_up[0]["previous_outcome"] == "canary_failed"

@@ -58,6 +58,8 @@ class CheckRequestLike(Protocol):
     def event(self) -> str: ...
     @property
     def created_at(self) -> str: ...
+    @property
+    def round(self) -> int: ...
 
 
 class CheckStateLike(Protocol):
@@ -198,6 +200,9 @@ class Driver:
         self.state = self._load_state()
         self.live: dict[str, Live] = {}  # by session name
         self.skipped: set[str] = set()  # request ids that could not be launched
+        # Checks to launch again, by request id, with the end of their last session; they
+        # wait their turn with the pending checks (see step).
+        self.relaunch_due: dict[str, tuple[CheckRequestLike, str | None, str | None]] = {}
         self.exit_code = 0
 
     # ----- state -------------------------------------------------------------------
@@ -322,17 +327,35 @@ class Driver:
         self.api.mark_launched(self.run_dir, rid, spec.session_id, spec.model, spec.effort,
                                relaunch=relaunch)
 
+    def _due_again(self, st: CheckStateLike) -> None:
+        """Queue a check to launch again (same request and round, a new session), unless
+        a later round replaced it or it used up its attempts."""
+        rid, req = st.request.request_id, st.request
+        latest = max((o.request.round for o in self.api.states(self.run_dir).values()
+                      if o.request.role == req.role and o.request.prompt == req.prompt),
+                     default=req.round)
+        attempts = int(self.state["check_attempts"].get(rid, 0))
+        if latest > req.round:
+            reason, outcome = f"round {latest} replaced round {req.round}", "superseded"
+        elif attempts >= self.limits.max_check_attempts:
+            reason, outcome = f"{attempts} attempts", "given_up"
+        else:
+            self.relaunch_due[rid] = (req, st.session_id, st.outcome)
+            return
+        events.emit(self.run_dir, "check_not_relaunched", request_id=rid, reason=reason,
+                    previous_outcome=st.outcome)
+        if st.status == "running":
+            self.api.mark_ended(self.run_dir, rid, -1, outcome)
+
     def relaunch_unended_checks(self) -> None:
-        """On resume: relaunch every check whose session never ended, and every check
-        whose session ended without doing its job for a reason outside it (the usage
-        limit, a crash, a failed launch). Same request and round, a new session."""
+        """On resume: queue every check whose session never ended, and every check whose
+        session ended without doing its job for a reason outside it (the usage limit, a
+        crash, a failed launch, a failed canary). They launch within the usual limits."""
         self.state["usage_limited"] = False
-        for rid, st in sorted(self.api.states(self.run_dir).items()):
+        for _rid, st in sorted(self.api.states(self.run_dir).items()):
             retry = st.status == "ended" and st.outcome in RETRYABLE_OUTCOMES
             if st.status == "running" or retry:
-                events.emit(self.run_dir, "check_relaunch", request_id=rid,
-                            previous_session_id=st.session_id, previous_outcome=st.outcome)
-                self._launch_check(st.request, relaunch=True)
+                self._due_again(st)
 
     # ----- watching ----------------------------------------------------------------
     def _expected(self, agent_type: str | None) -> dict[str, str] | None:
@@ -439,6 +462,11 @@ class Driver:
                             transcript_found=live.tail is not None)
             if outcome != "driver_stopped":
                 self.api.mark_ended(self.run_dir, s.spec.request_id, code, outcome)
+            if outcome == "canary_failed":
+                # The session was stopped before it began work: nothing was checked.
+                st = self.api.states(self.run_dir).get(s.spec.request_id)
+                if st is not None:
+                    self._due_again(st)
             return
         lead = self.state["lead"]
         if s.init is not None and isinstance(s.init.get("session_id"), str):
@@ -564,16 +592,22 @@ class Driver:
             self.write_status("running" if busy else "stopped")
             return busy
         launching = {lv.session.spec.request_id for lv in self.live.values()}
-        for req in launch_order(self.api.pending_checks(self.run_dir)):
+        due = [*self.api.pending_checks(self.run_dir),
+               *(req for req, _sid, _out in self.relaunch_due.values())]
+        for req in launch_order(due):
             if self._live_checks() >= self.limits.max_concurrent_checks:
                 break
             if req.request_id in launching or req.request_id in self.skipped:
                 continue
-            self._launch_check(req, relaunch=False)
+            again = self.relaunch_due.pop(req.request_id, None)
+            if again is not None:
+                events.emit(self.run_dir, "check_relaunch", request_id=req.request_id,
+                            previous_session_id=again[1], previous_outcome=again[2])
+            self._launch_check(req, relaunch=again is not None)
         self._scan_artifacts()
         pending = [r for r in self.api.pending_checks(self.run_dir)
                    if r.request_id not in self.skipped]
-        busy = bool(self.live) or bool(pending)
+        busy = bool(self.live) or bool(pending) or bool(self.relaunch_due)
         self.write_status("running" if busy else "stopped")
         return busy
 

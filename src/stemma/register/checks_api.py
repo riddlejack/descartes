@@ -17,8 +17,9 @@ from typing import Any
 from stemma.register import jsonl, roles
 
 # Ends of a checking session that say nothing about the check (the usage limit, a crash,
-# a failed launch): such a check may be launched again (invariant, shared with the driver).
-RETRYABLE_OUTCOMES = frozenset({"rate_limited", "failed", "launch_failed"})
+# a failed launch, a canary that stopped it before work): such a check may be launched
+# again (invariant, shared with the driver).
+RETRYABLE_OUTCOMES = frozenset({"rate_limited", "failed", "launch_failed", "canary_failed"})
 
 
 class UnknownCheck(Exception):
