@@ -96,7 +96,8 @@ def _call_as[T](caller: Caller, tool: str, fn: Callable[[Register, Caller], T]) 
 
 WRITE_TOOLS = frozenset({"file_claim", "record_claim_verdict", "entity_review", "tree_upsert",
                          "propose_branch_done", "record_branch_verdict",
-                         "request_frame_critique", "submit_draft", "finish_run"})
+                         "request_frame_critique", "submit_draft", "finish_run",
+                         "proceed_on_assumption"})
 
 
 @server.tool()
@@ -188,11 +189,23 @@ def propose_branch_done(ctx: Context[Any], branch_id: str) -> dict[str, Any]:
 
 @server.tool()
 def record_branch_verdict(ctx: Context[Any], branch_id: str, verdict: str, reason: str,
-                          method: str | None = None) -> dict[str, Any]:
-    """Branch reviewer only: answered | find_more (method) | analyse | bound | ask_user |
-    accept_gap, with the reason."""
+                          method: str | None = None,
+                          gap_type: str | None = None) -> dict[str, Any]:
+    """Branch reviewer only: answered | find_more (method) | analyse | bound | ask_user
+    (the reason is the question for the user) | accept_gap (gap_type: user_held |
+    source_unavailable | method_exhausted | out_of_scope), with the reason."""
     return _call(ctx, "record_branch_verdict",
-                 lambda r, c: r.record_branch_verdict(c, branch_id, verdict, reason, method))
+                 lambda r, c: r.record_branch_verdict(c, branch_id, verdict, reason, method,
+                                                      gap_type))
+
+
+@server.tool()
+def proceed_on_assumption(ctx: Context[Any], branch_id: str, assumption: str) -> dict[str, Any]:
+    """Lead only: a branch waiting on the user returns to in_progress on the stated
+    assumption. The deliverable must list the assumption; the branch reviewer may later
+    accept the gap as user_held."""
+    return _call(ctx, "proceed_on_assumption",
+                 lambda r, c: r.proceed_on_assumption(c, branch_id, assumption))
 
 
 @server.tool()
@@ -208,10 +221,11 @@ def submit_draft(ctx: Context[Any], version: int) -> dict[str, Any]:
 
 
 @server.tool()
-async def await_checks(ctx: Context[Any], ids: list[str],
+async def await_checks(ctx: Context[Any], ids: list[str | int],
                        max_wait_s: float = 60) -> dict[str, Any]:
-    """Wait up to max_wait_s for checks: claim ids, "branch:<id>", "draft:<n>",
-    "frame:own", "frame:critique". Returns what landed and what has not."""
+    """Wait up to max_wait_s for checks: claim ids, branch ids, draft versions, or the
+    forms "claim:<id>", "branch:<id>", "draft:<n>", "frame:own", "frame:critique".
+    Returns what landed and what has not; never invents a verdict."""
     caller = caller_of(ctx)  # read before leaving the request's task
 
     def wait() -> dict[str, Any]:

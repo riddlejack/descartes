@@ -362,3 +362,67 @@ def test_two_processes_filing_at_once(tmp_path: Path) -> None:
     assert len(requests) == len(expected)  # one check per claim, none twice
     seqs = [e["seq"] for e in reg.wm.events()]
     assert seqs == sorted(set(seqs))
+
+
+# --- Contract v0.2.4 ----------------------------------------------------------------
+
+
+def test_checker_subagent_inside_a_launched_session_is_refused(reg: Register) -> None:
+    cid = reg.file_claim(WORKER, claim())["claim_id"]
+    checker_for(reg, cid, "s-check")
+    # Same session id as the launched checker, but a subagent (agent_id set).
+    sub = Caller("stemma:claim-checker", "a-sub", "s-check")
+    with pytest.raises(Refused, match="not started for"):
+        reg.record_claim_verdict(sub, cid, "holds", "x")
+    # A checker a worker started inside the lead's session: refused the same way.
+    with pytest.raises(Refused, match="not started for"):
+        reg.record_claim_verdict(Caller("stemma:claim-checker", "a-w", "s-lead"), cid,
+                                 "holds", "x")
+
+
+def test_waiting_user_branch_proceeds_on_assumption(reg: Register) -> None:
+    reg.tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "x", "branch_id": "b1"})
+    write_record(reg, "b1")
+    reg.propose_branch_done(WORKER, "b1")
+    reg.record_branch_verdict(reviewer_for(reg, "b1"), "b1", "ask_user",
+                              "Which region does the decision cover?")
+    assert reg.tree()[0]["status"] == "waiting_user"
+    with pytest.raises(Refused, match="do not proceed on an assumption"):
+        reg.proceed_on_assumption(WORKER, "b1", "Europe only")
+    with pytest.raises(Refused, match="state the assumption"):
+        reg.proceed_on_assumption(LEAD, "b1", " ")
+    out = reg.proceed_on_assumption(LEAD, "b1", "We assume Europe only.")
+    assert out["question"] == "Which region does the decision cover?"
+    assert reg.tree()[0]["status"] == "in_progress"
+    with pytest.raises(Refused, match="not waiting on the user"):
+        reg.proceed_on_assumption(LEAD, "b1", "again")
+    reg.propose_branch_done(WORKER, "b1")
+    rev = reviewer_for(reg, "b1", "s-rev2")
+    with pytest.raises(Refused, match="names its gap type"):
+        reg.record_branch_verdict(rev, "b1", "accept_gap", "the user holds it")
+    with pytest.raises(Refused, match="gap type must be one of"):
+        reg.record_branch_verdict(rev, "b1", "accept_gap", "x", gap_type="lazy")
+    reg.record_branch_verdict(rev, "b1", "accept_gap", "the user holds it", gap_type="user_held")
+    assert reg.tree()[0]["status"] == "gap_accepted"
+    (reg.run_dir / "deliverable").mkdir()
+    answer = reg.run_dir / "deliverable/answer.md"
+    answer.write_text("# Answer\n\nThe answer holds.\n")
+    assert "does not list the assumption taken for branch b1" in " ".join(reg.finish_failures())
+    answer.write_text("# Answer\n\nThe answer holds. We assume Europe only.\n")
+    assert "assumption" not in " ".join(reg.finish_failures())
+
+
+def test_user_held_needs_a_recorded_assumption(reg: Register) -> None:
+    reg.tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "x", "branch_id": "b1"})
+    write_record(reg, "b1")
+    reg.propose_branch_done(WORKER, "b1")
+    with pytest.raises(Refused, match="needs an assumption"):
+        reg.record_branch_verdict(reviewer_for(reg, "b1"), "b1", "accept_gap", "x",
+                                  gap_type="user_held")
+
+
+def test_await_checks_accepts_bare_branch_ids_and_draft_versions(reg: Register) -> None:
+    reg.tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "x", "branch_id": "b1"})
+    (reg.run_dir / "branches/b1").mkdir(parents=True)
+    out = reg.await_checks(["b1", 1, "2"], 0)
+    assert [w["id"] for w in out["not_landed"]] == ["branch:b1", "draft:1", "draft:2"]

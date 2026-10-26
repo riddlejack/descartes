@@ -55,6 +55,7 @@ STATUSES = ("open", "in_progress", "proposed_done", "answered", "gap_accepted",
             "waiting_user", "stopped_by_limit")
 DONE = frozenset({"answered", "gap_accepted", "stopped_by_limit"})
 SETTABLE_BY_AUTHORS = frozenset({"open", "in_progress"})
+GAP_TYPES = ("user_held", "source_unavailable", "method_exhausted", "out_of_scope")
 BRANCH_VERDICTS = {"answered": "answered", "accept_gap": "gap_accepted",
                    "find_more": "in_progress", "analyse": "in_progress",
                    "bound": "in_progress", "ask_user": "waiting_user"}
@@ -130,6 +131,12 @@ class Register:
             raise Refused(f"Refused: {roles.short(caller.agent_type)} sessions do not {what}.")
 
     def _session_prompt_is(self, caller: Caller, role: str, prompt: str) -> None:
+        """The caller is the main thread of the session the driver launched for `prompt`.
+
+        A subagent shares its parent's session id, so a checker started inside any
+        session (even a checking one) carries an `agent_id` and is refused here."""
+        if caller.agent_id:
+            raise Refused(f"Refused: this session was not started for {prompt}.")
         state = checks_api.state_for_session(self.run_dir, caller.session_id)
         if state is None or state.request.role != role or state.request.prompt != prompt:
             raise Refused(f"Refused: this session was not started for {prompt}.")
@@ -491,7 +498,8 @@ class Register:
                 "check_requested": req.request_id}
 
     def record_branch_verdict(self, caller: Caller, branch_id: str, verdict: str,
-                              reason: str, method: str | None = None) -> dict[str, Any]:
+                              reason: str, method: str | None = None,
+                              gap_type: str | None = None) -> dict[str, Any]:
         self._require(caller, frozenset({roles.BRANCH_REVIEWER}), "record branch verdicts")
         self._session_prompt_is(caller, "branch-reviewer", f"branch:{branch_id}")
         if verdict not in BRANCH_VERDICTS:
@@ -500,6 +508,12 @@ class Register:
             raise Refused("Refused: a branch verdict carries its reason.")
         if verdict == "find_more" and not (isinstance(method, str) and method.strip()):
             raise Refused("Refused: find_more names the method.")
+        if (verdict == "accept_gap") != (gap_type is not None):
+            raise Refused("Refused: accept_gap names its gap type, and only accept_gap does.")
+        if gap_type is not None and gap_type not in GAP_TYPES:
+            raise Refused(f"Refused: gap type must be one of {', '.join(GAP_TYPES)}.")
+        if gap_type == "user_held" and not self.assumptions(branch_id):
+            raise Refused("Refused: user_held needs an assumption recorded for the branch.")
         branch_dir = self._branch_dir(branch_id)
         with jsonl.exclusive(self._lock):
             nodes = self._branch_nodes(branch_id)
@@ -507,7 +521,7 @@ class Register:
                 raise Refused("Refused: the branch is not proposed done.")
             digest = sha256_file(branch_dir / "record.md")
             body = {"branch_id": branch_id, "verdict": verdict, "reason": reason,
-                    "method": method, "record_digest": digest, "by": caller.agent_type,
+                    "method": method, "gap_type": gap_type, "record_digest": digest, "by": caller.agent_type,
                     "session": caller.session_id, "at": now()}
             source = self._src(caller, kind="branch-reviewer")
             for n in nodes:
@@ -520,6 +534,37 @@ class Register:
             (vdir / f"{number}.json").write_text(json.dumps(body, indent=2), encoding="utf-8")
             self._write_tree()
         return {**body, "verdict_file": str((vdir / f"{number}.json").relative_to(self.run_dir))}
+
+    def assumptions(self, branch_id: str | None = None) -> list[dict[str, Any]]:
+        """Assumptions taken in place of a user's answer, oldest first."""
+        self.wm.refresh()
+        return [a for a in self._run_facts("assumption")
+                if branch_id is None or a["branch_id"] == branch_id]
+
+    def proceed_on_assumption(self, caller: Caller, branch_id: str,
+                              assumption: str) -> dict[str, Any]:
+        """A branch waiting on the user goes back to work on a stated assumption."""
+        self._require(caller, frozenset({roles.LEAD}), "proceed on an assumption")
+        if not isinstance(assumption, str) or not assumption.strip():
+            raise Refused("Refused: state the assumption.")
+        branch_dir = self._branch_dir(branch_id)
+        with jsonl.exclusive(self._lock):
+            nodes = self._branch_nodes(branch_id)
+            if any(n["status"] != "waiting_user" for n in nodes):
+                raise Refused("Refused: the branch is not waiting on the user.")
+            question = None
+            vdir = branch_dir / "verdicts"
+            files = sorted(vdir.glob("*.json"), key=lambda p: int(p.stem)) if vdir.is_dir() else []
+            if files:
+                question = json.loads(files[-1].read_text(encoding="utf-8")).get("reason")
+            source = self._src(caller)
+            record = {"branch_id": branch_id, "question": question,
+                      "assumption": assumption.strip(), "at": source["at"]}
+            self._run_fact(caller, "assumption", record)
+            for n in nodes:
+                self._put_node({**n, "status": "in_progress"}, source)
+            self._write_tree()
+        return record
 
     # ---------------------------------------------------- frame, drafts, finish
     def _run_facts(self, predicate: str) -> list[dict[str, Any]]:
@@ -600,6 +645,10 @@ class Register:
             failures.append("deliverable/answer.md does not exist")
             return failures
         text = answer.read_text(encoding="utf-8")
+        for a in self.assumptions():
+            if a["assumption"] not in text:
+                failures.append(f"the deliverable does not list the assumption taken for "
+                                f"branch {a['branch_id']}")
         for seg in tags.untagged_number_segments(text):
             failures.append(f"deliverable line {seg.line}: untagged number in {seg.text[:60]!r}")
         for short in dict.fromkeys(tags.claim_tags(text)):
@@ -675,19 +724,27 @@ class Register:
             return {"file": f} if (self.run_dir / f).is_file() else None
         raise Refused(f"Refused: {target} is not a check id.")
 
-    def _normalise_target(self, given: str) -> str:
-        g = given.strip()
+    def _normalise_target(self, given: str | int) -> str:
+        """`claim:<id>`, `branch:<id>`, `draft:<n>`, `frame:own|critique`; or a bare claim
+        id, branch id or draft version."""
+        if isinstance(given, int) and not isinstance(given, bool):
+            return f"draft:{given}"
+        g = str(given).strip()
         if g.split(":", 1)[0] in ("claim", "branch", "draft", "frame"):
             if g.startswith("claim:"):
                 return "claim:" + self.resolve_claim_id(g)
             return g
+        if g.isdigit() and len(g) < 12:
+            return f"draft:{int(g)}"
+        if g in {n.get("branch_id") for n in self.tree()}:
+            return f"branch:{g}"
         return "claim:" + self.resolve_claim_id(g)
 
-    def await_checks(self, ids: list[str], max_wait_s: float) -> dict[str, Any]:
+    def await_checks(self, ids: list[str | int], max_wait_s: float) -> dict[str, Any]:
         """Verdicts that have landed and checks still running. Never invents one."""
         if not isinstance(ids, list) or not ids:
             raise Refused("Refused: name at least one check id.")
-        targets = [self._normalise_target(str(i)) for i in ids]
+        targets = [self._normalise_target(i) for i in ids]
         deadline = time.monotonic() + max(0.0, min(float(max_wait_s), AWAIT_MAX_S))
         while True:
             self.wm.refresh()
