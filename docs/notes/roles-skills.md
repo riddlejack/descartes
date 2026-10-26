@@ -199,6 +199,12 @@ Recorded at first, then decided by the orchestrator in contract v0.2.4 and appli
   shared branch method now says to Read the stored PDF (`store/bytes/<sha256>`) with
   the pages parameter, and to put any rendered image in analysis/. No lead line sends
   the lead to page images, so the lead's own text is unchanged.
+- Scripts that opened `store/text/<sha>.txt` directly had about a dozen estimated
+  claims refused on the confined re-run. The branch method and the lead now read a
+  captured dataset with `document(receipt_id)`, name it in the derivation's
+  "documents" list, may keep helper `.py` files beside the script, and never open
+  `store/` paths (contract v0.2.10). Scratch scripts and files go in analysis/, never
+  /tmp, after a worker's write there was refused.
 
 ## Lines that depend on the pending E6a reviewer study (contract 10)
 
