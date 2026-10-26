@@ -6,7 +6,7 @@ clean config, placeholder role texts (`placeholder_plugin/`), the real
 puts one invented note under the run's `task/`, and the placeholder lead captures it with
 `capture_file` before filing its claim on that receipt (earlier runs, before part A was
 merged, used a stub that is now removed).
-Recorded run: `20261026-065636-1`… (see `recorded/run_e2e.out`), on the merged code with part A's
+Recorded run: `20261026-065636-1ab23f`, on the merged code with part A's
 evidence service; before it, `20261026-055319-ce9326`, on the code after the cross-family review fixes
 (1a2dce1; driver exit 0 now means the register recorded the release), about one minute, driver exit 0; its files are in `recorded/`. Earlier runs
 `20261026-050744-7917ca`, `20261026-044400-e99681` and `20261026-043549-60adb0`, on older code, also passed.
