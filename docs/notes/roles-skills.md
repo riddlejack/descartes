@@ -22,7 +22,7 @@ page is `<a private page>`.
 - `tools/roles/shared/branch-work.md`: the worker's branch method, copied by `sync`
   into the worker and the single-loop lead fragment, so both arms of S2 carry the same
   method. `tools/roles/skill-evidence.md`: the failure and evidence behind every
-  sentence of every real skill. `tests/roles/`: 37 tests.
+  sentence of every real skill. `tests/roles/`: 44 tests.
 
 ## How it was shown to work, and what is not shown
 
@@ -224,6 +224,18 @@ Recorded at first, then decided by the orchestrator in contract v0.2.4 and appli
   not done and why; options close through their conditions; an empty open lane needs
   nothing. Draft v11 had 77 untagged number segments, many of them labels and dates:
   every number on the face now carries a c tag or an nc tag with its reason.
+- **Codex review and contract v0.3.1.** Calling finish_run to read the gate would have
+  released a draft whose reviews raised material points, so the lead now reads
+  `gate_status(version)` after every round, revises for every point marked material
+  and resubmits, and calls finish_run only when nothing is unmet. The final reviewers
+  record `record_review(text, points)` with each point's materiality, material only
+  if it would change the answer, a figure or the decider's action. The worker's gap
+  line now carries the reviewer's cost clause (it invited endless search), and the
+  lead computes only figures no source states (it invited sourced facts turned into
+  estimates). The lint now also checks every snake_case name and every path in the
+  prose against the contract, refuses a tool the role does not hold, a path outside
+  the run folder or unknown to the contract, and two sentences sharing one comment;
+  `/tmp` no longer appears in any text. 44 tests.
 
 ## The E6a reviewer study (26 October), and what it settles here
 

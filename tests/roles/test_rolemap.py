@@ -35,6 +35,7 @@ def rm(tmp_path: Path) -> Iterator[ModuleType]:
     shutil.copytree(REPO / "tools/roles/shared", tmp_path / "tools/roles/shared")
     (tmp_path / "docs").mkdir()
     shutil.copy(REPO / "docs/ROLE-MAP.md", tmp_path / "docs")
+    shutil.copy(REPO / "docs/CONTRACTS.md", tmp_path / "docs")
     module.set_root(tmp_path)
     yield module
 
@@ -303,3 +304,48 @@ def test_not_applicable_s3_with_workers_is_refused(rm: ModuleType) -> None:
     }
     with pytest.raises(rm.RoleFileError, match="not_applicable"):
         rm.assemble_lead(choice)
+
+
+def append(rm: ModuleType, role: str, line: str) -> None:
+    path = rm.AGENTS_DIR / f"{role}.md"
+    path.write_text(path.read_text() + line + "\n")
+
+
+def test_prose_name_unknown_to_the_contract_fails(rm: ModuleType) -> None:
+    append(rm, "worker", "Call mark_done when you finish. <!-- prevents: x; evidence: y -->")
+    assert "'mark_done', which the contract does not" in errors_of(rm)
+
+
+def test_prose_tool_the_role_does_not_hold_fails(rm: ModuleType) -> None:
+    append(
+        rm,
+        "mechanical-reader",
+        "File each figure with file_claim. <!-- prevents: x; evidence: y -->",
+    )
+    assert "use file_claim, which it does not hold" in errors_of(rm)
+
+
+def test_prose_path_outside_the_run_fails(rm: ModuleType) -> None:
+    append(rm, "worker", "Keep notes in /tmp/notes.md for later. <!-- prevents: x; evidence: y -->")
+    assert "outside the run folder" in errors_of(rm)
+
+
+def test_prose_parent_path_fails(rm: ModuleType) -> None:
+    append(rm, "worker", "Read ../secrets.md first. <!-- prevents: x; evidence: y -->")
+    assert "outside the run folder" in errors_of(rm)
+
+
+def test_prose_path_unknown_to_the_contract_fails(rm: ModuleType) -> None:
+    append(rm, "worker", "Keep notes in scratch/notes.md always. <!-- prevents: x; evidence: y -->")
+    assert "the path 'scratch/notes.md', which the contract does not" in errors_of(rm)
+
+
+def test_two_sentences_sharing_one_comment_fail(rm: ModuleType) -> None:
+    append(rm, "worker", "Read the order first. <!-- prevents: same; evidence: same -->")
+    append(rm, "worker", "Read the record next. <!-- prevents: same; evidence: same -->")
+    assert "shares its comment with another sentence" in errors_of(rm)
+
+
+def test_sentence_break_before_a_number_fails(rm: ModuleType) -> None:
+    append(rm, "worker", "Read it whole. 2 passes follow. <!-- prevents: x; evidence: y -->")
+    assert "not exactly one sentence" in errors_of(rm)
