@@ -5,9 +5,9 @@ clean config, placeholder role texts (`placeholder_plugin/`), the real
 `plugin/hooks/` and `plugin/.mcp.json`, and one invented capture
 (`r-invented-1`, written by the script into the run's store; the evidence service was
 the register's stub, `STEMMA_EVIDENCE_STUB=1`, because part A is not in this branch).
-Recorded run: `20261026-050744-7917ca`, on the code after the merge-gate review fixes
-(8b1df30), about one minute, driver exit 0; its files are in `recorded/`. Earlier runs
-`20261026-044400-e99681` and `20261026-043549-60adb0`, on older code, also passed.
+Recorded run: `20261026-055319-ce9326`, on the code after the cross-family review fixes
+(1a2dce1; driver exit 0 now means the register recorded the release), about one minute, driver exit 0; its files are in `recorded/`. Earlier runs
+`20261026-050744-7917ca`, `20261026-044400-e99681` and `20261026-043549-60adb0`, on older code, also passed.
 
 What it shows, in order (from `recorded/events.jsonl`):
 1. The driver launched the lead (`--agent stemma:lead`) and, at run start, the blind

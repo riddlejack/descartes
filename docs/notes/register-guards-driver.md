@@ -117,8 +117,18 @@ the detail. Harness facts below were each shown by a run (report and kit in
   `<log>.torn`. The reviewer's 27 attack probes pass on 09e15da and fail now;
   `tests/register/test_review_attacks.py` keeps each.
 
+- **Cross-family review fixes (after 4eea3ba).** Authorization and write share one
+  register lock. `propose_branch_done` freezes `record.md` per round
+  (`register/branches/<id>/record.r<n>.md`); the verdict binds to that digest and a later
+  change to `record.md` reopens the node. `revoke_session` (called by the driver on a
+  model or effort mismatch, which then relaunches the check, at most 3 attempts) discounts
+  a session's verdicts, frames and reviews. Derivation re-runs: own process group,
+  killed at the end, output to files, result read regular-file-only, no links, 4096-byte
+  cap. A damaged frozen draft refuses the release; the driver exits 0 only on a recorded
+  release. Agent writes outside the run folder are refused.
+
 ## How it was shown
-- 474 unit and hostile tests (`pytest tests`), no network; `ruff` and `mypy --strict`
+- 503 unit and hostile tests (`pytest tests`), no network; `ruff` and `mypy --strict`
   clean on `src/`.
 - Race tests: two processes filing claims at once (register), four writing the World
   Model log at once (engine), both barrier-synchronised.

@@ -13,14 +13,16 @@
       "statement": "Unit sales are large enough.",
       "branch_verdict": {
         "branch_id": "b1",
+        "round": 1,
         "verdict": "answered",
         "reason": "Placeholder review.",
         "method": null,
         "gap_type": null,
-        "record_digest": "c06dd1faca3d59067f09a7ebd569b0f78fa95168797fab29427937551e365abb",
+        "record_digest": "64a6effb69266ce9df4e9aecad7474a72df908539006b7b6b2615a21ddf4dd39",
+        "record_snapshot": "register/branches/b1/record.r1.md",
         "by": "stemma:branch-reviewer",
-        "session": "a04a326b-5238-48cc-bba8-9f1408a5a3e5",
-        "at": "2026-10-26T05:08:07.560Z"
+        "session": "5f452623-1916-45b0-9889-39cdd8b6eae2",
+        "at": "2026-10-26T05:53:44.284Z"
       }
     }
   ],
