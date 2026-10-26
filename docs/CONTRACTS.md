@@ -1,4 +1,4 @@
-# Contracts between the parts (v0.2.4)
+# Contracts between the parts (v0.2.5)
 
 These are the interfaces the parts agree on, so they can be built in parallel. The
 design (`DESIGN-v1.md`, cited as "step n") says what the system does; this file says
@@ -224,7 +224,8 @@ from the harness), `created_at`, each code check's result, `supersedes`,
   `record_claim_verdict`, `get_claim`, `find_claims`, `echo_candidates`,
   `entity_review`, `tree_upsert`, `propose_branch_done`, `record_branch_verdict`,
   `request_frame_critique`, `submit_draft`, `await_checks` (accepts claim ids,
-  branch ids and draft versions), `proceed_on_assumption`, `finish_run`.
+  branch ids and draft versions), `proceed_on_assumption`, `get_tree`,
+  `claim_dependents`, `finish_run` (which also writes `answer.reader.md`).
 - **Tags.** In drafts and the deliverable each figure is followed by `[[c:<first 12
   hex of claim_id>]]`; a number that is not a figure (a date used as a date, a label,
   a slide number) by `[[nc:<why>]]`. A *segment* is a sentence, list item, table cell
@@ -242,7 +243,8 @@ Each guard has a producer in the live path, or it would block every run.
   a test feeds each guard malformed input.
 - **Bash runs sandboxed** with no network and no write access to tool-only paths
   (`store/`, `register/`, `tree.json`, `verdicts/`, `events.jsonl`, `run.json`, and
-  `$STEMMA_CACHE`, whose entries a later run would be served),
+  `$STEMMA_CACHE`, whose entries a later run would be served, and the run folder's
+  `CLAUDE.md`, `.claude/` and `.stemma/`),
   verified, including refusal of a request to run unsandboxed. Write and Edit to those paths are denied by permission rules. The MCP
   server runs outside the sandbox. WebFetch is denied.
 - **Subagents:** forks denied (`Agent(fork)`, verified); built-in agent types
@@ -330,6 +332,12 @@ Each guard has a producer in the live path, or it would block every run.
   told. The owner reads it before the first real run.
 
 ## 9. The driver (B)
+- It drives the pinned Claude Code CLI headless, not the Agent SDK: the SDK passed the
+  parent's environment through to the session, which broke the sign-in (B's probe
+  runs, 26 Oct). Launch flags live in one function, `stemma.driver.clean.clean_launch`,
+  with `check_canary`, used by the driver and by every other runner (baselines,
+  sealed runs). `--strict-mcp-config` drops the plugin's own server and
+  `--disable-slash-commands` drops the method skills, so Stemma runs use neither.
 - Input: `task.json` with `question`, optional `intake` answers, `attachments`,
   optional `as_of`, optional `switches`. The sealed side adapts its task package to
   this; the driver never reads benchmark material itself.
