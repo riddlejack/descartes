@@ -1,4 +1,4 @@
-# Contracts between the parts (v0.2.3)
+# Contracts between the parts (v0.2.4)
 
 These are the interfaces the parts agree on, so they can be built in parallel. The
 design (`DESIGN-v1.md`, cited as "step n") says what the system does; this file says
@@ -210,12 +210,21 @@ from the harness), `created_at`, each code check's result, `supersedes`,
     `in_progress` (`find_more` with the method named, `analyse`, `bound`), or
     `waiting_user` (`ask_user`). The driver sets `stopped_by_limit` when a recorded
     resource limit is reached.
+  - **A branch waiting on the user.** The driver puts the question on the status
+    page. If no answer arrives (always so in a headless run, where the task package's
+    intake answers are all the user will say), the lead calls
+    `proceed_on_assumption(branch_id, assumption)`: the node returns to
+    `in_progress` with the assumption recorded, and the branch reviewer may later
+    close it `gap_accepted` with gap type `user_held`. The deliverable lists each
+    such question with the assumption taken. `finish_run` refuses while a node is
+    `waiting_user`.
   - **Branch verdict:** `{branch_id, verdict: answered | find_more | analyse | bound |
     ask_user | accept_gap, reason, method (for find_more), record_digest}`.
 - **Tools** (B may refine names, then records them here): `file_claim`,
   `record_claim_verdict`, `get_claim`, `find_claims`, `echo_candidates`,
   `entity_review`, `tree_upsert`, `propose_branch_done`, `record_branch_verdict`,
-  `request_frame_critique`, `submit_draft`, `await_checks`, `finish_run`.
+  `request_frame_critique`, `submit_draft`, `await_checks` (accepts claim ids,
+  branch ids and draft versions), `proceed_on_assumption`, `finish_run`.
 - **Tags.** In drafts and the deliverable each figure is followed by `[[c:<first 12
   hex of claim_id>]]`; a number that is not a figure (a date used as a date, a label,
   a slide number) by `[[nc:<why>]]`. A *segment* is a sentence, list item, table cell
@@ -232,7 +241,8 @@ Each guard has a producer in the live path, or it would block every run.
   as allow, so every guard catches its own errors and denies (exit 2 or deny JSON);
   a test feeds each guard malformed input.
 - **Bash runs sandboxed** with no network and no write access to tool-only paths
-  (`store/`, `register/`, `tree.json`, `verdicts/`, `events.jsonl`, `run.json`),
+  (`store/`, `register/`, `tree.json`, `verdicts/`, `events.jsonl`, `run.json`, and
+  `$STEMMA_CACHE`, whose entries a later run would be served),
   verified, including refusal of a request to run unsandboxed. Write and Edit to those paths are denied by permission rules. The MCP
   server runs outside the sandbox. WebFetch is denied.
 - **Subagents:** forks denied (`Agent(fork)`, verified); built-in agent types
@@ -242,6 +252,11 @@ Each guard has a producer in the live path, or it would block every run.
   is otherwise obeyed);
   `CLAUDE_CODE_EFFORT_LEVEL` never set in a run's environment. MCP tools the role
   needs are allowed explicitly (headless runs deny what is not allowed).
+- **Only the host starts checking roles.** Run settings deny
+  `Agent(stemma:<each checking role>)` and `Agent(stemma:lead)` to every session, and
+  the register accepts a claim or branch verdict only from a session the driver
+  itself launched for that role and that id (the driver records each such session
+  id). A worker that starts a checker of its own gets no verdict recorded.
 - **Identity comes from the harness, never from a tool argument.** A PreToolUse hook
   records the caller's `agent_type` keyed by the tool use id, which the MCP request
   also carries in its `_meta`; the register reads identity from that stamp, never
@@ -282,8 +297,10 @@ Each guard has a producer in the live path, or it would block every run.
   share file names, frontmatter (`name`, `description`) and length, and differ only
   in body, so the lead selects and loads them in identical words in both arms; the
   `decomposition` and `placebo` lead fragments are identical.
-- `s2_shape`: `team` | `single_loop` (one author, no workers; checks unchanged).
-- `s3_hypothesis_in_briefs`: true | false.
+- `s2_shape`: `team` | `single_loop` (one author, no workers; checks unchanged). In
+  `single_loop` the run settings deny `Agent` to the lead.
+- `s3_hypothesis_in_briefs`: true | false; it needs workers, so with `single_loop`
+  the driver records it `not_applicable` and loads no S3 fragment.
 - `s4_orientation`: `frame_first` | `basic_facts` | `primary_record`.
 - `s5_models`: model and effort per role (defaults: Opus 5.5; highest effort for the
   lead and the final reviewers, high for the rest; never Haiku).
