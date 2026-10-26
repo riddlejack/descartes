@@ -98,9 +98,9 @@ def test_eight_k_items(make_service: Factory) -> None:
 
 def test_other_forms_and_missing_items(make_service: Factory) -> None:
     assert applies_to("10-K/A") and applies_to("8-K") and not applies_to("DEF 14A")
-    svc, r = capture(make_service, "10-K", b"<html><body>" + FILLER.encode() * 3 + b"</body></html>")
+    _svc, r = capture(make_service, "10-K", b"<html><body>" + FILLER.encode() * 3 + b"</body></html>")
     assert any(w.startswith("sec_items_not_found") for w in r["warnings"])  # type: ignore[union-attr]
-    svc, r = capture(make_service, "DEF 14A", TEN_K)
+    _svc, r = capture(make_service, "DEF 14A", TEN_K)
     assert not any(o["kind"] == "sec_item" for o in r["outline"])  # type: ignore[union-attr]
 
 

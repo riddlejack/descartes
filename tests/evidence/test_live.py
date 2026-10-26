@@ -104,7 +104,7 @@ def test_live_sec_filing_and_facts() -> None:
         assert receipt["status"] == "ok", receipt
         outline = svc.outline(receipt["sha256"])["outline"]
         anchors = [o["anchor"] for o in outline if o["kind"] in ("sec_item", "sec_part")]
-        assert any(a.endswith("item-1a") or a.endswith("item-2.02") or a.endswith("item-9.01")
+        assert any(a.endswith(("item-1a", "item-2.02", "item-9.01"))
                    for a in anchors), anchors
         first = svc.read_section(receipt["sha256"], next(
             o["anchor"] for o in outline if o["kind"] == "sec_item"))
