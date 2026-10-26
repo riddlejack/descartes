@@ -120,6 +120,8 @@ _REGION_WARNINGS = {
     "white_pdf_text": "in PDF text drawn in white",
     "table_merged_cells": "in a table with merged cells whose columns may be misaligned",
     "element_split": "across a place where digits from two page elements were split",
+    "superscript": "in a raised marker (a footnote number or superscript in a PDF)",
+    "superscript_split": "across the space put in before or after a raised PDF marker",
 }
 
 
@@ -147,6 +149,14 @@ def find_quote(text: str, quote: str,
         position = haystack.find(needle, position + 1)
     warnings = [f"match at {m['start']}-{m['end']} lies {_REGION_WARNINGS.get(kind, kind)}"
                 for m in matches for kind in m["regions"]]
+    # Every recorded split is an edge the checker is told about: a split can never
+    # silently make a smaller number quotable.
+    for m in matches:
+        for r in flagged or []:
+            if r["kind"] == "superscript_split" and (
+                    m["start"] == int(r["end"]) or m["end"] == int(r["start"])):
+                warnings.append(f"match at {m['start']}-{m['end']} starts or ends at the space "
+                                "put in beside a raised PDF marker (a recorded split); check the page")
     return {
         "found": total > 0,
         "matches": matches,

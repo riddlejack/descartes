@@ -1,4 +1,4 @@
-# Contracts between the parts (v0.2.8)
+# Contracts between the parts (v0.3)
 
 These are the interfaces the parts agree on, so they can be built in parallel. The
 design (`DESIGN-v1.md`, cited as "step n") says what the system does; this file says
@@ -191,7 +191,12 @@ from the harness), `created_at`, each code check's result, `supersedes`,
   A failure refuses the claim and names the failed check, nothing more.
 - **Derivations.** A script in `analysis/` reads its inputs only through
   `stemma.analysis.inputs()` (a mapping from the claim ids named in the derivation to
-  their values) and reports with `stemma.analysis.result(number)`. `file_claim`
+  their values) and `stemma.analysis.document(receipt_id)` (the stored text of a
+  capture the derivation names), and reports with `stemma.analysis.result(number)`.
+  A derivation is `{script, inputs: [claim ids], documents: [receipt ids]}`; the
+  re-run copies the script, its sibling `.py` files and exactly the named documents
+  into its sandbox, nothing else, so a figure computed from a captured dataset
+  re-runs from the stored bytes. No script opens `store/` paths directly. `file_claim`
   re-runs it in a subprocess with no network, no write access outside a temporary
   folder, and a recorded time limit, and compares the reported number with the
   claim's. Agent-written code never runs inside the MCP server's own process.
@@ -313,10 +318,23 @@ Each guard has a producer in the live path, or it would block every run.
   verified.
 - **A branch reaches `answered` or `gap_accepted` only by a branch verdict saying so.**
   Producer: the branch-reviewer session the driver starts on `propose_branch_done`.
+- **`finish_run` may be called at any time**: when it refuses, it returns the full
+  list of unmet conditions, so it is also how the lead reads the gate. The lead calls
+  it after every review round.
 - **`finish_run` refuses** unless:
-  - every tree node is `answered`, `gap_accepted` or `stopped_by_limit`;
+  - every leaf node (`condition`, `rival`, and an `open_lane` that holds work) is
+    `answered`, `gap_accepted` or `stopped_by_limit`; an `option` or other parent node
+    closes when all its children have closed (derived, never set); an empty open lane
+    needs nothing. A leaf the lead does not research is still closed only by a branch
+    review: the lead files it as a branch whose record says what was not done and why,
+    and the reviewer may accept the gap or send it back;
   - `framer/critique.md` and `framer/lead-response.md` exist;
   - the three reviews exist for the draft version being released;
+  - review rounds: `max_review_rounds` in `run.json` is a recorded resource limit
+    (default 3). After the last permitted round `submit_draft` refuses another, and the
+    release lists every criticism the last round raised that the draft did not
+    resolve, in the completion statement. Reaching the limit is `stopped_by_limit`,
+    never a quality verdict;
   - every number segment in `deliverable/answer.md` is tagged, and every `c` tag names
     a claim that is not superseded and whose latest verdict is `holds`,
     `holds_with_correction` or `could_not_check`. A `could_not_check` figure is
@@ -381,6 +399,14 @@ Each guard has a producer in the live path, or it would block every run.
 - Input: `task.json` with `question`, optional `intake` answers, `attachments`,
   optional `as_of`, optional `switches`. The sealed side adapts its task package to
   this; the driver never reads benchmark material itself.
+- **Attachments mid-run** (design step 1: an attachment slot open at every stage; a
+  client's question list arriving mid-run is mapped at once). `stemma attach <run_id>
+  <file>` copies the file into `task/arrivals/<n>/` (tool-only), records an event, and
+  queues a notice; the lead's next tool call receives the notice through a hook
+  (`additionalContext`, *B verifies*), never through a file the lead must remember to
+  check. The lead maps the arrival against its frame and tree at once and records
+  what it changed in `intake.md`. The sealed side uses this to deliver a test task's
+  second wave when its own rule says the wave arrives.
 - It launches the lead and every checking session, verifies the resolved model and
   effort of each (for the lead's subagents, from their transcripts, which land in
   the clean config's `projects/<cwd-slug>/`; a copied config folder is not signed
