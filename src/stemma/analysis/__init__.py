@@ -14,6 +14,12 @@ Where the values come from is behind one interface, `ClaimValues`:
     from stemma.analysis import inputs, result
     v = inputs("3f2a9c0d1b4e", "77aa01c2d3e4")
     result(v["3f2a9c0d1b4e"] / v["77aa01c2d3e4"])
+
+A script may also read a whole captured document (a dataset, a table) with
+`document("<receipt_id>")`; name each such receipt in the derivation's `documents`:
+`{"script": "analysis/x.py", "inputs": [claim ids], "documents": [receipt ids]}`.
+Helper modules beside the script in analysis/ are copied with it; other files are not.
+Run scripts with "$STEMMA_PYTHON".
 """
 
 from __future__ import annotations
@@ -25,10 +31,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Protocol
 
-__all__ = ["AnalysisError", "ClaimValues", "inputs", "result", "set_backend"]
+__all__ = ["AnalysisError", "ClaimValues", "document", "inputs", "result", "set_backend"]
 
 INPUTS_ENV = "STEMMA_ANALYSIS_INPUTS"
 RESULT_ENV = "STEMMA_ANALYSIS_RESULT"
+DOCUMENTS_ENV = "STEMMA_ANALYSIS_DOCUMENTS"
 
 
 class AnalysisError(Exception):
@@ -108,6 +115,23 @@ def _current() -> ClaimValues:
 def inputs(*ids: str) -> dict[str, float]:
     """The values of the named claims (all inputs when re-run and none are named)."""
     return _current().values(list(ids))
+
+
+def document(receipt_id: str) -> str:
+    """The whole stored text of a captured document (a dataset, a table, a filing), by
+    receipt id. Name each receipt in the derivation's "documents"; when file_claim re-runs
+    the script it gets exactly those texts."""
+    folder = os.environ.get(DOCUMENTS_ENV)
+    if folder:
+        path = Path(folder) / f"{receipt_id}.txt"
+        if "/" in receipt_id or not path.is_file():
+            raise AnalysisError(f"receipt {receipt_id} is not among this script's documents")
+        return path.read_text(encoding="utf-8")
+    if os.environ.get("STEMMA_RUN_DIR"):
+        from stemma.evidence.api import read_text  # the evidence service (part A)
+
+        return read_text(os.environ["STEMMA_RUN_DIR"], receipt_id)
+    raise AnalysisError("no source of documents: run inside a Stemma run")
 
 
 def result(number: float) -> None:

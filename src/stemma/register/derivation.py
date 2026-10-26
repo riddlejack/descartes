@@ -121,7 +121,32 @@ def _read_capped(path: Path, cap: int, what: str, tail: bool = False) -> bytes:
         os.close(fd)
 
 
-def rerun(script: Path, values: dict[str, float], python: str | None = None,
+def _copy_code(script: Path, tmp: Path) -> Path:
+    """Copy the script and the other Python files beside it (its helper modules), never
+    following a link, into `tmp`; return the script's copy. Data files are not copied:
+    a script reads figures through inputs() and documents through document()."""
+    folder = script.parent
+    for entry in os.scandir(folder):
+        if not entry.name.endswith(".py") or entry.is_symlink() or not entry.is_file():
+            continue
+        fd = os.open(entry.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                continue
+            data = b""
+            while chunk := os.read(fd, 1 << 20):
+                data += chunk
+        finally:
+            os.close(fd)
+        (tmp / entry.name).write_bytes(data)
+    copy = tmp / script.name
+    if not copy.is_file():
+        raise DerivationError(f"script {script.name} is not a plain file")
+    return copy
+
+
+def rerun(script: Path, values: dict[str, float], documents: dict[str, str] | None = None,
+          python: str | None = None,
           time_limit_s: int = DEFAULT_TIME_LIMIT_S) -> RerunResult:
     """Run `script` with `values` as its inputs and return the number it reported."""
     if not script.is_file():
@@ -143,10 +168,17 @@ def rerun(script: Path, values: dict[str, float], python: str | None = None,
             "STEMMA_ANALYSIS_RESULT": str(result_file),
             "PYTHONDONTWRITEBYTECODE": "1",
         }
-        # The script runs from a copy inside the temporary folder, so nothing outside it
-        # (the run folder included) is readable to it.
-        copy = tmp / "script.py"
-        copy.write_bytes(script.read_bytes())
+        # The script and its helper modules run from copies inside the temporary folder,
+        # with the documents it named, so nothing else (the run folder included) is
+        # readable to it.
+        copy = _copy_code(script, tmp)
+        docs = tmp / "documents"
+        docs.mkdir()
+        for rid, text in (documents or {}).items():
+            if "/" in rid or rid.startswith("."):
+                raise DerivationError(f"receipt id {rid!r} is not a plain name")
+            (docs / f"{rid}.txt").write_text(text, encoding="utf-8")
+        env["STEMMA_ANALYSIS_DOCUMENTS"] = str(docs)
         argv = [SANDBOX_EXEC, "-p", _profile(tmp, runtime_reads(py), py), py, "-I", str(copy)]
         stderr_path = tmp / ".stderr"
         with open(stderr_path, "wb") as err:

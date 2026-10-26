@@ -97,9 +97,12 @@ def normalise_shape(raw: dict[str, Any]) -> dict[str, Any]:
         isinstance(deriv, dict) and _str(deriv.get("script"))
         and isinstance(deriv.get("inputs", []), list)
         and all(_str(i) for i in deriv.get("inputs", []))
-        and set(deriv) <= {"script", "inputs"}
+        and isinstance(deriv.get("documents", []), list)
+        and all(_str(i) for i in deriv.get("documents", []))
+        and set(deriv) <= {"script", "inputs", "documents"}
     ):
-        raise Refused("Refused: derivation needs a script and a list of input claim ids.")
+        raise Refused("Refused: derivation needs a script, a list of input claim ids and, "
+                      "optionally, a list of receipt ids it reads.")
     branch = raw.get("branch_id")
     if branch is not None and not _str(branch):
         raise Refused("Refused: branch_id is not text.")
@@ -177,12 +180,13 @@ def check_sourced(claim: dict[str, Any], run_dir: Path, evidence: Evidence,
             result.warnings.append(warning)
 
 
-Rerun = Callable[[Path, dict[str, float]], RerunResult]
+Rerun = Callable[..., RerunResult]  # (script, values[, documents]) -> RerunResult
 InputLookup = Callable[[str], tuple[str, float]]
 
 
 def check_estimated(claim: dict[str, Any], run_dir: Path, rerun: Rerun,
-                    lookup: InputLookup, result: FilingResult) -> None:
+                    lookup: InputLookup, result: FilingResult,
+                    evidence: Evidence | None = None) -> None:
     deriv = claim["derivation"]
     value = claim["value"]
     if deriv is None:
@@ -197,8 +201,18 @@ def check_estimated(claim: dict[str, Any], run_dir: Path, rerun: Rerun,
     for given in deriv.get("inputs", []):
         full, number = lookup(given)
         values[full] = number
+    # A derivation may read whole captured documents (a dataset, a table) by receipt id,
+    # through stemma.analysis.document(); the re-run gets exactly those stored texts.
+    documents: dict[str, str] = {}
+    for rid in deriv.get("documents", []):
+        if evidence is None:
+            raise Refused("Refused: the derivation's documents cannot be read.")
+        try:
+            documents[rid] = evidence.read_text(run_dir, rid)
+        except QuoteCheckFailed as exc:
+            raise Refused(f"Refused: derivation document {rid}: {exc}.") from exc
     try:
-        rr = rerun(script, values)
+        rr = rerun(script, values, documents) if documents else rerun(script, values)
     except DerivationError as exc:
         raise Refused(f"Refused: the derivation could not be re-run: {exc}.") from exc
     if rr.number is None:
@@ -226,5 +240,5 @@ def run_checks(raw: dict[str, Any], run_dir: Path, evidence: Evidence, rerun: Re
     if claim["tier"] in SOURCED_TIERS:
         check_sourced(claim, run_dir, evidence, result)
     elif claim["tier"] == "estimated":
-        check_estimated(claim, run_dir, rerun, lookup, result)
+        check_estimated(claim, run_dir, rerun, lookup, result, evidence)
     return result

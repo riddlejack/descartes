@@ -29,6 +29,8 @@ class FakeEvidence:
         return " ".join(quote.split()) in " ".join(self.texts[receipt_id].split())
 
     def read_text(self, run_dir: Path, receipt_id: str) -> str:
+        if receipt_id not in self.texts:
+            raise QuoteCheckFailed(f"unknown receipt {receipt_id}")
         return self.texts[receipt_id]
 
 
@@ -285,3 +287,38 @@ def test_as_written_never_matches_inside_a_larger_number(tmp_path: Path) -> None
                    support=[{"receipt_id": "r1", "quote": "1,250 jobs"}])
     with pytest.raises(Refused, match="as_written does not appear"):
         run_checks(raw, tmp_path, ev, no_rerun, no_lookup)
+
+
+def test_derivation_with_helper_module_and_a_named_document(tmp_path: Path) -> None:
+    # Walking-skeleton run: scripts imported a helper beside them and tabulated a captured
+    # CSV, which the re-run could not see.
+    ev = FakeEvidence({"r1": TEXT, "rcsv": "net,ports\nA,3\nB,4\nA,5\n"})
+    (tmp_path / "analysis").mkdir()
+    (tmp_path / "analysis/lib.py").write_text(
+        "import csv, io\nfrom stemma.analysis import document\n"
+        "def total(net):\n"
+        "    rows = csv.DictReader(io.StringIO(document('rcsv')))\n"
+        "    return sum(int(r['ports']) for r in rows if r['net'] == net)\n")
+    (tmp_path / "analysis/calc.py").write_text(
+        "import sys, os\nsys.path.insert(0, os.path.dirname(__file__))\nimport lib\n"
+        "from stemma.analysis import result\nresult(lib.total('A'))\n")
+    raw = observed(tier="estimated", support=[], statement="Network A has 8 ports.",
+                   value={"number": 8, "kind": "count", "as_written": "8"},
+                   derivation={"script": "analysis/calc.py", "inputs": [],
+                               "documents": ["rcsv"]})
+    r = run_checks(raw, tmp_path, ev, rerun, no_lookup)
+    assert any(c["check"] == "derivation_reproduces" for c in r.checks)
+    # Without naming the document, the script cannot read it.
+    raw["derivation"] = {"script": "analysis/calc.py", "inputs": []}
+    with pytest.raises(Refused, match="reported no result"):
+        run_checks(raw, tmp_path, ev, rerun, no_lookup)
+
+
+def test_unknown_derivation_document_refused(tmp_path: Path) -> None:
+    (tmp_path / "analysis").mkdir()
+    (tmp_path / "analysis/calc.py").write_text("from stemma.analysis import result\nresult(1)\n")
+    raw = observed(tier="estimated", support=[], statement="One.",
+                   value={"number": 1, "kind": "count", "as_written": "1"},
+                   derivation={"script": "analysis/calc.py", "documents": ["r-nope"]})
+    with pytest.raises(Refused, match="derivation document r-nope"):
+        run_checks(raw, tmp_path, EV, rerun, no_lookup)
