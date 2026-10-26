@@ -30,7 +30,31 @@ Dockerfile, logs) waits for the orchestrator.
   placeholder refused), the required headers, status from `GET /v1/models`, the
   contract's Auto Detect, and a receipt per call naming the route asked for and the
   model the answer names. The token and message text never reach the log.
-- 65 tests pass; `ruff` and `mypy --strict` are clean on `src/stemma/datalayer` and
+- **Derivation inputs (contract v0.2.7, section 5a):** `input_lookup` wraps the
+  register's own lookup. The register resolves the id and owns the number; the re-run
+  gets the data layer's copy, read through Zetaris in Zetaris mode. A difference of a
+  single bit refuses (`input_mismatch`; compared as hexadecimal, so -0.0 is not 0.0),
+  and so does a copy whose number and text form disagree. If the data layer cannot
+  answer (Zetaris or Postgres unreachable, a failed sync or query), the register's
+  number is used and `datalayer_unavailable` is raised loudly through an alert callback
+  (for the run's events), the query log and the logger. Tests cover each case.
+- **`query_data(sql)`**, the read-only MCP tool, exposed by `register_tools(server)` in
+  `src/stemma/datalayer/tools.py` as part A does. The SQL is prepared in SQLite against
+  an empty copy of the schema under an authorizer that allows only reads of the nine
+  tables and twenty plain functions, so writes, other tables (`sqlite_master`),
+  `load_extension`, `random`, `printf`, Spark's `reflect`, recursion, comments and a
+  second statement are all refused (twenty hostile cases tested). Each result must
+  carry a receipt or claim id. The query then runs scoped to this run by a leading
+  `WITH` that replaces each table with this run's rows, because the shared Postgres
+  holds several runs. At most 500 rows, with truncation said; logged with text,
+  backend and row count; a loud SQLite fallback when Zetaris is unreachable, said in
+  the answer.
+- **Host writes follow no symlink** (contract section 6): `datalayer/` is walked one
+  folder at a time with `O_NOFOLLOW` descriptors, log lines are appended `O_NOFOLLOW`,
+  and SQLite's file and journals are checked not to be links before each connection.
+  Hostile tests plant links to the folder, the database, a journal and the log. The
+  race test found a real race (two writers creating `datalayer/` at once), now fixed.
+- 107 tests pass; `ruff` and `mypy --strict` are clean on `src/stemma/datalayer` and
   `src/stemma/providers`.
 
 **Not yet shown:**
@@ -76,7 +100,7 @@ one query; and the semantic layer's data-quality rules (each foreign key is a ru
 example that every support row cites a receipt in the manifest). That is the design's
 position (DESIGN-v1 section 7), unchanged.
 
-## What part B would change (needs the orchestrator)
+## What part B would change (accepted as contract v0.2.7, section 5a; D makes it at merge)
 
 B's `file_claim` re-runs a script in a sandbox with no network, and an agent's own Bash
 has no network either (B's probe notes: `allowedDomains: []`, raw sockets refused). So
@@ -93,9 +117,17 @@ is the host side, in the MCP server process:
    an agent can show "a chain of queries the user can see". It needs a read-only Zetaris
    user and a single-statement check.
 
-Contract additions this needs: a tool-only `datalayer/` folder in the run folder
-(`evidence.sqlite`, `queries.jsonl`), added to the sandbox's denied write paths; part D
-in section 1; the data-layer settings in `.env.example` (names only).
+Done in v0.2.7: `datalayer/` is tool-only, part D is in section 1, `query_data` is in
+the tool list. Left for the merge: the hook in B's `register/store.py` (D's, by the
+contract); passing B's event writer as `input_lookup`'s `alert`, and
+`datalayer_unavailable` in B's `driver/events.py` `LOUD` set so the status page shows it
+(B's file: needs the orchestrator's word); B's server calling
+`stemma.datalayer.tools.register_tools`; the data-layer settings in `.env.example`.
+
+`query_data` and the dialects: only SQL valid in SQLite passes the check, and Zetaris
+runs Spark SQL. Most plain queries mean the same in both, but not all (`round` breaks
+ties differently, for one). That is acceptable because a figure taken from a row is
+filed as a claim with its own support, and the claim checker judges it.
 
 Also for A: `stemma.datalayer.export.sec_facts_from_bytes` repeats about twenty lines of
 A's `facts_from_concept_json`, with A's `as_of` filter, because A is not on `main`. Once
