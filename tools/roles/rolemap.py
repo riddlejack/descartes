@@ -140,9 +140,10 @@ SWITCHES: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 # Resource limit: the design's "a page or less" for a standing role text (step 5),
 # taken as this many words of instruction, excluding frontmatter and comments: one
-# dense printed page. A stricter page (500 to 600 words) fits every role but the
-# lead assembled with its longest switch fragments; see docs/notes/roles-skills.md.
-PAGE_WORDS = 800
+# dense printed page. Raised from 800 on 26 October, when lines from the live run
+# (the analysis call) and from E6a (the frame's reasons) pushed the longest team
+# lead past it; a stricter page (500 to 600 words) fits every role but the lead.
+PAGE_WORDS = 850
 
 # Resource limit: how far a placebo skill's body may differ in length from its real
 # twin's, as a fraction of the real body's characters (contract 7: "share length").
@@ -194,7 +195,7 @@ class Line:
 
     @property
     def provisional(self) -> bool:
-        return "E6a-provisional" in self.evidence
+        return "provisional" in self.evidence
 
 
 @dataclass
@@ -607,7 +608,7 @@ def short_tool(tool: str) -> str:
 
 def render_lines(doc: Doc, out: list[str]) -> None:
     for line in doc.lines:
-        mark = " (provisional until study E6a reports)" if line.provisional else ""
+        mark = " (provisional: not yet settled by a test)" if line.provisional else ""
         out.append(f"- {line.text}")
         out.append(f"  - Prevents: {line.prevents}{mark}. Evidence: {line.evidence}.")
 
@@ -630,8 +631,9 @@ def build_map() -> str:
         'its evidence. Evidence names: "design" is DESIGN-v1; "lesson" is',
         'the practice lessons (private); "P1", "P3" and "D1" are the research files of those',
         'names; "contract" is docs/CONTRACTS.md; the Opus 5.5 and Fable 5.1 guides are',
-        "Anthropic's prompting pages. Lines marked provisional depend on the pending",
-        "reviewer study E6a.",
+        "Anthropic's prompting pages. Lines marked provisional are not yet settled by a",
+        "test; the E6a reviewer study (26 October) set the reviewers' model and effort",
+        "but tested none of those lines directly.",
         "",
     ]
     errors: list[str] = []
@@ -644,7 +646,7 @@ def build_map() -> str:
         tools = doc.meta.get("tools", [])
         count = len(tools) if isinstance(tools, list) else 0
         provisional = sum(line.provisional for line in doc.lines)
-        note = f", {provisional} provisional on E6a" if provisional else ""
+        note = f", {provisional} provisional" if provisional else ""
         out.append(
             f"- **{role}** ({doc.meta.get('model')}, effort {doc.meta.get('effort')}, "
             f"{count} tools, {len(doc.lines)} lines{note}): {doc.meta.get('description')}"

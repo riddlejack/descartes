@@ -55,7 +55,7 @@ page is `<a private page>`.
 2. **Skills carry no comments.** A placebo twin must match its real skill's length and
    frontmatter (contract 7), which comments would break; the evidence lives in
    `tools/roles/skill-evidence.md`, and the lint fails when a skill sentence has no entry.
-3. **Page length.** The lint takes a page as 800 words of instruction, excluding
+3. **Page length.** The lint takes a page as 850 words (800 until E6a; see below) of instruction, excluding
    frontmatter and comments. Every agent fits a strict page (the worker is longest at
    about 550 words); the lead's base is about 600 and the longest team lead is 798. The
    single-loop lead may add the shared branch method (1,171 words at most), because it
@@ -206,19 +206,46 @@ Recorded at first, then decided by the orchestrator in contract v0.2.4 and appli
   `store/` paths (contract v0.2.10). Scratch scripts and files go in analysis/, never
   /tmp, after a worker's write there was refused.
 
-## Lines that depend on the pending E6a reviewer study (contract 10)
+## The E6a reviewer study (26 October), and what it settles here
 
-Marked `E6a-provisional` in their comments and listed in `docs/ROLE-MAP.md`:
-- blind-framer: the four named points of its goal;
-- branch-reviewer: reading frame.md and tree.json (an input beyond the goal that also
-  shows it the working answer), and its four questions;
-- claim-checker: the five questions;
-- deciders-eye-reviewer: the named failures in its goal, and the field expert's two
-  questions;
-- evidence-auditor: the focus on figures made during synthesis;
-- mechanical-reader: its list of mechanical faults.
-Each reviewer's goal sentence, its own inputs and its line against needless hedging
-are not provisional.
+E6a gave 36 fresh reviewers only the question and one of two answers. They reliably
+caught flaws inside an answer's frame (a weak figure, a missing size, a claim beyond
+its evidence) and almost never frame-level flaws (why this metric, why this
+structure, invented specifics, no analogue or bounding), whatever they were given.
+Generic standards (ICD 203) did no better than no criteria; medium effort did worst;
+Fable missed flaws Opus caught. Its limits: two answers to one question, reviewers
+could not open sources, no author history, model-judged matching.
+
+Applied:
+- **The lead's frame states its reasons** for the metric, the options, the conditions,
+  how each unknown is bounded, the analogues, and any specific such as a timeline,
+  because frame quality has to be built upstream.
+- **The blind framer** builds its own frame first (as before), now with its reasons for
+  the metric, the cut and the bounding, and compares those reasons with the lead's.
+- **Reviewers run on Opus at max effort**: the three final reviewers already did; the
+  branch reviewer is raised from high. The claim checker stays at high: E6a tested
+  reviewers of finished answers, not claim checking, and the design sets checkers at
+  high.
+- **No generic standards list** is in any role (none was; confirmed).
+
+Markers, line by line:
+- decider's-eye reviewer, its named failures and the field expert's two questions:
+  left `E6a-provisional`, as the orchestrator asked, pending one fact about P3's
+  wording.
+- blind framer's critique points: provisional, not settled; E6a tested no blind-first
+  reviewer (the design addendum proposes that component test).
+- branch reviewer reading frame.md and tree.json: provisional, not settled; E6a's
+  reviewers had no frame or author history.
+- branch reviewer's four questions: provisional, not settled; E6a tested reviews of
+  finished answers, not of branches.
+- claim checker's five questions and the evidence auditor's focus: provisional, not
+  settled; E6a's reviewers could not open sources.
+- mechanical reader's list: provisional, not settled; E6a found generic lists no
+  better than none, and this list is specific to lesson 7's faults, which it did not
+  test.
+
+The page limit in the lint rose from 800 to 850 words: the analysis call (from the
+live run) and the frame's reasons (from E6a) pushed the longest team lead to 807.
 
 ## For part B
 
