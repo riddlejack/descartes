@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling==1.32.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "stemma"
+version = "0.0.1"
+description = "A research system that works like a strong consulting team (working name Stemma 2)."
+requires-python = ">=3.12"
+dependencies = []
+
+# Each part pins its own dependencies in its own group, and edits no other group.
+[project.optional-dependencies]
+server = ["mcp==2.3.0"]   # part B wires the one MCP server
+evidence = []             # part A
+register = []             # part B
+driver = []               # part B
+dev = ["pytest==9.1.1", "ruff==0.17.2", "mypy==2.4.0"]
+
+[project.scripts]
+stemma-mcp = "stemma.mcp_server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stemma"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
