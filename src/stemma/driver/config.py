@@ -78,6 +78,8 @@ class Limits:
     max_check_attempts: int = 3
     # Resource limit: bytes of a session's stderr kept in an event when it fails.
     stderr_tail_bytes: int = 2000
+    # Recorded beside the numbers in run.json, so no reader takes them for a quality bar.
+    purpose: str = "resource limits only (time, sessions, bytes); never a quality bar"
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
