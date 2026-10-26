@@ -143,11 +143,11 @@ SWITCHES: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 # Resource limit: the design's "a page or less" for a standing role text (step 5),
 # taken as this many words of instruction, excluding frontmatter and comments: one
-# dense printed page. Raised from 800 on 26 October, when lines from the live run
-# (the analysis call) and from E6a (the frame's reasons) pushed the longest team
-# lead past it, and to 900 on 27 October for the autopsy's context and rounding
-# lines; a stricter page (500 to 600 words) fits every role but the lead.
-PAGE_WORDS = 900
+# dense printed page. Raised from 800 on 26 October for lines from the live run and
+# E6a; briefly 900, then brought back to 850 on 27 October by merging lead lines that
+# prevent overlapping failures (docs/notes/roles-skills.md lists each merge). A
+# stricter page (500 to 600 words) fits every role but the lead.
+PAGE_WORDS = 850
 
 # Resource limit: how far a placebo skill's body may differ in length from its real
 # twin's, as a fraction of the real body's characters (contract 7: "share length").

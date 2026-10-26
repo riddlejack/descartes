@@ -55,7 +55,7 @@ page is `<a private page>`.
 2. **Skills carry no comments.** A placebo twin must match its real skill's length and
    frontmatter (contract 7), which comments would break; the evidence lives in
    `tools/roles/skill-evidence.md`, and the lint fails when a skill sentence has no entry.
-3. **Page length.** The lint takes a page as 900 words (800 until E6a, 850 until the autopsy; see below) of instruction, excluding
+3. **Page length.** The lint takes a page as 850 words (800 until E6a; briefly 900 after the autopsy; see the consolidation below) of instruction, excluding
    frontmatter and comments. Every agent fits a strict page (the worker is longest at
    about 550 words); the lead's base is about 600 and the longest team lead is 798. The
    single-loop lead may add the shared branch method (1,171 words at most), because it
@@ -248,6 +248,32 @@ Recorded at first, then decided by the orchestrator in contract v0.2.4 and appli
   frame line and its reasons line were merged and the arrival line shortened; the
   longest team lead is still about 900 words, and the lint's page rose from 850 to
   900. The lead is now well over a strict page: a decision for the owner.
+- **Consolidation (27 October): the lead back under a page.** Each fix had added words
+  (the longest team lead reached 897). Lines that prevent overlapping failures were
+  merged; each merged line's comment carries every failure and every piece of
+  evidence of the lines it absorbed, so no failure tag was lost. The longest team lead
+  is now 842 words and the lint's page is back to 850. No other role changed length.
+  What moved, and where each failure now lives (all in `plugin/lead/`):
+  - intake: "write intake.md" and "fill any gap with a marked assumption" are one line
+    in base.md (failures: wrong question, wrong size, a blocked run, intake capping
+    research);
+  - the tree: "build the tree" and "give every condition and rival a branch" are one
+    line in base.md (topic trees, no home for unplanned reading, dropped knock-out
+    branches, nodes nothing can close). "An empty open lane needs nothing" was cut:
+    the gate no longer lists an empty lane (contract v0.3), so code prevents that
+    failure;
+  - reading: "read each branch record in full" and "work from your files and the
+    register" are one line in base.md (connections never made, a frame never revised,
+    a lead context of 400,000 to 980,000 tokens);
+  - checks: "a failed check is a reason to find a better figure" and "when a claim you
+    used is superseded" are one line in base.md (checks shrinking the answer, a
+    corrected figure left standing elsewhere);
+  - arrivals, waiting on the user, the derivation call and the release gate are each
+    one line as before, shortened without dropping a failure;
+  - team: "send new research to workers" and "keep working while workers run" are one
+    line in `s2_shape.team.md` (a lead researching inside its swollen context, an idle
+    lead);
+  - headings shortened: Framing, Branches, Drafting, Orders, Orientation.
 
 ## The E6a reviewer study (26 October), and what it settles here
 

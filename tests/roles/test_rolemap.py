@@ -199,8 +199,8 @@ def test_assembly_is_base_then_fragments_in_contract_order(rm: ModuleType) -> No
     }
     text = rm.assemble_lead(choice)
     assert text.startswith((rm.LEAD_DIR / "base.md").read_text())
-    assert text.index("## Dispatch") < text.index("## What orders carry")
-    assert text.index("## What orders carry") < text.index("## Before the first frame")
+    assert text.index("## Dispatch") < text.index("## Orders")
+    assert text.index("## Orders") < text.index("## Orientation")
     assert "stemma:method" not in text
 
 
@@ -279,7 +279,7 @@ def test_single_loop_loads_no_s3_fragment(rm: ModuleType) -> None:
         "s4_orientation": "frame_first",
         "s6_cross_family": "off",
     }
-    assert "## What orders carry" not in rm.assemble_lead(choice)
+    assert "## Orders" not in rm.assemble_lead(choice)
 
 
 def test_s3_with_single_loop_is_refused(rm: ModuleType) -> None:
