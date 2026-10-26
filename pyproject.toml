@@ -15,6 +15,8 @@ server = ["mcp==2.3.0"]   # part B wires the one MCP server
 evidence = []             # part A
 register = []             # part B
 driver = []               # part B
+datalayer = ["pg8000==1.31.5"]  # part D; BSD-3-Clause (deps MIT-0, MIT, BSD/Apache)
+providers = []            # part D (standard library only)
 dev = ["pytest==9.1.1", "ruff==0.17.2", "mypy==2.4.0"]
 
 [project.scripts]

@@ -1,0 +1,28 @@
+# The Postgres that holds the evidence-derived tables and that Zetaris registers as a
+# JDBC datasource (Zetaris cannot read a file on the laptop). PostgreSQL licence.
+# Start:  docker compose --env-file ~/.private/zetaris/stemma.env -f hackathon/zetaris/compose.yaml up -d
+# The env file lives outside the repo and holds STEMMA_PG_PASSWORD only.
+name: stemma-evidence
+services:
+  stemma-evidence-pg:
+    container_name: stemma-evidence-pg
+    # postgres 16.13, pinned by digest (the multi-arch index; runs natively on arm64).
+    image: postgres@sha256:71e27bf60b70bded003791b5573f8b808365613f341df20ffcf0c1ed7bc13ddf
+    environment:
+      POSTGRES_DB: stemma
+      POSTGRES_USER: stemma
+      POSTGRES_PASSWORD: ${STEMMA_PG_PASSWORD:?set STEMMA_PG_PASSWORD in the env file}
+    ports:
+      - "127.0.0.1:5544:5432"   # the host's sync writes here; never exposed beyond loopback
+    volumes:
+      - stemma-evidence-pg:/var/lib/postgresql/data
+    networks: [stemma-evidence]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stemma -d stemma"]
+      interval: 5s
+      retries: 20
+networks:
+  stemma-evidence:
+    name: stemma-evidence
+volumes:
+  stemma-evidence-pg:
