@@ -21,13 +21,15 @@ Settings (environment; names only in `.env.example`, values never in the repo):
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-from stemma.datalayer.engines import SqliteEngine, ZetarisEngine
-from stemma.datalayer.errors import DataLayerError
+from stemma.datalayer.engines import Engine, SqliteEngine, ZetarisEngine
+from stemma.datalayer.errors import DataLayerError, ValueMismatch
 from stemma.datalayer.export import ClaimSource, export_run, read_run
 from stemma.datalayer.querylog import QueryLog
 from stemma.datalayer.sinks import PostgresConfig, PostgresSink, SqliteSink
@@ -38,14 +40,19 @@ __all__ = ["DataLayerError", "InputMismatch", "Settings", "input_lookup", "query
            "sqlite_path", "sync", "values_backend"]
 
 DATALAYER_DIR = "datalayer"
+logger = logging.getLogger("stemma.datalayer")
+
+
+SQLITE_REL = Path(DATALAYER_DIR, "evidence.sqlite")
+LOG_REL = Path(DATALAYER_DIR, "queries.jsonl")
 
 
 def sqlite_path(run_dir: Path) -> Path:
-    return run_dir / DATALAYER_DIR / "evidence.sqlite"
+    return run_dir / SQLITE_REL
 
 
 def query_log(run_dir: Path) -> QueryLog:
-    return QueryLog(run_dir / DATALAYER_DIR / "queries.jsonl")
+    return QueryLog(LOG_REL, root=run_dir)
 
 
 @dataclass(frozen=True)
@@ -99,7 +106,7 @@ def sync(run_dir: Path, settings: Settings | None = None,
     export = export_run(run_dir, claims)
     for w in export.warnings:
         log.write(engine="export", purpose="warning", run_id=export.run_id, warning=w)
-    out = {"sqlite": SqliteSink(sqlite_path(run_dir), log).write(export)}
+    out = {"sqlite": SqliteSink(SQLITE_REL, log, root=run_dir).write(export)}
     if s.mode == "zetaris":
         assert s.postgres is not None  # logical invariant: checked in Settings.from_env
         out["postgres"] = PostgresSink(s.postgres, log).write(export)
@@ -112,7 +119,7 @@ def values_backend(run_dir: Path, settings: Settings | None = None
     s = settings or Settings.from_env()
     log = query_log(run_dir)
     run_id, _ = read_run(run_dir)
-    local = EvidenceValues(SqliteEngine(sqlite_path(run_dir), log), run_id)
+    local = EvidenceValues(SqliteEngine(SQLITE_REL, log, root=run_dir), run_id)
     if s.mode == "sqlite":
         return local
     assert s.zetaris is not None  # logical invariant: checked in Settings.from_env
@@ -122,6 +129,8 @@ def values_backend(run_dir: Path, settings: Settings | None = None
 
 
 InputLookup = Callable[[str], tuple[str, float]]
+Alert = Callable[[dict[str, Any]], None]
+UNAVAILABLE = "datalayer_unavailable"
 
 
 class InputMismatch(DataLayerError):
@@ -130,27 +139,62 @@ class InputMismatch(DataLayerError):
     code = "input_mismatch"
 
 
+def _bits(x: float) -> str:
+    return float(x).hex()
+
+
 def input_lookup(run_dir: Path, register_lookup: InputLookup,
-                 settings: Settings | None = None,
-                 claims: ClaimSource | None = None) -> InputLookup:
+                 settings: Settings | None = None, claims: ClaimSource | None = None,
+                 alert: Alert | None = None) -> InputLookup:
     """Part B's derivation-input lookup, with each number read through the data layer.
 
-    For `file_claim` re-runs, called in the MCP server process (outside the sandbox).
-    The register still resolves the id and owns the number; the data layer's copy is
-    what the re-run receives, and it must equal the register's exactly, or the lookup
-    fails loudly. So the numbers a script gets come from Zetaris queries, logged, and
-    can never differ from what was filed. The run is synced once, on the first input.
+    Used for `file_claim` re-runs in the MCP server process, outside the sandbox
+    (CONTRACTS section 5a). The register resolves the id and owns the number. The
+    number the re-run receives is the data layer's (a logged Zetaris query in Zetaris
+    mode); if it differs from the register's by a single bit, the lookup raises
+    `InputMismatch` and the claim is refused. If the data layer cannot answer
+    (Zetaris or Postgres unreachable, a failed sync or query), the register's own
+    number is used and `datalayer_unavailable` is raised loudly through `alert`
+    (the run's events, at merge) and the query log: the research path never stops
+    or changes for it. The run is synced once, on the first input.
     """
     s = settings or Settings.from_env()
-    state: dict[str, EvidenceValues | FallbackValues] = {}
+    log = query_log(run_dir)
+    state: dict[str, Any] = {}
+
+    def unavailable(cid: str, exc: Exception) -> None:
+        record = {"event": UNAVAILABLE, "claim_id": cid, "mode": s.mode,
+                  "error": f"{type(exc).__name__}: {exc}"}
+        log.write(engine="datalayer", purpose=UNAVAILABLE, level="loud", **record)
+        logger.error("%s", record)
+        if alert is not None:
+            alert(record)
+
+    def backend() -> EvidenceValues:
+        if "backend" not in state:
+            sync(run_dir, s, claims)
+            run_id, _ = read_run(run_dir)
+            if s.mode == "zetaris":
+                assert s.zetaris is not None  # logical invariant: checked in from_env
+                engine: Engine = ZetarisEngine(ZetarisClient(s.zetaris, log), s.namespace,
+                                               s.model)
+            else:
+                engine = SqliteEngine(SQLITE_REL, log, root=run_dir)
+            state["backend"] = EvidenceValues(engine, run_id)
+        b: EvidenceValues = state["backend"]
+        return b
 
     def lookup(given: str) -> tuple[str, float]:
         cid, filed = register_lookup(given)
-        if "backend" not in state:
-            sync(run_dir, s, claims)
-            state["backend"] = values_backend(run_dir, s)
-        served = state["backend"].values([cid])[cid]
-        if served != filed:
+        try:
+            served = backend().values([cid])[cid]
+        except ValueMismatch as exc:
+            raise InputMismatch(f"claim {cid[:12]}: the data layer's copy is not the "
+                                f"filed number ({exc.detail})") from exc
+        except DataLayerError as exc:
+            unavailable(cid, exc)
+            return cid, filed
+        if _bits(served) != _bits(filed):
             raise InputMismatch(f"claim {cid[:12]}: the data layer gives {served!r}, "
                                 f"the register {filed!r}")
         return cid, served

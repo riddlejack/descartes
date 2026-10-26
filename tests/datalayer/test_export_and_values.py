@@ -164,7 +164,7 @@ def test_sync_twice_changes_nothing(run_dir: Path, register: FakeRegister) -> No
 
 def test_every_query_is_logged(run_dir: Path, register: FakeRegister) -> None:
     _values(run_dir, register).values([C_REVENUE])
-    entries = [e for e in query_log(run_dir).path.read_text().splitlines()]  # type: ignore[union-attr]
+    entries = [e for e in query_log(run_dir).file.read_text().splitlines()]  # type: ignore[union-attr]
     assert any('"purpose": "sync"' in e for e in entries)
     q = [e for e in entries if '"purpose": "query"' in e]
     assert len(q) == 1 and C_REVENUE in q[0] and '"rows": 1' in q[0]

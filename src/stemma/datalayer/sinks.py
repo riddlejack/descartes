@@ -17,6 +17,7 @@ from stemma.datalayer import schema
 from stemma.datalayer.errors import SinkError
 from stemma.datalayer.export import Export, column_values
 from stemma.datalayer.querylog import QueryLog
+from stemma.datalayer.safepath import check_sqlite_file
 
 
 class Sink(Protocol):
@@ -28,13 +29,19 @@ class Sink(Protocol):
 class SqliteSink:
     name = "sqlite"
 
-    def __init__(self, path: Path, log: QueryLog) -> None:
-        self.path = path
+    def __init__(self, path: Path, log: QueryLog, root: Path | None = None) -> None:
+        self.path = path  # relative to `root` when given (host writes in a run folder)
+        self.root = root
         self.log = log
 
-    def connect(self) -> sqlite3.Connection:
+    def resolved(self) -> Path:
+        if self.root is not None:
+            return check_sqlite_file(self.root, self.path.as_posix())
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        con = sqlite3.connect(self.path, timeout=30)
+        return self.path
+
+    def connect(self) -> sqlite3.Connection:
+        con = sqlite3.connect(self.resolved(), timeout=30)
         for ddl in schema.sqlite_ddl():
             con.execute(ddl)
         return con

@@ -15,6 +15,7 @@ from typing import Any, Protocol
 
 from stemma.datalayer.errors import QueryError
 from stemma.datalayer.querylog import QueryLog
+from stemma.datalayer.safepath import check_sqlite_file
 from stemma.datalayer.zetaris import ZetarisClient
 
 
@@ -29,21 +30,28 @@ class Engine(Protocol):
 class SqliteEngine:
     name = "sqlite"
 
-    def __init__(self, path: Path, log: QueryLog) -> None:
-        self.path = path
+    def __init__(self, path: Path, log: QueryLog, root: Path | None = None) -> None:
+        self.path = path  # relative to `root` when given
+        self.root = root
         self.log = log
 
     def table(self, name: str) -> str:
-        return name
+        return f"main.{name}"
+
+    def resolved(self) -> Path:
+        if self.root is not None:
+            return check_sqlite_file(self.root, self.path.as_posix())
+        return self.path
 
     def query(self, sql: str, columns: Sequence[str]) -> list[tuple[Any, ...]]:
         start = time.monotonic()
-        if not self.path.is_file():
+        path = self.resolved()
+        if not path.is_file():
             self.log.write(engine=self.name, purpose="query", sql=sql, ok=False,
                            error="no SQLite file")
-            raise QueryError(f"no evidence tables at {self.path}; sync the run first")
+            raise QueryError(f"no evidence tables at {path}; sync the run first")
         try:
-            con = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True,
+            con = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True,
                                   timeout=30)
             try:
                 rows = [tuple(r) for r in con.execute(sql).fetchall()]

@@ -1,0 +1,104 @@
+"""Host writes into the run's tool-only `datalayer/` folder that no symlink can redirect.
+
+The MCP server runs outside the Bash sandbox, so every host write must be
+path-contained and follow no symlink (CONTRACTS section 6). The folder is walked from
+the run folder one component at a time with directory descriptors opened `O_NOFOLLOW`
+(the method of part B's `register/safeio.py`); log lines are appended through such a
+descriptor with the file itself opened `O_NOFOLLOW`. SQLite opens its own files by
+path, so before each connection the folder walk is repeated and the database file and
+its journals are checked not to be links; the folder is tool-only, so an agent cannot
+plant one between the check and the open.
+"""
+
+from __future__ import annotations
+
+import os
+import stat
+from pathlib import Path, PurePosixPath
+
+from stemma.datalayer.errors import DataLayerError
+
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+class UnsafePath(DataLayerError):
+    """A data-layer path goes through a symlink, or out of the run folder."""
+
+    code = "unsafe_path"
+
+
+def _parts(rel: str | PurePosixPath) -> list[str]:
+    p = PurePosixPath(rel)
+    parts = list(p.parts)
+    if p.is_absolute() or not parts or any(x in ("", ".", "..") for x in parts):
+        raise UnsafePath(f"{rel} is not a plain path inside the run folder")
+    return parts
+
+
+def _open_dir(root: Path, parts: list[str], create: bool) -> int:
+    fd = os.open(os.path.realpath(root), _DIR_FLAGS)
+    try:
+        for name in parts:
+            try:
+                nxt = os.open(name, _DIR_FLAGS, dir_fd=fd)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                try:
+                    os.mkdir(name, 0o755, dir_fd=fd)
+                except FileExistsError:
+                    pass  # another writer made it first; the open below checks what it is
+                try:
+                    nxt = os.open(name, _DIR_FLAGS, dir_fd=fd)
+                except OSError as exc:
+                    raise UnsafePath(f"{'/'.join(parts)}: {name} is not a plain folder") from exc
+            except OSError as exc:  # ELOOP or ENOTDIR: a link or a file in the way
+                raise UnsafePath(f"{'/'.join(parts)}: {name} is not a plain folder") from exc
+            os.close(fd)
+            fd = nxt
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def ensure_dir(root: Path, rel: str | PurePosixPath) -> Path:
+    """Create root/rel if needed, every component a real folder; return its path."""
+    os.close(_open_dir(root, _parts(rel), create=True))
+    return Path(os.path.realpath(root)).joinpath(*_parts(rel))
+
+
+def append_line(root: Path, rel: str | PurePosixPath, line: str) -> None:
+    parts = _parts(rel)
+    fd_dir = _open_dir(root, parts[:-1], create=True)
+    try:
+        try:
+            fd = os.open(parts[-1], os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
+                         0o644, dir_fd=fd_dir)
+        except OSError as exc:
+            raise UnsafePath(f"{rel} cannot be opened without following a link") from exc
+        try:
+            data = (line + "\n").encode("utf-8")
+            while data:
+                data = data[os.write(fd, data):]
+        finally:
+            os.close(fd)
+    finally:
+        os.close(fd_dir)
+
+
+def check_sqlite_file(root: Path, rel: str | PurePosixPath) -> Path:
+    """The SQLite file's path after checking the folders and the files are not links."""
+    parts = _parts(rel)
+    folder = ensure_dir(root, PurePosixPath(*parts[:-1])) if len(parts) > 1 else Path(
+        os.path.realpath(root))
+    path = folder / parts[-1]
+    for suffix in ("", "-journal", "-wal", "-shm"):
+        candidate = Path(str(path) + suffix)
+        try:
+            mode = os.lstat(candidate).st_mode
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(mode):
+            raise UnsafePath(f"{candidate.name} is not a plain file")
+    return path
