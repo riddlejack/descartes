@@ -1,4 +1,4 @@
-# Contracts between the parts (v0.2.7)
+# Contracts between the parts (v0.2.8)
 
 These are the interfaces the parts agree on, so they can be built in parallel. The
 design (`DESIGN-v1.md`, cited as "step n") says what the system does; this file says
@@ -299,6 +299,12 @@ Each guard has a producer in the live path, or it would block every run.
   from an argument the model wrote (verified feasible). Only a
   `stemma:claim-checker` session records claim verdicts; only a
   `stemma:branch-reviewer` session records branch verdicts.
+- **Every session reads only its own run.** Read is allowed only inside the run
+  folder and the run's plugin folder (a guard on Read, deny by default); Bash's
+  sandbox denies reads of the home folder, the repository and every other run, except
+  what the interpreter itself needs. So no role, checker or worker can read this
+  repository (test answer keys included), the design record, another run's store, or
+  anything else of the owner's. A test proves a checker cannot read each of these.
 - **Blind roles stay blind:** the claim checker cannot read `branches/*/record.md`,
   `order.md`, `frame.md` or drafts; the decider's-eye reviewer reads only `task/`,
   `intake.md` and the draft under review; the blind framer cannot read `frame.md`,
