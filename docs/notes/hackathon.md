@@ -278,3 +278,47 @@ no agent text reaches Zetaris; noted as an option, not built.
 Each run now has its own datasource and semantic layer in Zetaris instead of one shared
 model; the old shared reader role and public tables from earlier tests were dropped.
 Suite: 1017 passed, 5 skipped (Zetaris and web live tests); ruff and mypy clean.
+
+## Stage 3, without the recorded run yet (26 Oct)
+
+Branch `claude/part-d-stage3`, from main at 2afea16.
+- **`run.py`**, one entry point: `ask`, `status`, `logs`, `replay`, `conformance`, `record`;
+  with no arguments and `SAMPLE_MODE=true`, it replays the bundled sample. Runs from a
+  fresh clone without installing (it puts `src/` on the path).
+- **Replay** (`hackathon/replay.py`): a pack is copies of a finished run's readable files
+  plus a manifest of SHA-256 and sizes. Replay verifies every file (changed, missing,
+  unlisted and path-escaping files are typed errors), copies them into a fresh folder and
+  writes `REPLAY.json` labelling each item `replay` with its hash. Lines appended later (a
+  live query in a replayed log) are labelled live; a replayed file whose recorded bytes
+  changed is an error, never relabelled.
+- **The judge's log** (`hackathon/judgelog.py`): models behind each request, World Model
+  transactions and register calls, every data-layer query, the answer, each line
+  `[replay sha:...]` or `[live]`, with a header that says REPLAY when it is one.
+- **Live in sample mode** (`hackathon/sample.py`): the conformance suite (8/8, shown) and
+  the data layer over the replayed evidence.
+- **Dockerfile** (`python:3.12.13-slim-bookworm` with Node 24.14.1 copied from its image):
+  built here; in the container the conformance suite passes 8/8 and a mounted pack replays
+  with the same labels. `.dockerignore` keeps `.env`, `.venv`, `.git` and runs out.
+- Not done: the bundled sample pack (waits for B's walking-skeleton run folder);
+  Nightshift receipts appear in the log only once something calls Nightshift (stage 2).
+
+### Review of fd048fd, fixed by principle
+1. **Replay is the default label; live is never inferred.** A line read from a file is
+   `replay sha:` (replayed bytes), `recorded sha:` (a folder without a marker, such as a
+   pack's own files) or `appended after replay`; only steps this process ran and recorded
+   as it ran are `[live]`. Paths are canonicalised before every lookup; a manifest path
+   that is not already canonical (`./x`, `a//b`, `a/./b`) is refused.
+2. **Manifest fields are hostile identifiers:** the run id must be a plain identifier,
+   and every destination is checked to stay inside its folder after resolution
+   (`x/../../outside` and four other forms tested).
+3. **No env file enters the image:** `.dockerignore` drops `.env` files at any depth
+   (`**/.env`, `**/.env.*`, `**/*.env`, keeping `.env.example`), and the Dockerfile copies
+   only named paths. Shown: canaries planted at four depths are absent from the built image.
+4. **Recording refuses every credential form**, with a test per form: `KEY=value`,
+   `export ...TOKEN=`, YAML `PASSWORD:`, JSON `"api_key": "..."`, a SQL `password "..."`
+   option, bearer headers, and known key formats (Anthropic, OpenAI, NVIDIA, GitHub, Slack,
+   AWS, private keys). Masked values (`***`, `<set>`), numeric token counts and ordinary
+   words record. Verification refuses a pack that carries one.
+5. **Kept:** `datalayer/providers.jsonl` (the Nightshift receipts) is recorded and shown;
+   each conformance run is saved (in the replay folder and under `runs/conformance/`), and
+   a log written later shows the saved result labelled `recorded <time> sha:`.
