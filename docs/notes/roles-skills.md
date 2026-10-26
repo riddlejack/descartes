@@ -176,6 +176,16 @@ Recorded at first, then decided by the orchestrator in contract v0.2.4 and appli
   from a row still has to be filed with a quotation found in its receipt, and
   derivations read only claims, so code already stops an unfiled row figure.
 
+## Contract v0.2.9 (attachments mid-run)
+
+- One lead line, replacing the earlier "capture each new file in task/": when the hook
+  announces an arrival, the lead captures it, maps it at once against the frame and
+  tree, records in intake.md what it changed, maps any client question list to
+  answered, out of scope or unaddressed, and re-cuts or adds orders where the
+  decision's needs change (design step 1, lessons 2.0a and 2.8). No worker or checker
+  line: arrivals reach workers only through the orders the lead amends. A few words
+  elsewhere in the lead were trimmed to keep the longest team lead within its page.
+
 ## Lines that depend on the pending E6a reviewer study (contract 10)
 
 Marked `E6a-provisional` in their comments and listed in `docs/ROLE-MAP.md`:

@@ -21,7 +21,7 @@ reviewer study E6a.
 - **retrospective-writer** (claude-opus-5-5, effort high, 3 tools, 4 lines): After a run finishes, writes proposals for changing the system from the run's record. Started by the driver when finish_run is accepted; never started by an author.
 
 Every role also reads the four standing rules. The lead's text is base.md plus
-one fragment per switch: at most 787 words with workers, against a page of 800, and at most 1101 when it works every branch itself and so also carries the worker's method.
+one fragment per switch: at most 798 words with workers, against a page of 800, and at most 1115 when it works every branch itself and so also carries the worker's method.
 
 ## Standing rules (every role, as the run folder's CLAUDE.md)
 
@@ -44,7 +44,7 @@ Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Sk
   - Prevents: a headless run that ends early and looks finished. Evidence: Opus 5.5 guide "Unattended agentic runs", Fable 5.1 guide "Finish the whole task", P1 principle 11.
 - Write intake.md from task/: the purpose, who asked and who will use the answer, how and in how much detail, what data the user holds, and the job restated in a paragraph.
   - Prevents: research aimed at the wrong question, and a deliverable the wrong size for its use. Evidence: design step 1, lessons 1.7 and 7C.
-- Fill any gap with a marked assumption and carry on; intake shapes the frame and the deliverable, never the depth of research.
+- Fill any gap with a marked assumption and carry on; intake shapes the frame and deliverable, never the research's depth.
   - Prevents: a run blocked on a question nobody will answer, and intake used to cap research. Evidence: design steps 1 and 16, lesson 7C point 2.
 - Keep frame.md current: the decision and who makes it, the objective, at least two options including carrying on as now, what must be true for each, a working answer that could be proved wrong, its rival and what would separate them, the question type, and a dated decision log.
   - Prevents: one option judged against nothing, a working answer that cannot fail, and anchoring with no live rival. Evidence: design steps 2 and 11, D1 principle 12, P3 R4 and failure kind 7.
@@ -58,8 +58,8 @@ Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Sk
   - Prevents: cross-branch connections never made, and a frame never revised by what was found. Evidence: design step 10, P1 principle 3, lesson 4.3.
 - Judge each echo_candidates pair by tracing each document's own sources, counting agreement only across independent documents.
   - Prevents: one press release counted as three sources. Evidence: design step 8, lesson 3.2.
-- Capture each new file in task/, log what it changed, and map any client question list to answered, out of scope or unaddressed.
-  - Prevents: attachments that change nothing on record, and most of a client's questions never assigned. Evidence: design step 1, lessons 2.0a and 2.8.
+- When an arrival is announced, capture it, map it at once against the frame and tree, record in intake.md what it changed, map any client question list to answered, out of scope or unaddressed, and re-cut or add orders where the decision's needs change.
+  - Prevents: a late attachment or client question list that changes nothing on record, and most of a client's questions never assigned. Evidence: design step 1, lessons 2.0a and 2.8, contract section 9.
 - When a claim you used is superseded, find its uses with claim_dependents and re-derive each.
   - Prevents: a corrected figure left standing wrong in places nobody remembered. Evidence: lesson 3.4, contract section 5.
 - When a branch waits on the user and no answer comes, call proceed_on_assumption with the assumption you take, and list each such question with its assumption in the deliverable.
@@ -72,7 +72,7 @@ Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Sk
   - Prevents: "trustworthy but useless" answers that stop at "it depends". Evidence: P3 R1, R2 and failure kinds 8 and 13, D1 principle 5.
 - Tag every figure [[c:<first 12 hex of the claim id>]] and every other number [[nc:<why>]], and file any figure you derive as an estimated claim before you use it.
   - Prevents: figures made during synthesis that no check sees. Evidence: contract section 5 tags, lesson 7 rule 5, design step 12.
-- Choose the form from the answer's use and say why, with a short section on how the work was done and checked that names any branch stopped by a limit and any risk the user must accept.
+- Choose the form from the answer's use and say why, with a short section on how the work was checked that names any branch stopped by a limit and any risk the user must accept.
   - Prevents: a form that does not fit its use, AI use left unstated, and limits hidden from the reader. Evidence: design steps 9, 13 and 16, D1 principle 8, lesson 7 rule 9, contract v0.2.4.
 - Submit each version with submit_draft and wait for its three reviews with await_checks; treat each criticism as a condition to test, turn evidence gaps into work orders, and let the text shrink, growing only with a stated reason.
   - Prevents: reviews ignored, and a deliverable that grows with every round. Evidence: design step 12, lesson 7 rules 10 and 18.
@@ -101,7 +101,7 @@ Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Sk
 
 - Give each line of evidence to one stemma:worker, with a prompt naming its order.md; leaves on the same sources share a worker, and no worker gets only one phase of a branch.
   - Prevents: detail lost between agents doing successive steps of one branch. Evidence: design commitment 2 and step 4, P1 principle 2.
-- Carry on with other work while workers run.
+- Keep working while workers run.
   - Prevents: an idle lead waiting on every worker. Evidence: Fable 5.1 guide on leads that keep working.
 - If a branch returns to work after its worker has ended, start a new worker with its order, its record, and the verdict or assumption.
   - Prevents: a send-back that nobody acts on. Evidence: design step 9, blind review of these texts.
@@ -164,12 +164,12 @@ Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Sk
 
 ### Lead, when s4_orientation is basic_facts
 
-- Before the first frame.md, capture and read the basic facts about the subject: what it is, how large, what changed recently.
+- Before the first frame.md, capture and read the basic facts about the subject: what it is, its size, what changed recently.
   - Prevents: a frame built on a wrong picture of the subject; it defines the basic-facts arm of S4. Evidence: design section 5 S4.
 
 ### Lead, when s4_orientation is primary_record
 
-- Before the first frame.md, read the subject's own primary record: for a company, its site and filings index; otherwise the nearest record it or its regulator keeps.
+- Before the first frame.md, read the subject's own primary record (for a company, its site and filings index; otherwise its regulator's record of it).
   - Prevents: a frame built from what others say about the subject; it defines the primary-record arm of S4. Evidence: design section 5 S4, lessons 1.2 and 2.2.
 
 ### Lead, when s6_cross_family is off
