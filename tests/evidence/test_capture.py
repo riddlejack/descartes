@@ -149,7 +149,8 @@ def test_reason_required(make_service: Factory) -> None:
 
 
 def test_capture_file_pdf(make_service: Factory, run_dir: Path) -> None:
-    pdf = make_pdf([["Client data pack", "Churn was 3.1% a month"]])
+    pdf = make_pdf([["Client data pack", "Churn was 3.1% a month across the invented base",
+                     "of subscribers, measured over the twelve months of the year."]])
     (run_dir / "task" / "attachments" / "pack.pdf").write_bytes(pdf)
     r = make_service().capture_file("task/attachments/pack.pdf", "user's data pack")
     assert r["status"] == "ok" and r["kind"] == "file"

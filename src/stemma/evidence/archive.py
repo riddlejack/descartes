@@ -54,9 +54,15 @@ def as_of_cutoff(as_of: str) -> datetime:
     return datetime(day.year, day.month, day.day, tzinfo=UTC)
 
 
-def _timestamp_time(stamp: str) -> datetime:
-    padded = (stamp + "00000101000000"[len(stamp):]) if len(stamp) < 14 else stamp[:14]
-    return datetime.strptime(padded, "%Y%m%d%H%M%S").replace(tzinfo=UTC)
+def _timestamp_time(stamp: str) -> datetime | None:
+    """A full 14-digit Wayback timestamp as a time, or None. A shorter one ("2025")
+    names a whole range that may run past as_of, so it is never accepted."""
+    if not re.fullmatch(r"\d{14}", stamp):
+        return None
+    try:
+        return datetime.strptime(stamp, "%Y%m%d%H%M%S").replace(tzinfo=UTC)
+    except ValueError:
+        return None
 
 
 def cdx_query_url(url: str, as_of: str) -> str:
@@ -111,9 +117,8 @@ class Archive:
             if not isinstance(row, list) or len(row) < 2:
                 continue
             stamp, original = str(row[0]), str(row[1])
-            if not re.fullmatch(r"\d{14}", stamp):
-                continue
-            if _timestamp_time(stamp) < cutoff:
+            when = _timestamp_time(stamp)
+            if when is not None and when < cutoff:
                 candidates.append(Snapshot(stamp, original))
         if not candidates:
             return None, CaptureStatus.NO_SNAPSHOT_BEFORE_AS_OF, "no listed capture is before as_of"
@@ -131,13 +136,16 @@ class Archive:
         record["snapshot_url"] = snapshot_url(snap)
         cutoff = as_of_cutoff(as_of)
         # A fact, not a judgment: how far before as_of the copy is. "Before" can be years.
-        record["snapshot_age_days"] = (cutoff - _timestamp_time(snap.timestamp)).days
+        taken = _timestamp_time(snap.timestamp)
+        assert taken is not None  # candidates were filtered on a valid timestamp
+        record["snapshot_age_days"] = (cutoff - taken).days
 
         def hop_check(hop: Url) -> str | None:
             match = _WAYBACK_HOP.match(hop.url)
             if match is None:
                 return f"archive redirect left the archive: {hop.url}"
-            if _timestamp_time(match.group(1)) >= cutoff:
+            when = _timestamp_time(match.group(1))
+            if when is None or when >= cutoff:
                 return f"archive redirected to a capture dated {match.group(1)}, not before as_of"
             return None
 
@@ -155,6 +163,8 @@ class Archive:
                     when = parsedate_to_datetime(memento)
                 except (TypeError, ValueError):
                     when = None
+                if when is not None and when.tzinfo is None:
+                    when = when.replace(tzinfo=UTC)  # HTTP dates are GMT
                 if when is None or when >= cutoff:
                     return ArchiveOutcome(
                         fetched, CaptureStatus.NO_SNAPSHOT_BEFORE_AS_OF,

@@ -74,6 +74,8 @@ class CaptureStatus(StrEnum):
     PATH_OUTSIDE_TASK = "path_outside_task"
     # `capture_file`: no such file.
     FILE_NOT_FOUND = "file_not_found"
+    # `capture_file`: the file exists but cannot be opened or read.
+    FILE_UNREADABLE = "file_unreadable"
 
 
 # Invariant: the statuses whose receipt carries stored text that may be read,

@@ -68,13 +68,13 @@ def new_receipt_id() -> str:
 
 
 def check_sha256(value: str) -> str:
-    if not isinstance(value, str) or not SHA256_RE.match(value):
+    if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
         raise EvidenceError("bad_sha256", "expected 64 lower-case hex characters")
     return value
 
 
 def check_receipt_id(value: str) -> str:
-    if not isinstance(value, str) or not RECEIPT_ID_RE.match(value):
+    if not isinstance(value, str) or not RECEIPT_ID_RE.fullmatch(value):
         raise EvidenceError("bad_receipt_id", "not a receipt id this store issues")
     return value
 
@@ -169,12 +169,27 @@ class Store:
     def text_rel_path(self, sha: str) -> str:
         return f"store/text/{sha}.txt"
 
-    def put_text(self, sha: str, text: str, outline: list[dict[str, Any]]) -> None:
+    def put_text(self, sha: str, text: str, outline: list[dict[str, Any]],
+                 record: dict[str, Any]) -> None:
+        """Write the text, its outline and the record of how it was extracted. The
+        record goes last, so its presence means the other two are complete."""
         _write_once(self.text_dir / f"{sha}.txt", text.encode("utf-8"))
         _write_once(
             self.text_dir / f"{sha}.outline.json",
             json.dumps(outline, ensure_ascii=False, sort_keys=True).encode("utf-8"),
         )
+        _write_once(
+            self.text_dir / f"{sha}.extraction.json",
+            json.dumps(record, ensure_ascii=False, sort_keys=True).encode("utf-8"),
+        )
+
+    def get_extraction(self, sha: str) -> dict[str, Any] | None:
+        """How the stored text of these bytes was made, or None if never extracted."""
+        path = self.text_dir / f"{check_sha256(sha)}.extraction.json"
+        if not path.exists():
+            return None
+        loaded: dict[str, Any] = json.loads(path.read_text("utf-8"))
+        return loaded
 
     def has_text(self, sha: str) -> bool:
         return (self.text_dir / f"{check_sha256(sha)}.txt").exists()
@@ -196,7 +211,10 @@ class Store:
 
     def put_receipt(self, receipt: dict[str, Any]) -> None:
         receipt_id = check_receipt_id(receipt["receipt_id"])
-        data = json.dumps(receipt, ensure_ascii=False, indent=1, sort_keys=True).encode("utf-8")
+        try:
+            data = json.dumps(receipt, ensure_ascii=False, indent=1, sort_keys=True).encode()
+        except UnicodeEncodeError:  # a lone surrogate from agent input: escape it
+            data = json.dumps(receipt, ensure_ascii=True, indent=1, sort_keys=True).encode()
         if not _write_once(self.receipts_dir / f"{receipt_id}.json", data):
             raise EvidenceError("store_corrupt", f"receipt {receipt_id} written twice")
         with self._db() as db:

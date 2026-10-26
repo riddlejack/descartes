@@ -11,7 +11,7 @@ from __future__ import annotations
 import ipaddress
 import re
 from dataclasses import dataclass
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
 from stemma.evidence.limits import ALLOWED_PORTS
 
@@ -58,12 +58,20 @@ _CONTROL = re.compile(r"[\x00-\x20\x7f]")
 _NUMERIC_LOOKING = re.compile(r"^(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]*|[0-9]*))*\.?$", re.IGNORECASE)
 
 
+# Invariant: characters left as they are when percent-encoding a path or query.
+_SAFE = "/%:@!$&'()*+,;=-._~"
+
+
 def parse_url(raw: str) -> Url:
     """Parse and check spelling. Raises `InvalidUrl` or `PolicyRefusal`."""
     if not isinstance(raw, str) or not raw:
         raise InvalidUrl("empty URL")
     if _CONTROL.search(raw):
         raise InvalidUrl("URL contains whitespace or control characters")
+    try:
+        raw.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise InvalidUrl("URL is not valid Unicode text") from exc
     try:
         parts = urlsplit(raw)
         port_value = parts.port
@@ -86,19 +94,22 @@ def parse_url(raw: str) -> Url:
         raise PolicyRefusal("ambiguous_numeric_host", f"host {host!r}")
     if literal is None:
         try:
-            host.encode("idna")
+            host = host.encode("idna").decode("ascii")
         except UnicodeError as exc:
             raise InvalidUrl(f"host {host!r} is not a valid name") from exc
     if literal is not None:
         reason = blocked_address_reason(literal)
         if reason is not None:
             raise PolicyRefusal(reason, f"address {literal}")
-    path = parts.path or "/"
-    path_and_query = path + (f"?{parts.query}" if parts.query else "")
+    # Non-ASCII in the path or query goes on the wire percent-encoded as UTF-8;
+    # existing escapes and reserved characters are left as they are.
+    path = quote(parts.path or "/", safe=_SAFE)
+    query = quote(parts.query, safe=_SAFE + "?")
+    path_and_query = path + (f"?{query}" if query else "")
     netloc_host = f"[{host}]" if ":" in host else host
     default = 443 if scheme == "https" else 80
     netloc = netloc_host if port == default else f"{netloc_host}:{port}"
-    canonical = urlunsplit((scheme, netloc, path, parts.query, ""))
+    canonical = urlunsplit((scheme, netloc, path, query, ""))
     return Url(scheme, host, port, path_and_query, canonical)
 
 
@@ -141,6 +152,8 @@ def blocked_address_reason(address: str) -> str | None:
             return "loopback_address"
         if item.is_link_local:
             return "link_local_address"
+        if isinstance(item, ipaddress.IPv6Address) and item.is_site_local:
+            return "site_local_address"
         if item.is_multicast:
             return "multicast_address"
         if item.is_reserved:

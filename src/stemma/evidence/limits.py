@@ -39,6 +39,10 @@ SHORT_TEXT_RATIO_MIN_BYTES = 50_000
 # ... whose text is a smaller share of its bytes than this is marked `short_text`.
 SHORT_TEXT_MIN_RATIO = 0.005
 
+# Extraction sanity flag: a PDF averaging fewer text characters a page than this is
+# marked `short_text` (its pages may be scanned images). Text is kept whole.
+PDF_MIN_CHARS_PER_PAGE = 100
+
 # Resource limit: code points returned by one `read` or `read_section` call.
 READ_MAX_CHARS = 20_000
 # Resource limit: outline entries carried on a receipt (the `outline` tool returns more).

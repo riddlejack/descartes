@@ -58,19 +58,19 @@ class SecBackend(Protocol):
 
 
 def check_accession(accession: str) -> str:
-    if not isinstance(accession, str) or not ACCESSION_RE.match(accession):
+    if not isinstance(accession, str) or not ACCESSION_RE.fullmatch(accession):
         raise EvidenceError("bad_accession", "expected an accession like 0000320193-25-000079")
     return accession
 
 
 def check_document(document: str) -> str:
-    if not _DOCUMENT_RE.match(document) or ".." in document:
+    if not isinstance(document, str) or not _DOCUMENT_RE.fullmatch(document) or ".." in document:
         raise EvidenceError("bad_document", "a document is a file name inside the filing")
     return document
 
 
 def parse_concept(concept: str) -> tuple[str, str]:
-    match = _CONCEPT_RE.match(concept or "")
+    match = _CONCEPT_RE.fullmatch(concept or "")
     if match is None:
         raise EvidenceError("bad_concept", "expected a concept like us-gaap:Revenues")
     return (match.group(1) or "us-gaap"), match.group(2)

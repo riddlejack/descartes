@@ -75,14 +75,18 @@ def test_short_page_is_loud_but_kept() -> None:
 
 
 def test_pdf_pages_and_offsets() -> None:
-    pdf = make_pdf([["Annual report of Invented Co", "Revenue rose to 1,204.5 million"],
-                    ["Second page (with parens)"]])
+    pdf = make_pdf([["Annual report of Invented Co", "Revenue rose to 1,204.5 million",
+                     "Further invented commentary on the year, kept for length."],
+                    ["Second page (with parens) and more invented text for its length.",
+                     "A last invented line on the second page, also kept for length."]])
     result = extract(pdf, "application/octet-stream")  # a mislabelled PDF is still a PDF
     assert result.status is CaptureStatus.OK and result.pages == 2
     text = result.text or ""
     assert "1,204.5 million" in text and "(with parens)" in text
     p1, p2 = result.outline
-    assert p1["anchor"] == "p1" and text[p2["start"]:p2["end"]] == "Second page (with parens)"
+    assert p1["anchor"] == "p1" and text[p2["start"]:p2["end"]] == (
+        "Second page (with parens) and more invented text for its length.\n"
+        "A last invented line on the second page, also kept for length.")
     assert result.extractor["name"] == "pypdfium2"
 
 
@@ -90,6 +94,13 @@ def test_pdf_without_text_layer_is_loud() -> None:
     result = extract(make_pdf([[]]), "application/pdf")
     assert result.status is CaptureStatus.EMPTY_TEXT
     assert any("no_text_layer" in w for w in result.warnings)
+
+
+def test_scanned_looking_pdf_is_loud() -> None:
+    # 40 pages holding only page numbers: text kept, but marked short.
+    result = extract(make_pdf([[f"Page {n}"] for n in range(1, 41)]), "application/pdf")
+    assert result.status is CaptureStatus.SHORT_TEXT and "Page 40" in (result.text or "")
+    assert any("scanned" in w for w in result.warnings)
 
 
 def test_broken_pdf_is_typed() -> None:

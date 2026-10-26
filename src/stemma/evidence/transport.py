@@ -128,7 +128,7 @@ class StdlibTransport:
         except (ConnectionError, OSError) as exc:
             conn.close()
             raise TransportFailure("connect_failed", str(exc)) from exc
-        except http.client.HTTPException as exc:
+        except (http.client.HTTPException, UnicodeError, ValueError) as exc:
             conn.close()
             raise TransportFailure("protocol_error", str(exc)) from exc
 

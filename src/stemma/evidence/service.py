@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import os
+import stat
+import time
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -34,6 +36,8 @@ from stemma.evidence.store import Store, check_sha256, new_receipt_id, utc_now
 from stemma.evidence.transport import StdlibTransport, Transport
 
 _UNSET: Any = object()
+# Resource limit: 50 ms steps a writer waits for a concurrent writer's extraction record.
+_EXTRACTION_WAIT_STEPS = 40
 
 
 def _http_failure(status: int) -> CaptureStatus:
@@ -44,6 +48,11 @@ def _http_failure(status: int) -> CaptureStatus:
     if status == 429:
         return CaptureStatus.RATE_LIMITED
     return CaptureStatus.HTTP_ERROR
+
+
+def _printable(value: object) -> str:
+    """Agent-supplied text made safe to write into a UTF-8 receipt."""
+    return str(value).encode("utf-8", "replace").decode("utf-8")[:2000]
 
 
 def _check_date(value: str | None, name: str) -> str | None:
@@ -116,7 +125,7 @@ class EvidenceService:
             "receipt_id": new_receipt_id(),
             "created_at": utc_now(),
             "kind": kind,
-            "reason": reason.strip()[:2000],
+            "reason": _printable(reason.strip()),
             "as_of": self.as_of,
             "status": None,
             "detail": None,
@@ -159,6 +168,10 @@ class EvidenceService:
 
     def _extract_into(self, receipt: dict[str, Any], sha: str, body: bytes,
                       declared_type: str | None, name_hint: str) -> None:
+        earlier = self.store.get_extraction(sha)
+        if earlier is not None:
+            self._reuse_extraction(receipt, sha, earlier)
+            return
         result = extract(body, declared_type, name_hint)
         receipt["status"] = result.status
         receipt["content_type"] = result.content_type
@@ -171,7 +184,22 @@ class EvidenceService:
         if result.text is not None and result.status in (
             CaptureStatus.OK, CaptureStatus.SHORT_TEXT, CaptureStatus.EMPTY_TEXT
         ):
-            self.store.put_text(sha, result.text, result.outline)
+            try:
+                self.store.put_text(sha, result.text, result.outline, {
+                    "receipt_id": receipt["receipt_id"], "status": str(result.status),
+                    "content_type": result.content_type, "charset": result.charset,
+                    "extractor": result.extractor or None, "pages": result.pages,
+                    "detail": result.detail, "warnings": list(result.warnings),
+                })
+            except EvidenceError as exc:
+                # A concurrent writer extracted the same bytes differently first.
+                if exc.code != "store_corrupt":
+                    raise
+                earlier = self._await_extraction(sha)
+                receipt["warnings"] = [w for w in receipt["warnings"]
+                                       if w not in result.warnings]
+                self._reuse_extraction(receipt, sha, earlier)
+                return
             receipt["text_path"] = self.store.text_rel_path(sha)
             receipt["text_chars"] = len(result.text)
             receipt["outline"] = result.outline[: limits.RECEIPT_OUTLINE_MAX]
@@ -179,6 +207,28 @@ class EvidenceService:
             if result.text:
                 self.store.index_document(sha, result.text, result.content_type,
                                           receipt["receipt_id"])
+
+    def _await_extraction(self, sha: str) -> dict[str, Any]:
+        for _ in range(_EXTRACTION_WAIT_STEPS):
+            earlier = self.store.get_extraction(sha)
+            if earlier is not None:
+                return earlier
+            time.sleep(0.05)
+        raise EvidenceError("store_corrupt", f"stored text for {sha} conflicts and has no record")
+
+    def _reuse_extraction(self, receipt: dict[str, Any], sha: str,
+                          earlier: dict[str, Any]) -> None:
+        """One stored text per set of bytes: the first extraction stands, even if the
+        same bytes later arrive under another content type or charset."""
+        for key in ("status", "content_type", "charset", "extractor", "pages", "detail"):
+            receipt[key] = earlier[key]
+        receipt["warnings"].extend(earlier["warnings"])
+        receipt["warnings"].append(f"text_reused_from_receipt {earlier['receipt_id']} (same bytes)")
+        outline = self.store.get_outline(sha)
+        receipt["text_path"] = self.store.text_rel_path(sha)
+        receipt["text_chars"] = len(self.store.get_text(sha))
+        receipt["outline"] = outline[: limits.RECEIPT_OUTLINE_MAX]
+        receipt["outline_truncated"] = len(outline) > limits.RECEIPT_OUTLINE_MAX
 
     @staticmethod
     def _http_record(fetched: FetchResult) -> dict[str, Any]:
@@ -262,7 +312,7 @@ class EvidenceService:
         as_of = self.as_of
         kind = "archive" if as_of else "web"
         receipt = self._base_receipt(kind, reason)
-        receipt["requested_url"] = url
+        receipt["requested_url"] = _printable(url)
 
         def do_fetch() -> tuple[FetchResult | None, dict[str, Any] | None,
                                 CaptureStatus | None, str | None]:
@@ -315,28 +365,53 @@ class EvidenceService:
     def capture_file(self, path: str, reason: str) -> dict[str, Any]:
         """Capture one of the user's attachments, which live under the run's `task/`."""
         receipt = self._base_receipt("file", reason)
-        receipt["requested_path"] = path
+        receipt["requested_path"] = _printable(path)
+
+        def refuse(status: CaptureStatus, detail: str) -> dict[str, Any]:
+            receipt["status"] = status
+            receipt["detail"] = detail
+            return self._finish(receipt, None, None)
+
         task_dir = (self.run_dir / "task").resolve()
-        candidate = Path(path)
-        if not candidate.is_absolute():
-            candidate = self.run_dir / candidate
-        resolved = candidate.resolve()
+        try:
+            if not isinstance(path, str) or "\x00" in path:
+                raise ValueError("path holds a NUL character")
+            path.encode("utf-8")
+            candidate = Path(path)
+            if not candidate.is_absolute():
+                candidate = self.run_dir / candidate
+            resolved = candidate.resolve(strict=False)
+        except (ValueError, UnicodeError, RuntimeError, OSError) as exc:
+            return refuse(CaptureStatus.PATH_OUTSIDE_TASK, f"path not usable: {exc}")
         if not resolved.is_relative_to(task_dir):
-            receipt["status"] = CaptureStatus.PATH_OUTSIDE_TASK
-            receipt["detail"] = "attachments are read only from the run's task/ folder"
-            return self._finish(receipt, None, None)
-        if not resolved.is_file():
-            receipt["status"] = CaptureStatus.FILE_NOT_FOUND
-            receipt["detail"] = "no such file under task/"
-            return self._finish(receipt, None, None)
-        size = resolved.stat().st_size
-        if size > limits.MAX_BODY_BYTES:
-            receipt["status"] = CaptureStatus.TOO_LARGE
-            receipt["detail"] = f"{size} bytes over limit {limits.MAX_BODY_BYTES}"
-            return self._finish(receipt, None, None)
+            return refuse(CaptureStatus.PATH_OUTSIDE_TASK,
+                          "attachments are read only from the run's task/ folder")
+        try:
+            fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            return refuse(CaptureStatus.FILE_NOT_FOUND, "no such file under task/")
+        except OSError as exc:
+            return refuse(CaptureStatus.FILE_UNREADABLE, f"cannot open: {exc.strerror}")
+        with os.fdopen(fd, "rb") as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                return refuse(CaptureStatus.FILE_NOT_FOUND, "not a regular file under task/")
+            if info.st_nlink > 1:
+                # A hard link can name a file whose other name is outside task/.
+                return refuse(CaptureStatus.PATH_OUTSIDE_TASK,
+                              "file has other hard links; copy it into task/ instead")
+            if info.st_size > limits.MAX_BODY_BYTES:
+                return refuse(CaptureStatus.TOO_LARGE,
+                              f"{info.st_size} bytes over limit {limits.MAX_BODY_BYTES}")
+            try:
+                body = handle.read(limits.MAX_BODY_BYTES + 1)
+            except OSError as exc:
+                return refuse(CaptureStatus.FILE_UNREADABLE, f"cannot read: {exc.strerror}")
+        if len(body) > limits.MAX_BODY_BYTES:
+            return refuse(CaptureStatus.TOO_LARGE, f"over limit {limits.MAX_BODY_BYTES}")
         receipt["source_path"] = str(resolved.relative_to(self.run_dir))
         receipt["fetched_at"] = utc_now()
-        return self._finish(receipt, resolved.read_bytes(), None, name_hint=resolved.name)
+        return self._finish(receipt, body, None, name_hint=resolved.name)
 
     # SEC -----------------------------------------------------------------------------
 
@@ -447,6 +522,11 @@ class EvidenceService:
         facts = [f for f in facts_from_concept_json(data)
                  if (before is None or str(f["filed"]) < before)
                  and (form is None or f["form"] == form)]
+        if before is not None:
+            # SEC re-assigns `frame` to the latest filing for a period, so it can
+            # point at a filing after the cutoff. It is dropped from dated answers.
+            for fact in facts:
+                fact.pop("frame", None)
         truncated = len(facts) > limits.SEC_FACTS_MAX
         facts = facts[-limits.SEC_FACTS_MAX:]
         known = {f.accession: f for f in backend.filings(ref.cik, None)}
@@ -524,6 +604,12 @@ class EvidenceService:
             check_sha256(sha256)
         if not isinstance(query, str) or not query.strip():
             raise EvidenceError("bad_query", "the query is empty")
+        if "\x00" in query:
+            raise EvidenceError("bad_query", "the query holds a NUL character")
+        try:
+            query.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise EvidenceError("bad_query", "the query is not valid Unicode text") from exc
         if not isinstance(limit, int) or limit <= 0:
             raise EvidenceError("bad_limit", "limit must be a positive number")
         limit = min(limit, limits.SEARCH_MAX_HITS)

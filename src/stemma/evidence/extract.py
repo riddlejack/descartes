@@ -92,7 +92,7 @@ def extractor_versions() -> dict[str, str]:
 
 
 # Invariant: bumped whenever this module's rules change the text it produces.
-EXTRACT_RULES_VERSION = "1"
+EXTRACT_RULES_VERSION = "2"
 
 
 def sniff_content_type(declared: str | None, body: bytes, name_hint: str = "") -> str:
@@ -279,6 +279,10 @@ def extract(body: bytes, declared_type: str | None, name_hint: str = "") -> Extr
         status, flags = _sanity(text, len(body), markup=False)
         if status is CaptureStatus.EMPTY_TEXT:
             flags.append("pdf_has_no_text_layer: OCR is not available")
+        elif pages and len(text.strip()) / pages < limits.PDF_MIN_CHARS_PER_PAGE:
+            status = CaptureStatus.SHORT_TEXT
+            flags.append(f"extraction_short: {len(text.strip())} chars over {pages} pages; "
+                         "pages may be scanned images and OCR is not available")
         return Extraction(status, content_type, text, outline, warnings + flags, None,
                           extractor, pages=pages)
     markup = content_type in HTML_TYPES or content_type in XML_TYPES
