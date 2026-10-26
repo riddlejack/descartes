@@ -164,12 +164,30 @@ def blind_read_refusal(role: str, rel: PurePosixPath, run_dir: Path,
     return None
 
 
+def _analysis_api_dir() -> str:
+    import stemma.analysis  # the one library a calculation script imports
+
+    return os.path.realpath(os.path.dirname(stemma.analysis.__file__))
+
+
+def _is_analysis_api(target: str, cwd: str) -> bool:
+    """The stemma.analysis package's own source (its documented API), and nothing else
+    outside the run: workers read it to write a recorded calculation."""
+    if paths.has_parent_ref(target):
+        return False
+    real = str(paths.resolve(os.path.expanduser(target), cwd))
+    root = _analysis_api_dir()
+    return real == root or real.startswith(root + os.sep)
+
+
 def guard_read(hook: dict[str, Any], run_dir: Path, draft_version: str | None) -> Decision:
     role = _require(hook, "agent_type")
     target = _target(hook)
     rel = paths.run_relative(os.path.expanduser(target), str(hook.get("cwd") or run_dir),
                              run_dir)
     if rel is None:
+        if _is_analysis_api(target, str(hook.get("cwd") or run_dir)):
+            return ALLOW
         # Deny by default: a session reads only its own run (its plugin folder is inside
         # it), never the repository, the design record, another run or the home folder.
         return refuse(hook, f"Refused: {target} is outside the run folder.")

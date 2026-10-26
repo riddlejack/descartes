@@ -120,3 +120,16 @@ def test_symlink_out_is_outside(tmp_path: Path) -> None:
             "agent_type": "stemma:worker", "session_id": "s", "tool_use_id": "t",
             "cwd": str(run)}
     assert not guards.guard_read(hook, run, None).allow
+
+
+def test_the_analysis_api_source_is_readable_and_nothing_beside_it(runs: Path) -> None:
+    import stemma.analysis
+    import stemma.register.store
+
+    run = runs / "this"
+    api = Path(stemma.analysis.__file__)
+    assert guards.guard_read(read_hook(str(api), run, "stemma:worker"), run, None).allow
+    for other in (Path(stemma.register.store.__file__), api.parent.parent / "mcp_server.py",
+                  api.parent / ".." / "register" / "store.py", REPO / "pyproject.toml"):
+        d = guards.guard_read(read_hook(str(other), run, "stemma:worker"), run, None)
+        assert not d.allow, other
