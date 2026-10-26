@@ -186,6 +186,16 @@ Recorded at first, then decided by the orchestrator in contract v0.2.4 and appli
   line: arrivals reach workers only through the orders the lead amends. A few words
   elsewhere in the lead were trimmed to keep the longest team lead within its page.
 
+## From the walking-skeleton run (26 October)
+
+- A worker tried four times to read `src/stemma/analysis/__init__.py` because its text
+  said "compute through stemma.analysis" without the call. The shared branch method
+  and the lead now give the call shape: `from stemma.analysis import inputs, result`,
+  `v = inputs("<12-hex claim id>", ...)`, `result(number)`, run with
+  `"$STEMMA_PYTHON"` (python3 on PATH is unreadable under the run's read sandbox), and
+  derivation `{"script": "analysis/<file>.py", "inputs": [ids]}` on an estimated claim.
+  The longest team lead is 799 words after small trims.
+
 ## Lines that depend on the pending E6a reviewer study (contract 10)
 
 Marked `E6a-provisional` in their comments and listed in `docs/ROLE-MAP.md`:

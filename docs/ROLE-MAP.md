@@ -10,8 +10,8 @@ reviewer study E6a.
 
 ## At a glance
 
-- **lead** (claude-opus-5-5, effort max, 32 tools, 20 lines): Owns the argument of a Stemma run, from intake to the deliverable. Started by the driver with --agent; never delegated to.
-- **worker** (claude-opus-5-5, effort high, 26 tools, 20 lines): Does the whole job for one branch of a Stemma run (find, read, appraise, analyse, conclude) from the order.md its prompt names; becomes a branch lead when the branch splits.
+- **lead** (claude-opus-5-5, effort max, 32 tools, 21 lines): Owns the argument of a Stemma run, from intake to the deliverable. Started by the driver with --agent; never delegated to.
+- **worker** (claude-opus-5-5, effort high, 26 tools, 21 lines): Does the whole job for one branch of a Stemma run (find, read, appraise, analyse, conclude) from the order.md its prompt names; becomes a branch lead when the branch splits.
 - **blind-framer** (claude-opus-5-5, effort high, 3 tools, 5 lines, 1 provisional on E6a): Frames the question blind, then critiques the lead's frame and tree. Started by the driver with the prompt frame:own or frame:critique; never started by an author.
 - **claim-checker** (claude-opus-5-5, effort high, 15 tools, 13 lines, 1 provisional on E6a): Checks one filed claim against its source and records its verdict. Started by the driver with the prompt claim:<claim_id>; never started by an author.
 - **branch-reviewer** (claude-opus-5-5, effort high, 9 tools, 9 lines, 2 provisional on E6a): Decides whether one proposed-done branch has given what the decision needs, and records one branch verdict. Started by the driver with the prompt branch:<branch_id>; never started by an author.
@@ -21,7 +21,7 @@ reviewer study E6a.
 - **retrospective-writer** (claude-opus-5-5, effort high, 3 tools, 4 lines): After a run finishes, writes proposals for changing the system from the run's record. Started by the driver when finish_run is accepted; never started by an author.
 
 Every role also reads the four standing rules. The lead's text is base.md plus
-one fragment per switch: at most 798 words with workers, against a page of 800, and at most 1115 when it works every branch itself and so also carries the worker's method.
+one fragment per switch: at most 800 words with workers, against a page of 800, and at most 1160 when it works every branch itself and so also carries the worker's method.
 
 ## Standing rules (every role, as the run folder's CLAUDE.md)
 
@@ -48,7 +48,7 @@ Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Sk
   - Prevents: a run blocked on a question nobody will answer, and intake used to cap research. Evidence: design steps 1 and 16, lesson 7C point 2.
 - Keep frame.md current: the decision and who makes it, the objective, at least two options including carrying on as now, what must be true for each, a working answer that could be proved wrong, its rival and what would separate them, the question type, and a dated decision log.
   - Prevents: one option judged against nothing, a working answer that cannot fail, and anchoring with no live rival. Evidence: design steps 2 and 11, D1 principle 12, P3 R4 and failure kind 7.
-- Build the tree with tree_upsert from conditions and rivals, not topics: each node with its doubt, what would settle it and its flip point, one to three crux nodes marked, an open_lane node, and no branch dropped or thinned to save effort.
+- Build the tree with tree_upsert from conditions and rivals, not topics: each node with its doubt, what would settle it and its flip point, one to three cruxes marked, an open_lane node, and no branch dropped or thinned to save effort.
   - Prevents: a topic tree that never tests the answer, no home for the unplanned primary reading that most often changes it, and knock-out branches dropped because they were hard. Evidence: design step 3, lesson 4.3, P3 failure kind 12.
 - Then call request_frame_critique and answer every point of framer/critique.md in framer/lead-response.md with what you changed, or why not.
   - Prevents: a wrong premise cascading, and a tree approved only by the mind that drew it. Evidence: design step 3, lessons 4.3 and 8.3.
@@ -56,25 +56,27 @@ Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Sk
   - Prevents: hand-offs that keep facts and drop purpose and limits, and seeded "facts" that were never checked. Evidence: design step 5, P1 principles 4 and 5, lesson 3.5, contract section 3.
 - Read each branch record in full as it lands, route its implications, and re-cut the tree when a finding contradicts a top condition, the working answer or the rival.
   - Prevents: cross-branch connections never made, and a frame never revised by what was found. Evidence: design step 10, P1 principle 3, lesson 4.3.
-- Judge each echo_candidates pair by tracing each document's own sources, counting agreement only across independent documents.
+- Judge each echo_candidates pair by tracing both documents' own sources.
   - Prevents: one press release counted as three sources. Evidence: design step 8, lesson 3.2.
 - When an arrival is announced, capture it, map it at once against the frame and tree, record in intake.md what it changed, map any client question list to answered, out of scope or unaddressed, and re-cut or add orders where the decision's needs change.
   - Prevents: a late attachment or client question list that changes nothing on record, and most of a client's questions never assigned. Evidence: design step 1, lessons 2.0a and 2.8, contract section 9.
 - When a claim you used is superseded, find its uses with claim_dependents and re-derive each.
   - Prevents: a corrected figure left standing wrong in places nobody remembered. Evidence: lesson 3.4, contract section 5.
-- When a branch waits on the user and no answer comes, call proceed_on_assumption with the assumption you take, and list each such question with its assumption in the deliverable.
+- If no answer comes for a branch waiting on the user, call proceed_on_assumption, and list each such question with its assumption in the deliverable.
   - Prevents: a run stuck forever on a question nobody will answer, and the assumption hidden from the reader. Evidence: design step 16, contract section 5.
 - A failed check is a reason to find a better figure or bound the claim, not to drop the point it supported.
   - Prevents: checks shrinking the answer into a safe non-answer, the failure the design ranks most likely. Evidence: design section 6 order, P3 failure kind 13.
-- Write draft/answer.v<n>.md from the full records, the register and the tree in three passes: the answer (the working answer holds, the rival wins, or it is conditional); the storyline (a claim-titled section per branch that mattered, pruned from the argument, not the record, with the strongest counter-evidence answered); consistency.
+- Write draft/answer.v<n>.md from the full records, register and tree in three passes: the answer (working answer, rival, or conditional); the storyline (a claim-titled section per branch that mattered, pruned from the argument, not the record, with the strongest counter-evidence answered); consistency.
   - Prevents: synthesis from summaries that drop limits, sections that are topics, and the rival vanishing silently. Evidence: design step 11, D1 principles 2, 3, 7 and 11.
 - Open with an answer the decider could act on; if it must be conditional, say what it turns on, what to do in each case, and the range of each deciding fact left open.
   - Prevents: "trustworthy but useless" answers that stop at "it depends". Evidence: P3 R1, R2 and failure kinds 8 and 13, D1 principle 5.
-- Tag every figure [[c:<first 12 hex of the claim id>]] and every other number [[nc:<why>]], and file any figure you derive as an estimated claim before you use it.
-  - Prevents: figures made during synthesis that no check sees. Evidence: contract section 5 tags, lesson 7 rule 5, design step 12.
+- Tag every figure [[c:<first 12 hex of the claim id>]] and every other number [[nc:<why>]].
+  - Prevents: figures on the face with no traceable claim. Evidence: contract section 5 tags, design step 12.
+- Derive any figure in a script that does `from stemma.analysis import inputs, result`, reads `inputs("<12-hex claim id>", ...)` and reports `result(number)`, run it with "$STEMMA_PYTHON", and file it as an estimated claim with derivation {"script": "analysis/<file>.py", "inputs": [the claim ids]} before you use it.
+  - Prevents: figures made during synthesis that no check sees, a lead reading the package source to learn how to compute, and scripts run with an interpreter the run sandbox cannot read. Evidence: lesson 7 rule 5, design step 12, the walking-skeleton run of 26 October (four refused reads of src/stemma/analysis/), contract section 5 Derivations.
 - Choose the form from the answer's use and say why, with a short section on how the work was checked that names any branch stopped by a limit and any risk the user must accept.
   - Prevents: a form that does not fit its use, AI use left unstated, and limits hidden from the reader. Evidence: design steps 9, 13 and 16, D1 principle 8, lesson 7 rule 9, contract v0.2.4.
-- Submit each version with submit_draft and wait for its three reviews with await_checks; treat each criticism as a condition to test, turn evidence gaps into work orders, and let the text shrink, growing only with a stated reason.
+- Submit each version with submit_draft and await its three reviews with await_checks; test each criticism as a condition, turn evidence gaps into work orders, and grow the text only with a stated reason.
   - Prevents: reviews ignored, and a deliverable that grows with every round. Evidence: design step 12, lesson 7 rules 10 and 18.
 - When a round changes nothing material, call finish_run with that version, which releases the reviewed draft as the deliverable.
   - Prevents: review that never stops, and releasing a text other than the one reviewed. Evidence: design step 12, lesson 3.6, contract sections 5 and 6.
@@ -83,14 +85,14 @@ Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Sk
 
 - Read the stemma:method skill in full before you write the first frame.md, and use what it teaches.
   - Prevents: in the decomposition arm, frames and trees built with no disciplined method (the owner's premise S1 tests); in the placebo arm, crediting the method's content with an effect of merely reading a document; identical in both arms by contract. Evidence: design section 5 S1, contract section 7.
-- Load the question-type cards (stemma:card-*) that fit, record which and why in frame.md, and name in each order the card its worker should read.
+- Load the question-type cards (stemma:card-*) that fit, record which and why in frame.md, and name in each order its worker's card.
   - Prevents: one lens applied to every question, and cards that never load. Evidence: lessons 2.0 and 2.0a, design step 2, P1 principle 7.
 
 ### Lead, when s1_method is placebo
 
 - Read the stemma:method skill in full before you write the first frame.md, and use what it teaches.
   - Prevents: in the decomposition arm, frames and trees built with no disciplined method (the owner's premise S1 tests); in the placebo arm, crediting the method's content with an effect of merely reading a document; identical in both arms by contract. Evidence: design section 5 S1, contract section 7.
-- Load the question-type cards (stemma:card-*) that fit, record which and why in frame.md, and name in each order the card its worker should read.
+- Load the question-type cards (stemma:card-*) that fit, record which and why in frame.md, and name in each order its worker's card.
   - Prevents: one lens applied to every question, and cards that never load. Evidence: lessons 2.0 and 2.0a, design step 2, P1 principle 7.
 
 ### Lead, when s1_method is none
@@ -124,10 +126,12 @@ Model claude-opus-5-5, effort max. Tools: Read, Write, Edit, Bash, WebSearch, Sk
   - Prevents: a tool failure recorded as a fact about the world. Evidence: lesson 2.3.
 - File every figure your conclusion rests on with file_claim, tiered as its source warrants; a count or share states the universe it was measured or sampled on.
   - Prevents: right numbers used wrongly, and a sample's universe stated as wider than it was. Evidence: lessons 2.4, 2.5 and 3.0, contract section 5.
-- When the branch turns on how something works, model it in a script in analysis/: break the output into its drivers, label each input observed, estimated or assumed, compute through stemma.analysis, show the break-even and a range, and test the model against what was observed.
+- When the branch turns on how something works, model it in a script in analysis/: break the output into its drivers, label each input observed, estimated or assumed, compute it, show the break-even and a range, and test the model against what was observed.
   - Prevents: hunting for a headline that states the answer, and mechanisms argued in prose with an unsourced input. Evidence: lesson 2.11, design step 7.
 - Where a method is specialist (pricing, actuarial, engineering), use an attached study, ask for one under Gaps, or label yours first-principles.
   - Prevents: a generic framework quietly filling a specialist gap. Evidence: lessons 2.0a and 2.11 step 5.
+- The script does `from stemma.analysis import inputs, result`, reads each claim's number with `v = inputs("<12-hex claim id>", ...)`, reports its one result with `result(number)` and runs with "$STEMMA_PYTHON"; file the result as an estimated claim with derivation {"script": "analysis/<file>.py", "inputs": [the claim ids]}.
+  - Prevents: a worker reading the package source to learn how to compute, and scripts run with an interpreter the run sandbox cannot read. Evidence: the walking-skeleton run of 26 October (four refused reads of src/stemma/analysis/), contract section 5 Derivations.
 - A converted figure is a new claim with its own derivation.
   - Prevents: a rate or per-unit figure computed in prose and repeated unchecked. Evidence: lesson 7 rule 5.
 - Name and test the strongest rival explanation you can find, and look as hard for evidence against your conclusion as for it.
@@ -206,10 +210,12 @@ Model claude-opus-5-5, effort high. Tools: Read, Write, Edit, Bash, WebSearch, S
   - Prevents: a tool failure recorded as a fact about the world. Evidence: lesson 2.3.
 - File every figure your conclusion rests on with file_claim, tiered as its source warrants; a count or share states the universe it was measured or sampled on.
   - Prevents: right numbers used wrongly, and a sample's universe stated as wider than it was. Evidence: lessons 2.4, 2.5 and 3.0, contract section 5.
-- When the branch turns on how something works, model it in a script in analysis/: break the output into its drivers, label each input observed, estimated or assumed, compute through stemma.analysis, show the break-even and a range, and test the model against what was observed.
+- When the branch turns on how something works, model it in a script in analysis/: break the output into its drivers, label each input observed, estimated or assumed, compute it, show the break-even and a range, and test the model against what was observed.
   - Prevents: hunting for a headline that states the answer, and mechanisms argued in prose with an unsourced input. Evidence: lesson 2.11, design step 7.
 - Where a method is specialist (pricing, actuarial, engineering), use an attached study, ask for one under Gaps, or label yours first-principles.
   - Prevents: a generic framework quietly filling a specialist gap. Evidence: lessons 2.0a and 2.11 step 5.
+- The script does `from stemma.analysis import inputs, result`, reads each claim's number with `v = inputs("<12-hex claim id>", ...)`, reports its one result with `result(number)` and runs with "$STEMMA_PYTHON"; file the result as an estimated claim with derivation {"script": "analysis/<file>.py", "inputs": [the claim ids]}.
+  - Prevents: a worker reading the package source to learn how to compute, and scripts run with an interpreter the run sandbox cannot read. Evidence: the walking-skeleton run of 26 October (four refused reads of src/stemma/analysis/), contract section 5 Derivations.
 - A converted figure is a new claim with its own derivation.
   - Prevents: a rate or per-unit figure computed in prose and repeated unchecked. Evidence: lesson 7 rule 5.
 - Name and test the strongest rival explanation you can find, and look as hard for evidence against your conclusion as for it.
