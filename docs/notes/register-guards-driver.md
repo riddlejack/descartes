@@ -127,6 +127,13 @@ the detail. Harness facts below were each shown by a run (report and kit in
   cap. A damaged frozen draft refuses the release; the driver exits 0 only on a recorded
   release. Agent writes outside the run folder are refused.
 
+- **Every session reads only its own run (v0.2.8).** The Read guard refuses any path
+  outside the run folder (the run's plugin is inside it). Bash's sandbox denies reads of
+  the home folder, the runs folder, the repository, the plugin source and the fetch
+  cache, and re-opens only the run and what the interpreter needs (its venv, its base
+  install, the stemma package source); probes p14 to p16, live proof
+  `tests/e2e/run_read_scope.py`. No extra-denials field was added.
+
 ## How it was shown
 - 503 unit and hostile tests (`pytest tests`), no network; `ruff` and `mypy --strict`
   clean on `src/`.

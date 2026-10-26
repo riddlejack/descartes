@@ -119,6 +119,14 @@ settings files, runner) and each run's `out.jsonl` and `probe.log` are in
 
 - **p13:** `--strict-mcp-config` drops the plugin's own MCP server (init `mcp: []`,
   the tool gone), so Stemma sessions cannot use it; a bare baseline may.
+- **p14:** `denyRead: [<home>, <runs>]` with `allowRead: [<run>, <repo>/.venv,
+  <repo>/src]`: the run, the interpreter and `import stemma.analysis` work; `ls ~`, the
+  design record, the repo's tests and another run's store are refused.
+- **p15:** the same without re-opening the config's shell snapshots: Bash still works
+  (only `git`, which reads `~/.gitconfig`, fails; agents do not need it).
+- **p16:** `allowRead: [<run>]` with `denyRead` of `<run>/frame.md` and
+  `<run>/branches/**/record.md`: the specific denials still hold (the most specific rule
+  wins either way), so blind roles keep their denials under a re-opened run.
 
 ## Reproducing (when the harness version changes)
 `conformance/harness/run.sh <name> '<prompt>' [claude flags...]` with

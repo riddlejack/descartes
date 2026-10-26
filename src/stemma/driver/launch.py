@@ -22,9 +22,9 @@ from pathlib import Path
 from typing import IO, Any
 
 from stemma.driver import canary, clean, events, hostio
-from stemma.driver.config import SESSIONS_DIR, SETTINGS_DIR, DriverConfig
+from stemma.driver.config import SESSIONS_DIR, SETTINGS_DIR, DriverConfig, default_plugin_src
 from stemma.driver.errors import HarnessError
-from stemma.driver.settings import ToolSets, stemma_settings_extra
+from stemma.driver.settings import ReadScope, ToolSets, read_scope, stemma_settings_extra
 
 
 def driver_env(cfg: DriverConfig, run_dir: Path) -> dict[str, str]:
@@ -180,6 +180,12 @@ def _follow(run_dir: Path, s: Session, on_init: OnInit, grace_s: float,
                 s.result = msg
 
 
+def session_read_scope(cfg: DriverConfig) -> ReadScope:
+    """Every session's Bash reads only its own run plus what the interpreter needs."""
+    repo = default_plugin_src().parent
+    return read_scope(cfg.python, cfg.runs_dir, repo, cfg.plugin_src, cfg.cache_dir)
+
+
 def launch(cfg: DriverConfig, run_dir: Path, plugin_dir: Path, spec: LaunchSpec,
            on_init: OnInit, grace_s: float) -> Session:
     """Write the session's settings file and start the process. Never raises after start."""
@@ -192,7 +198,8 @@ def launch(cfg: DriverConfig, run_dir: Path, plugin_dir: Path, spec: LaunchSpec,
         agent=f"stemma:{spec.role}",
         settings_extra=stemma_settings_extra(run_dir, spec.role, spec.prompt, spec.tools,
                                              cfg.claude_config, cache_dir=cfg.cache_dir,
-                                             deny_agent=spec.deny_agent),
+                                             deny_agent=spec.deny_agent,
+                                             scope=session_read_scope(cfg)),
         env_extra=driver_env(cfg, run_dir), session_id=spec.session_id, resume=spec.resume)
     argv = cl.argv
     stream_rel = f"{SESSIONS_DIR}/{spec.name}.stream.jsonl"

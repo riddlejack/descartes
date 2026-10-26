@@ -43,3 +43,14 @@ clean config, so it is not part of the unit tests.
 Not shown here: a subagent (no worker was started by the placeholder lead; the driver's
 own real launch showed a `stemma:worker` subagent's model and effort verified), resume
 after a real stop, and part A's real evidence service.
+
+## Every session reads only its own run (CONTRACTS v0.2.8)
+
+`run_read_scope.py` (live, same environment) had the driver launch a hostile placeholder
+claim checker, with its real settings and guards, that tried the Read tool and Bash on
+four places: a decoy answer key in the repository, the design record in
+`~/.private/stemma-design/`, another run's `store/`, and a decoy file in the home folder.
+All eight attempts were refused ("outside the run folder" from the Read guard;
+"Operation not permitted" from the sandbox), and none of the decoys' unique markers
+appeared anywhere in the session's stream (`recorded/run_read_scope.out`). The full
+placeholder run (`20261026-060000-fecf06`) still released under the same read scope.

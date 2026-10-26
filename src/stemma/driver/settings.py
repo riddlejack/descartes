@@ -10,6 +10,7 @@ section 6). Absolute paths in permission rules take a leading extra slash
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -162,15 +163,55 @@ def _deciders_eye_denials(run_dir: Path, prompt: str) -> list[str]:
 
 def build_settings(run_dir: Path, role: str, prompt: str, tools: ToolSets,
                    claude_config: Path, *, cache_dir: Path | None = None,
-                   deny_agent: bool = False) -> dict[str, Any]:
+                   deny_agent: bool = False, scope: ReadScope | None = None) -> dict[str, Any]:
     """The whole settings JSON of one session: the clean base plus Stemma's rules."""
     return merge_settings(stemma_settings_extra(run_dir, role, prompt, tools, claude_config,
-                                                cache_dir=cache_dir, deny_agent=deny_agent))
+                                                cache_dir=cache_dir, deny_agent=deny_agent,
+                                                scope=scope))
+
+
+@dataclass(frozen=True)
+class ReadScope:
+    """What a session's Bash may read outside its run (CONTRACTS section 6, v0.2.8).
+
+    `deny` are folders no session reads (the home folder, the runs folder, the
+    repository, the plugin source, the fetch cache); `allow` re-opens what the
+    interpreter needs (its venv and base install, the stemma package source). The run
+    folder itself is re-opened too. On 2.1.308 the most specific rule wins: an
+    `allowRead` re-opens a path inside a `denyRead`, and a `denyRead` inside an
+    `allowRead` still denies (probes p14, p16), so the blind roles' own denials hold."""
+
+    deny: tuple[str, ...]
+    allow: tuple[str, ...]
+
+
+def read_scope(python: Path, runs_dir: Path, repo_dir: Path, plugin_src: Path,
+               cache_dir: Path | None) -> ReadScope:
+    home = Path(os.path.expanduser("~")).resolve()
+    deny = [home, runs_dir, repo_dir, plugin_src] + ([cache_dir] if cache_dir else [])
+    allow: list[Path] = []
+    py = Path(os.path.abspath(python))
+    venv = py.parent.parent
+    cfg = venv / "pyvenv.cfg"
+    if cfg.is_file():
+        allow.append(venv)
+        for line in cfg.read_text(encoding="utf-8").splitlines():
+            key, _, value = line.partition("=")
+            if key.strip() == "home" and value.strip():
+                allow.append(Path(value.strip()).resolve().parent)  # the base install
+    else:
+        allow.append(py.resolve().parent.parent)
+    import stemma  # where the stemma package's source lives (editable or installed)
+    allow.append(Path(stemma.__file__).resolve().parent.parent)
+    def norm(ps: list[Path]) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(str(Path(os.path.realpath(p))) for p in ps))
+    return ReadScope(norm(deny), norm(allow))
 
 
 def stemma_settings_extra(run_dir: Path, role: str, prompt: str, tools: ToolSets,
                           claude_config: Path, *, cache_dir: Path | None = None,
-                          deny_agent: bool = False) -> dict[str, Any]:
+                          deny_agent: bool = False,
+                          scope: ReadScope | None = None) -> dict[str, Any]:
     """Stemma's rules on top of the clean base: permissions and the sandbox.
     `run_dir` must be the resolved real path. `deny_agent` denies the Agent tool outright
     (the lead under s2 single_loop)."""
@@ -197,12 +238,22 @@ def stemma_settings_extra(run_dir: Path, role: str, prompt: str, tools: ToolSets
     deny.append(_rule_abs("Read", transcripts, folder=True))
     deny_read_abs = [_abs(run_dir, p) for p in reads] + [str(transcripts)]
     filesystem: dict[str, Any] = {"denyWrite": deny_write_abs, "denyRead": deny_read_abs}
+    allow_read: list[str] = []
     if role == "deciders-eye-reviewer":
         # Bash: the whole run folder is unreadable except the three things the reviewer
         # reads (allowRead takes precedence over denyRead: probe p12). The Read tool's
         # deny rules cannot be overridden by an allow, so they enumerate (above).
         filesystem["denyRead"] = [str(run_dir), str(transcripts)]
-        filesystem["allowRead"] = [_abs(run_dir, p) for p in _deciders_eye_reads(prompt)]
+        allow_read = [_abs(run_dir, p) for p in _deciders_eye_reads(prompt)]
+    elif scope is not None:
+        allow_read = [str(run_dir)]  # re-opened inside the denied folders (probe p14)
+    if scope is not None:
+        # Every session reads only its own run (v0.2.8). The Read tool is confined by the
+        # Read guard hook (deny by default outside the run folder); this confines Bash.
+        filesystem["denyRead"] = list(dict.fromkeys(filesystem["denyRead"] + list(scope.deny)))
+        allow_read += list(scope.allow)
+    if allow_read:
+        filesystem["allowRead"] = list(dict.fromkeys(allow_read))
     return {
         "permissions": {"deny": deny, "allow": list(tools.allow)},
         "sandbox": {

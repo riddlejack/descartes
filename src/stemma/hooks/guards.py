@@ -166,11 +166,13 @@ def blind_read_refusal(role: str, rel: PurePosixPath, run_dir: Path,
 
 def guard_read(hook: dict[str, Any], run_dir: Path, draft_version: str | None) -> Decision:
     role = _require(hook, "agent_type")
-    rel = paths.run_relative(_target(hook), str(hook.get("cwd") or run_dir), run_dir)
+    target = _target(hook)
+    rel = paths.run_relative(os.path.expanduser(target), str(hook.get("cwd") or run_dir),
+                             run_dir)
     if rel is None:
-        if role == roles.DECIDERS_EYE:
-            return refuse(hook, "Refused: the decider's-eye reviewer reads only its run's files.")
-        return ALLOW
+        # Deny by default: a session reads only its own run (its plugin folder is inside
+        # it), never the repository, the design record, another run or the home folder.
+        return refuse(hook, f"Refused: {target} is outside the run folder.")
     why = blind_read_refusal(role, rel, run_dir, draft_version)
     return refuse(hook, why) if why else ALLOW
 
