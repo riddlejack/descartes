@@ -57,7 +57,7 @@ def test_finish_run_refusal_lists_every_unmet_condition_numbered(reg: Register) 
 # --- 2. Leaves close by branch verdict; parents derive; an empty open lane needs nothing
 
 def test_closure_leaves_parents_and_open_lanes() -> None:
-    nodes = [node("O1", "option"),  # no children: nothing to wait on
+    nodes = [node("O1", "option"),  # no children: nothing yet says what must be true
              node("O2", "option"), node("C2", "condition", "O2", "answered", "b1"),
              node("O3", "option"), node("C3", "condition", "O3", "open", "b2"),
              node("T", "condition", status="open"),  # a parent: its stored status is ignored
@@ -67,7 +67,8 @@ def test_closure_leaves_parents_and_open_lanes() -> None:
              node("OL2", "open_lane", branch_id="b9"),  # holds work: a leaf
              node("T3", "condition")]  # a leaf in no branch
     c = closure(nodes)
-    assert c["O1"] == {"closes_by": "children", "status": "answered", "closed": True}
+    assert c["O1"] == {"closes_by": "children", "status": "open", "closed": False,
+                       "childless": True}  # an unfinished frame, never closed
     assert c["O2"]["closed"] and c["O2"]["status"] == "answered"
     assert not c["O3"]["closed"] and c["O3"]["status"] == "open"
     assert c["T"] == {"closes_by": "children", "status": "gap_accepted", "closed": True}
@@ -168,3 +169,27 @@ def test_the_driver_records_the_limit_in_run_json() -> None:
 
     assert Limits().to_json()["max_review_rounds"] == 3
     assert Limits.from_json({**Limits().to_json(), "max_review_rounds": 5}).max_review_rounds == 5
+
+
+def test_a_childless_option_blocks_the_release_and_says_what_is_missing(reg: Register) -> None:
+    # Walking-skeleton replay: options O3 to O5 had nothing under them.
+    reg.tree_upsert(LEAD, {"id": "O1", "kind": "option", "statement": "carry on"})
+    reg.tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "x",
+                           "branch_id": "b1", "parent": "O1"})
+    reg.tree_upsert(LEAD, {"id": "O3", "kind": "option", "statement": "act on one segment"})
+    cid = ready_run(reg)
+    reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
+    view = {n["id"]: n for n in reg.tree_view()}
+    assert view["O1"]["closed"] and not view["O3"]["closed"]
+    assert view["O3"]["status"] == "open" and view["O3"]["childless"]
+    with pytest.raises(Refused) as exc:
+        reg.finish_run(LEAD, 1)
+    assert str(exc.value).splitlines()[1:] == [
+        ("1. node O3 is an option with no conditions under it; add what would have to be "
+         "true, or file it as a branch")]
+    # Filed as a branch and closed by its reviewer, the option closes as a leaf.
+    reg.tree_upsert(LEAD, {"id": "O3", "branch_id": "b3"})
+    write_record(reg, "b3")
+    reg.propose_branch_done(WORKER, "b3")
+    reg.record_branch_verdict(reviewer_for(reg, "b3", "s-rev3"), "b3", "answered", "done")
+    assert reg.finish_run(LEAD, 1)["finished"]

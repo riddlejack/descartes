@@ -85,9 +85,11 @@ _SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 
 def closure(nodes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """How each node closes and whether it has (CONTRACTS section 6, v0.3), by node id:
-    `closes_by` is "branch" (a leaf: condition, rival, an open lane holding work),
-    "children" (any node with children, and an option), or "nothing" (an empty open lane);
-    `status` is the stored one for a leaf and derived for the rest; `closed` follows."""
+    `closes_by` is "branch" (a leaf: condition, rival, an open lane holding work, an
+    option filed as a branch), "children" (any node with children, and an option), or
+    "nothing" (an empty open lane); `status` is the stored one for a leaf and derived for
+    the rest; `closed` follows. A parent closes only with at least one child, all closed:
+    an option with nothing under it is an unfinished frame (`childless`), never closed."""
     children: dict[str, list[str]] = {}
     for n in nodes:
         if n.get("parent") is not None:
@@ -101,7 +103,10 @@ def closure(nodes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         n, kids = by_id[nid], [k for k in children.get(nid, []) if k in by_id]
         if nid in path:  # a cycle in parents cannot close (invariant: a tree has none)
             return {"closes_by": "children", "status": "open", "closed": False}
-        if kids or n["kind"] == "option":
+        if n["kind"] == "option" and not kids and not n.get("branch_id"):
+            res = {"closes_by": "children", "status": "open", "closed": False,
+                   "childless": True}
+        elif kids:
             subs = [visit(k, path | {nid}) for k in kids]
             if all(c["closed"] for c in subs):
                 st = ("stopped_by_limit" if any(c["status"] == "stopped_by_limit" for c in subs)
@@ -120,7 +125,6 @@ def closure(nodes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     for nid in by_id:
         visit(nid, frozenset())
     return out
-
 
 
 def gate_refusal(failures: list[str]) -> str:
@@ -554,6 +558,8 @@ class Register:
         for n in nodes:
             c = info[str(n["id"])]
             view = {**n, "closes_by": c["closes_by"], "closed": c["closed"]}
+            if c.get("childless"):
+                view["childless"] = True
             if c["closes_by"] != "branch":
                 view["stored_status"], view["status"] = n["status"], c["status"]
             out.append(view)
@@ -1009,6 +1015,10 @@ class Register:
         if not nodes:
             failures.append("the tree has no nodes")
         for n in nodes:
+            if n.get("childless"):
+                failures.append(f"node {n['id']} is an option with no conditions under it; "
+                                f"add what would have to be true, or file it as a branch")
+                continue
             if n["closes_by"] != "branch":
                 continue  # an empty open lane, or a node its children close
             if n["status"] not in DONE:

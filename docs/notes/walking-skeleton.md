@@ -227,16 +227,17 @@ It worked after one fix.
 ### Replay of the recorded tree under contracts v0.3 (added after the run)
 
 The run's final `tree.json` was read by the v0.3 closure rule (`stemma.register.store
-.closure`); nothing was rerun. All 23 nodes would now close:
+.closure`); nothing was rerun. 20 of the 23 nodes would now close:
 - the 16 leaves a branch answered stay closed by their branch verdicts;
 - T3, a condition stored `open` with no branch, has three children (T3a, T3b, T3c), all
   answered, so it closes by derivation;
 - T, L (conditions with children), O1 and O2 (options with children) close by
   derivation;
-- the open lane OL holds no work (no branch, no children), so it needs nothing;
-- O3, O4 and O5 are options with no children. Read literally, an option closes when all
-  its children have, so a childless option closes with nothing checked under it. Whether
-  an option must hold at least one condition is a contract question, left open here.
+- the open lane OL holds no work (no branch, no children), so it needs nothing.
 
-The gate would then have refused only on the untagged-number segments of v11 and on its
-reviews, which the stop cut off.
+O3, O4 and O5 are options with no children, and would still read open. The
+orchestrator ruled that a parent closes only with at least one child, all closed. A
+childless option is an unfinished frame, and the gate says so: "node O3 is an option
+with no conditions under it; add what would have to be true, or file it as a branch".
+Beyond those three, the gate would have refused only on the untagged-number segments of
+v11 and on its reviews, which the stop cut off.
