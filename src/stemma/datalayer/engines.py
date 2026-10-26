@@ -43,7 +43,8 @@ class SqliteEngine:
                            error="no SQLite file")
             raise QueryError(f"no evidence tables at {self.path}; sync the run first")
         try:
-            con = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=30)
+            con = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True,
+                                  timeout=30)
             try:
                 rows = [tuple(r) for r in con.execute(sql).fetchall()]
             finally:
