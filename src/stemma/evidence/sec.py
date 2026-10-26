@@ -142,6 +142,22 @@ class EdgarToolsBackend:
             found = entity.get_filings(form=form) if form else entity.get_filings()
         except Exception as exc:
             raise EvidenceError("sec_unavailable", f"listing filings failed: {exc}") from exc
+        table = getattr(found, "data", None)
+        if table is not None and hasattr(table, "column"):
+            # Read the listing's columns directly rather than building one object a row.
+            def col(name: str) -> list[Any]:
+                values: list[Any] = table.column(name).to_pylist()
+                return values
+
+            return [
+                FilingRef(accession=str(acc), cik=int(cik), company=str(entity.name), form=str(f),
+                          filing_date=str(filed)[:10],
+                          report_date=str(rep)[:10] if rep else None,
+                          primary_document=str(doc) if doc else None)
+                for acc, f, filed, rep, doc in zip(
+                    col("accession_number"), col("form"), col("filing_date"),
+                    col("reportDate"), col("primaryDocument"), strict=True)
+            ]
         refs: list[FilingRef] = []
         for item in found:
             refs.append(FilingRef(

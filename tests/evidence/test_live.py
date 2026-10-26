@@ -73,7 +73,10 @@ def test_live_statistics_page_and_pdf() -> None:
         assert figure is not None
         hits = svc.search_store(figure.group(0), mode="exact", sha256=r["sha256"])["hits"]
         assert hits and text[hits[0]["start"]:hits[0]["end"]] == figure.group(0)
-        sentence = text[max(0, figure.start() - 60):figure.end() + 20]
+        # a quotation on word boundaries around the figure
+        begin = text.rfind(" ", 0, max(0, figure.start() - 40)) + 1
+        finish = text.find(" ", figure.end() + 15)
+        sentence = text[begin:finish if finish != -1 else len(text)]
         assert svc.check_quote(r["receipt_id"], sentence)["found"]
         found[name] = {"figure": figure.group(0), "quote": sentence}
     assert pdf["pages"] and pdf["pages"] > 1
