@@ -16,7 +16,8 @@ part B proves each with a tiny run before anything depends on it.
   `src/stemma/driver/`, `src/stemma/analysis/`, `src/stemma/mcp_server.py`,
   `plugin/.mcp.json`, `plugin/hooks/`, `conformance/`, their tests.
 - **C. Roles and skills:** `plugin/agents/`, `plugin/skills/`, `plugin/lead/`,
-  `plugin/STANDING-RULES.md`, `docs/ROLE-MAP.md`.
+  `plugin/STANDING-RULES.md`, `docs/ROLE-MAP.md`, `tools/roles/` (the role-file lint
+  and the role-map generator), `tests/roles/`.
 - **Each part** writes its notes in `docs/notes/<part>.md`, and adds pinned
   dependencies only to its own extras group in `pyproject.toml` (A: `evidence`; B:
   `server`, `register`, `driver`); the orchestrator resolves any merge there.
@@ -259,8 +260,15 @@ Each guard has a producer in the live path, or it would block every run.
 - **Refusals** name what failed and nothing else: no hint of a way around.
 
 ## 7. Switches (in `run.json`; design section 5)
-- `s1_method`: `decomposition` | `placebo` | `none`. The driver copies one method
-  skill, or neither, into the run's plugin folder; a skill not copied cannot load.
+- `s1_method`: `decomposition` | `placebo` | `none`. Design arm 1 is the method for
+  the lead and the question-type cards for workers; arm 2 puts neutral text of the
+  same length in place of both; arm 3 has neither. So the driver copies into the
+  run's plugin folder: for `decomposition`, `decomposition-method/` and the real
+  cards; for `placebo`, `placebo-method/` and the placebo cards; for `none`, no
+  method and no cards. A skill not copied cannot load. Real and placebo versions
+  share file names, frontmatter (`name`, `description`) and length, and differ only
+  in body, so the lead selects and loads them in identical words in both arms; the
+  `decomposition` and `placebo` lead fragments are identical.
 - `s2_shape`: `team` | `single_loop` (one author, no workers; checks unchanged).
 - `s3_hypothesis_in_briefs`: true | false.
 - `s4_orientation`: `frame_first` | `basic_facts` | `primary_record`.
@@ -269,7 +277,8 @@ Each guard has a producer in the live path, or it would block every run.
 - `s6_cross_family`: `off` | `during` | `final` (wired later).
 - **Assembly:** the lead's text is `plugin/lead/base.md` followed by one fragment per
   switch, `plugin/lead/<switch>.<value>.md` (an empty file where a value adds
-  nothing), concatenated in the order listed above into the run's
+  nothing; `s5_models` is configuration and has no fragment), concatenated in the
+  order listed above into the run's
   `agents/lead.md`. Worker texts follow the same pattern if a switch touches them
   (`plugin/agents/worker.base.md` plus fragments). The driver records each digest.
   No text branches on a switch inside itself.
