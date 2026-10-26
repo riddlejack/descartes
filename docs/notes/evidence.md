@@ -9,7 +9,7 @@ on `EvidenceService` (`service.py`) and as an MCP tool registered by
 
 ## What works, and how it was shown
 
-Unit tests: `pytest tests/evidence` runs 274 tests in about a second, with no
+Unit tests: `pytest tests/evidence` runs 287 tests in about a second, with no
 network (a fake transport, a fake SEC backend, invented pages, a PDF built by hand
 in `conftest.py`). `ruff check` and `mypy --strict` pass on `src/stemma/evidence`.
 The live tests are marked `live` and skipped unless `STEMMA_LIVE=1`; they were run
@@ -137,6 +137,40 @@ immutable) but refused with `filed_after_as_of` if filed on or after the date;
 it. The raw XBRL concept answer (which lists later filings too) is kept as bytes
 but its text is withheld (`text_withheld_as_of`), so later figures never become
 searchable or readable through the tools.
+
+## Data files (branch `claude/part-a-datafiles`, 26 October 2026)
+Whole-content text for data files, under the same rules (nothing deleted or fused,
+code-point offsets, typed failure, extractor and version on the receipt; details
+in `format_details`). Tests: `tests/evidence/test_datafiles.py` (13, invented
+files).
+- **Plain text, CSV, TSV:** stored verbatim (line endings normalised only), so the
+  delimiter structure is the file's own. The dialect `csv.Sniffer` detects
+  (delimiter, quote character, rows, widest row) is recorded; undetected is said.
+  A `.csv` or `.tsv` name upgrades a `text/plain` or untyped file.
+- **JSON** (and any `+json` type): pretty-printed by our own printer, two-space
+  indent, source key order, duplicate keys kept, every number literal exactly as
+  written (`1.10`, `1e5`, `12345678901234567890`). Deeper than 256 levels, over
+  the size limit or invalid: kept verbatim, warned.
+- **XML:** any `+xml` type (SDMX and other vendor types) goes through the markup
+  path.
+- **XLSX** (openpyxl 3.1.5, MIT) and **XLS** (xlrd 2.0.2, BSD), in an isolated
+  child process under recorded time, cell (5 million), text and unzipped-size
+  (512 MiB, a zip-bomb guard) limits. Every sheet, in order, is a section
+  `## Sheet n: <name>` (an outline anchor `sheet-n`), one line per row, each
+  non-empty cell `<ref>: <value>`, cells tab-separated, so a quotation names its
+  cell. Values are as stored: a number format other than General follows in
+  brackets (`B10: 5024294 [#,##0]`), a formula's cached value is followed by the
+  formula, a missing cache is written and warned, tabs and line breaks inside a
+  cell are written `\t` and `\n`. Hidden sheets, rows and columns are flagged
+  `hidden`; merged cells `table_merged_cells`. A spreadsheet signature beats a
+  wrong header (servers send XLSX as `application/vnd.ms-excel` or zip).
+- **Live, once:** the US Census Bureau's 2023 state population estimates as CSV
+  (32,466 bytes; dialect `,` and `"`, 67 rows, 60 columns; a full Alabama row
+  quoted and checked) and as XLSX (14,964 bytes; 1 sheet, 408 cells; the cells
+  "A10: .Alabama / B10: 5024294 [#,##0]" quoted and checked).
+- **Limits:** display formatting is not rendered, so the sheet's "5,024,294" is
+  stored as `5024294 [#,##0]` and a quotation must use the stored form; XLS was
+  tested only on invented broken input (no XLS writer is pinned), not live.
 
 ## SEC tools
 edgartools 5.62.1 resolves the company and lists filings (with filing dates and
