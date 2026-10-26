@@ -163,7 +163,7 @@ def test_a_runs_role_reads_its_database_and_nothing_else(tmp_path: Path,
                                                          owner: Owner) -> None:
     _, mine = owner.export(tmp_path, "mine")
     _, theirs = owner.export(tmp_path, "theirs")
-    password = owner.sink.create_run_role(mine)
+    password = owner.sink.create_run_role(mine, "c" * 32)
     assert owner.sink.write_problems(mine) == []
     with pytest.raises(SinkError, match="cannot connect"):
         owner.as_role(mine, password, theirs.database)  # another run's database
@@ -208,8 +208,40 @@ def test_an_existing_role_is_never_reused(owner: Owner) -> None:
     owner.made.append(space)
     owner.run(f"CREATE ROLE {space.role} LOGIN SUPERUSER")  # planted ahead of the run
     with pytest.raises(SinkError, match="never reused"):
-        owner.sink.create_run_role(space)
+        owner.sink.create_run_role(space, "d" * 32)
+    with pytest.raises(SinkError, match="never reused"):
+        owner.sink.repair_run_role(space, "d" * 32)  # no marker: never adopted
     assert "has superuser" in owner.sink.write_problems(space)
+    with pytest.raises(SinkError, match="marker"):
+        owner.sink.drop_run(space, "d" * 32)  # nor dropped
+    con = owner.sink.connect()
+    cur = con.cursor()
+    cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (space.role,))
+    assert cur.fetchall()
+    con.close()
+
+
+@pytest.mark.live_postgres
+@PG
+def test_a_role_left_without_its_grants_is_repaired(tmp_path: Path, owner: Owner) -> None:
+    _, space = owner.export(tmp_path, "repair")
+    owner.sink.create_run_role(space, "e" * 32)
+    owner.run(f"REVOKE SELECT ON ALL TABLES IN SCHEMA public FROM {space.role}",
+              space.database)  # as if the grants had failed after the role's commit
+    owner.run(f"REVOKE USAGE ON SCHEMA public FROM {space.role}", space.database)
+    with pytest.raises(SinkError, match="never reused"):
+        owner.sink.repair_run_role(space, "f" * 32)  # another setup's marker
+    password = owner.sink.repair_run_role(space, "e" * 32)
+    assert owner.sink.write_problems(space) == []
+    con = owner.as_role(space, password)
+    try:
+        cur = con.cursor()
+        cur.execute("SELECT count(*) FROM public.claim")
+        assert cur.fetchall()[0][0] == 5
+    finally:
+        con.close()
+    assert owner.sink.drop_run(space, "e" * 32) == [f"database {space.database}",
+                                                    f"role {space.role}"]
 
 
 @pytest.mark.live_postgres
@@ -228,7 +260,7 @@ def test_any_capability_beyond_reading_is_found(tmp_path: Path, owner: Owner, gr
                                                 problem: str, inside: bool) -> None:
     _, space = owner.export(tmp_path, "w")
     _, other = owner.export(tmp_path, "o")
-    owner.sink.create_run_role(space)
+    owner.sink.create_run_role(space, "a" * 32)
     for stmt in grant.format(r=space.role, d=space.database, o=other.database).split("; "):
         owner.run(stmt, space.database if inside else None)
     assert problem in owner.sink.write_problems(space)
@@ -283,3 +315,13 @@ def test_invented_run_round_trip_through_zetaris(tmp_path: Path, owner: Owner,
     assert alerts == []
     zlines = [e for e in log.entries if e.get("engine") == "zetaris" and e.get("ok")]
     assert zlines and all("rows" in e and "sql" in e for e in zlines)
+    (run / "status.json").write_text(json.dumps({"state": "finished"}))
+    from stemma.datalayer import cleanup
+
+    removed = cleanup(run, s)  # explicit, logged, and complete
+    assert removed == [f"semantic layer {space.model}", f"datasource {space.datasource}",
+                       f"database {space.database}", f"role {space.role}"]
+    assert not [r for r in zclean.cells("SHOW DATASOURCES") if r[0] == space.datasource]
+    assert not owner.sink.role_exists(space)
+    assert json.loads((run / "datalayer" / "queries.jsonl").read_text().splitlines()[-1])[
+        "purpose"] == "cleanup"

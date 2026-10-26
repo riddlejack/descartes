@@ -152,19 +152,38 @@ def test_non_finite_values_refuse(number: float, text: str) -> None:
 
 
 class FakeSink:
-    def __init__(self, exists: bool = False, problems: list[str] | None = None) -> None:
+    def __init__(self, exists: bool = False, problems: list[str] | None = None,
+                 marker: str | None = None) -> None:
         self.exists = exists
         self.problems = problems or []
+        self.marker = marker
         self.created = 0
         self.resets = 0
+        self.repaired = 0
+        self.dropped: list[str] = []
 
     def role_exists(self, space: RunSpace) -> bool:
         return self.exists
 
-    def create_run_role(self, space: RunSpace) -> str:
+    def role_marker(self, space: RunSpace) -> str | None:
+        return self.marker
+
+    def create_run_role(self, space: RunSpace, marker: str) -> str:
         self.created += 1
         self.exists = True
+        self.marker = f"stemma-run:{marker}"
         return "P" * 32
+
+    def repair_run_role(self, space: RunSpace, marker: str) -> str:
+        if self.marker != f"stemma-run:{marker}":
+            raise SinkError("role exists but this run did not create it; a role is never "
+                            "reused")
+        self.repaired += 1
+        return "R" * 32
+
+    def drop_run(self, space: RunSpace, marker: str | None) -> list[str]:
+        self.dropped.append(space.database)
+        return [f"database {space.database}", f"role {space.role}"]
 
     def reset_password(self, space: RunSpace) -> str:
         self.resets += 1
@@ -176,6 +195,7 @@ class FakeSink:
 
 class FakeStatements:
     def __init__(self, listed: list[str] | None = None, fail_on: str | None = None) -> None:
+        self.usls: list[str] = []
         self.listed = listed or []
         self.fail_on = fail_on
         self.sent: list[str] = []
@@ -188,6 +208,8 @@ class FakeStatements:
         return {}
 
     def cells(self, sql: str) -> list[list[str]]:
+        if sql.startswith("SHOW NAMESPACES OR TABLES"):
+            return [[name, "usl"] for name in self.usls]
         assert sql == "SHOW DATASOURCES"
         return [[name, "PostgreSQL"] for name in self.listed]
 
@@ -263,3 +285,145 @@ def test_round_trip_numbers_still_exact(run_dir: Path, register: FakeRegister,
     con.close()
     v = _zetaris_values(FakeZetaris(db), QueryLog()).values([C_REVENUE])
     assert v[C_REVENUE].hex() == (48_700_000.0).hex()
+
+
+# --- review of 5f6db32: cleanup, repair by marker, stopping deprovision, bare errors ---
+
+def test_the_marker_is_recorded_before_the_role_exists(run_dir: Path) -> None:
+    class Crashes(FakeSink):
+        def create_run_role(self, space: RunSpace, marker: str) -> str:
+            super().create_run_role(space, marker)
+            raise SinkError("granting the run's role its reads failed")  # after the commit
+
+    sink = Crashes()
+    with pytest.raises(SinkError, match="grant"):
+        _provision(run_dir, sink, FakeStatements())
+    recorded = json.loads((run_dir / setup.RECORD_REL).read_text())
+    assert recorded["role_marker"] and "role" not in recorded["done"]
+    assert sink.marker == f"stemma-run:{recorded['role_marker']}"
+    fixed = FakeSink(exists=True, marker=sink.marker)  # the same role, found next time
+    _provision(run_dir, fixed, FakeStatements())
+    assert fixed.repaired == 1 and fixed.created == 0
+
+
+def test_a_foreign_role_is_never_adopted_even_with_a_record(run_dir: Path) -> None:
+    space = RunSpace(RUN_ID)
+    setup.write_file(run_dir, setup.RECORD_REL.as_posix(),
+                     setup.Record(RUN_ID, [], "a" * 32).as_json(space))
+    with pytest.raises(SinkError, match="never reused"):
+        _provision(run_dir, FakeSink(exists=True, marker="stemma-run:" + "b" * 32),
+                   FakeStatements())
+    with pytest.raises(SinkError, match="never reused"):
+        _provision(run_dir, FakeSink(exists=True, marker=None), FakeStatements())
+
+
+class Cleanable(FakeStatements):
+    def __init__(self, usls: list[str], datasources: list[str],
+                 fail_on: str | None = None, sticky: bool = False) -> None:
+        super().__init__(listed=list(datasources), fail_on=fail_on)
+        self.usls = list(usls)
+        self.sticky = sticky
+
+    def execute(self, sql: str) -> Any:
+        out = super().execute(sql)
+        if sql.startswith("REMOVE USL") and not self.sticky:
+            self.usls = []
+        if sql.startswith("DROP DATASOURCE"):
+            self.listed = []
+        return out
+
+
+def test_deprovision_stops_before_the_datasource_when_the_layer_fails() -> None:
+    space = RunSpace(RUN_ID)
+    st = Cleanable([space.model], [space.datasource], fail_on="REMOVE USL")
+    with pytest.raises(setup.CleanupFailed, match="semantic layer") as e:
+        setup.deprovision(space, st, NS)
+    assert not any(s.startswith("DROP DATASOURCE") for s in st.sent)
+    assert "left in place" in str(e.value) and space.datasource in str(e.value)
+
+
+def test_a_layer_still_listed_after_removal_is_a_failure() -> None:
+    space = RunSpace(RUN_ID)
+    st = Cleanable([space.model], [space.datasource], sticky=True)
+    with pytest.raises(setup.CleanupFailed, match="still listed"):
+        setup.deprovision(space, st, NS)
+    assert not any(s.startswith("DROP DATASOURCE") for s in st.sent)
+
+
+def test_deprovision_removes_layer_then_datasource() -> None:
+    space = RunSpace(RUN_ID)
+    st = Cleanable([space.model], [space.datasource])
+    assert setup.deprovision(space, st, NS) == [f"semantic layer {space.model}",
+                                                f"datasource {space.datasource}"]
+    assert [s.split()[0] for s in st.sent] == ["REMOVE", "DROP"]
+
+
+def test_cleanup_refuses_a_running_run(run_dir: Path) -> None:
+    (run_dir / "status.json").write_text(json.dumps({"state": "running"}))
+    sink, st = FakeSink(), Cleanable([], [])
+    with pytest.raises(setup.CleanupFailed, match="still running"):
+        setup.cleanup(run_dir, RUN_ID, sink, st, NS, QueryLog())
+    assert st.sent == [] and sink.dropped == []
+
+
+def test_cleanup_is_logged_and_then_nothing_is_recreated(run_dir: Path) -> None:
+    space = RunSpace(RUN_ID)
+    sink = FakeSink()
+    _provision(run_dir, sink, FakeStatements())
+    (run_dir / "status.json").write_text(json.dumps({"state": "finished"}))
+    log = QueryLog()
+    removed = setup.cleanup(run_dir, RUN_ID, sink, Cleanable([space.model],
+                                                             [space.datasource]), NS, log)
+    assert removed[:2] == [f"semantic layer {space.model}", f"datasource {space.datasource}"]
+    assert sink.dropped == [space.database]
+    assert log.entries[-1]["purpose"] == "cleanup" and log.entries[-1]["ok"] is True
+    assert setup.cleaned_at(run_dir, RUN_ID) is not None
+    with pytest.raises(SinkError, match="cleaned up"):
+        _provision(run_dir, sink, FakeStatements())
+    from .test_query_data import ZENV
+
+    with pytest.raises(SinkError, match="cleaned up"):
+        sync(run_dir, Settings.from_env(ZENV), FakeRegister(claims()))
+
+
+def test_a_failed_cleanup_step_is_logged_and_stops(run_dir: Path) -> None:
+    space = RunSpace(RUN_ID)
+    sink = FakeSink()
+    log = QueryLog()
+    with pytest.raises(setup.CleanupFailed):
+        setup.cleanup(run_dir, RUN_ID, sink, Cleanable([space.model], [space.datasource],
+                                                       fail_on="REMOVE USL"), NS, log)
+    assert sink.dropped == []  # the database is never dropped under a live datasource
+    assert log.entries[-1]["ok"] is False and "semantic layer" in log.entries[-1]["error"]
+
+
+def test_redacted_errors_carry_no_raw_cause(monkeypatch: pytest.MonkeyPatch) -> None:
+    import traceback
+
+    from stemma.datalayer.sinks import PostgresConfig, PostgresSink
+
+    secret = "Hunter2Hunter2Hunter2Hunter2abcd"
+
+    class Boom:
+        autocommit = False
+
+        def cursor(self) -> Any:
+            return self
+
+        def execute(self, sql: str, *a: Any) -> None:
+            raise RuntimeError(f"syntax error near PASSWORD '{secret}'")
+
+        def rollback(self) -> None: ...
+        def commit(self) -> None: ...
+        def close(self) -> None: ...
+
+    sink = PostgresSink(PostgresConfig("h", 1, "stemma", "stemma", "owner-password-xyz"),
+                        QueryLog())
+    monkeypatch.setattr(sink, "connect", lambda database=None: Boom())
+    from stemma.datalayer.querylog import register_secret
+
+    register_secret(secret)
+    with pytest.raises(SinkError) as e:
+        sink.reset_password(RunSpace(RUN_ID))
+    text = "".join(traceback.format_exception(e.value))
+    assert secret not in text and e.value.__cause__ is None and e.value.__suppress_context__

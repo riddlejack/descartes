@@ -33,7 +33,7 @@ from typing import Any
 
 from stemma.datalayer import setup
 from stemma.datalayer.engines import Engine, SqliteEngine, ZetarisEngine
-from stemma.datalayer.errors import DataLayerError, ValueMismatch
+from stemma.datalayer.errors import DataLayerError, SinkError, ValueMismatch
 from stemma.datalayer.export import ClaimSource, export_run, read_run
 from stemma.datalayer.querylog import QueryLog, scrub
 from stemma.datalayer.runspace import RunSpace
@@ -41,8 +41,8 @@ from stemma.datalayer.sinks import PostgresConfig, PostgresSink, SqliteSink
 from stemma.datalayer.values import EvidenceValues, FallbackValues
 from stemma.datalayer.zetaris import DEFAULT_REST_URL, Transport, ZetarisClient, ZetarisConfig
 
-__all__ = ["DataLayerError", "InputMismatch", "Settings", "input_lookup", "query_log",
-           "sqlite_path", "sync", "values_backend"]
+__all__ = ["DataLayerError", "InputMismatch", "Settings", "cleanup", "input_lookup",
+           "query_log", "sqlite_path", "sync", "values_backend"]
 
 DATALAYER_DIR = "datalayer"
 logger = logging.getLogger("stemma.datalayer")
@@ -112,6 +112,10 @@ def sync(run_dir: Path, settings: Settings | None = None,
     out = {"sqlite": SqliteSink(SQLITE_REL, log, root=run_dir).write(export)}
     if s.mode == "zetaris":
         assert s.postgres is not None and s.zetaris is not None  # checked in from_env
+        when = setup.cleaned_at(run_dir, export.run_id)
+        if when is not None:  # never re-created behind an explicit cleanup
+            raise SinkError(f"run {export.run_id}'s Zetaris and Postgres copies were cleaned "
+                            f"up on {when}; they are not synced again")
         sink = PostgresSink(s.postgres, log)
         out["postgres"] = sink.write(export)
         client = (ZetarisClient(s.zetaris, log) if transport is None
@@ -224,3 +228,17 @@ def input_lookup(run_dir: Path, register_lookup: InputLookup,
         return cid, served
 
     return lookup
+
+
+def cleanup(run_dir: Path, settings: Settings | None = None,
+            transport: Transport | None = None) -> list[str]:
+    """Remove the run's copies from Zetaris and Postgres (explicit only; see setup.cleanup)."""
+    s = settings or Settings.from_env()
+    if s.zetaris is None or s.postgres is None:
+        raise DataLayerError("cleanup needs ZETARIS_API_KEY and STEMMA_PG_PASSWORD")
+    log = query_log(run_dir)
+    run_id, _ = read_run(run_dir)
+    client = (ZetarisClient(s.zetaris, log) if transport is None
+              else ZetarisClient(s.zetaris, log, transport))
+    return setup.cleanup(run_dir, run_id, PostgresSink(s.postgres, log), client,
+                         s.namespace, log)

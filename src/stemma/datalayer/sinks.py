@@ -67,7 +67,7 @@ class SqliteSink:
             finally:
                 con.close()
         except sqlite3.Error as exc:
-            raise SinkError(f"SQLite {self.path}: {scrub(str(exc))}") from exc
+            raise SinkError(f"SQLite {self.path}: {scrub(str(exc))}") from None
         counts = export.counts()
         self.log.write(engine="sqlite", purpose="sync", run_id=export.run_id, rows=counts,
                        ms=round((time.monotonic() - start) * 1000))
@@ -87,7 +87,10 @@ class PostgresConfig:
                 f"database={self.database!r}, user={self.user!r})")
 
 
-# Logical invariants: what may be spliced into DDL, which takes no parameters.
+# Logical invariants: what may be spliced into DDL, which takes no parameters, and the
+# prefix of the comment that marks a role as one this setup created.
+MARKER_PREFIX = "stemma-run:"
+_PLAIN_MARKER = re.compile(r"[0-9a-f]{32}")
 _PLAIN_NAME = re.compile(r"[a-z][a-z0-9_]{0,62}")
 _PLAIN_SECRET = re.compile(r"[A-Za-z0-9]{32}")
 _ALPHABET = string.ascii_letters + string.digits
@@ -126,9 +129,9 @@ class PostgresSink:
             return pg8000.dbapi.connect(host=c.host, port=c.port,
                                         database=database or c.database,
                                         user=c.user, password=c.password, timeout=30)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - pg8000 raises several unrelated types
             raise SinkError(f"cannot connect to Postgres at {c.host}:{c.port}: "
-                            f"{type(exc).__name__}") from exc
+                            f"{type(exc).__name__}") from None  # the driver's error may echo it
 
     @staticmethod
     def _plain(*names: str) -> None:
@@ -149,11 +152,13 @@ class PostgresSink:
             if not autocommit:
                 con.rollback()
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - roll back on any driver error
             if not autocommit:
                 con.rollback()
+            # Raised without the driver's exception as its cause: that one is unredacted,
+            # and a formatted traceback would print it.
             raise SinkError(f"{what} failed: {type(exc).__name__}: "
-                            f"{scrub(str(exc))[:300]}") from exc
+                            f"{scrub(str(exc))[:300]}") from None
         finally:
             con.close()
 
@@ -188,12 +193,36 @@ class PostgresSink:
         result: bool = self._run("looking up the run's role", go)
         return result
 
-    def create_run_role(self, space: RunSpace) -> str:
+    def role_marker(self, space: RunSpace) -> str | None:
+        """The comment on the run's role, which says which setup created it."""
+        def go(con: Any, cur: Any) -> str | None:
+            cur.execute("SELECT shobj_description(oid, 'pg_authid') FROM pg_roles "
+                        "WHERE rolname = %s", (space.role,))
+            rows = cur.fetchall()
+            return str(rows[0][0]) if rows and rows[0][0] is not None else None
+        result: str | None = self._run("reading the run's role marker", go)
+        return result
+
+    def _grant_reads(self, space: RunSpace) -> None:
+        r = space.role
+
+        def grants(con: Any, cur: Any) -> None:
+            cur.execute(f"GRANT USAGE ON SCHEMA public TO {r}")
+            cur.execute(f"GRANT SELECT ON ALL TABLES IN SCHEMA public TO {r}")
+
+        self._run("granting the run's role its reads", grants, space.database)
+
+    def create_run_role(self, space: RunSpace, marker: str) -> str:
         """A fresh login role that can read this run's database and nothing else.
 
-        Never reuses a role: if one of that name exists, this refuses. Returns its
-        password, which goes only into Zetaris's datasource."""
+        The role, its marker (a comment naming this setup's recorded marker), the revokes
+        and its CONNECT grant are one transaction; its reads are granted inside the run's
+        database just after. Never reuses a role: if one of that name exists, this
+        refuses (a role this setup marked is repaired instead, by `repair_run_role`).
+        Returns the password, which goes only into Zetaris's datasource."""
         self._plain(space.role, space.database)
+        if not _PLAIN_MARKER.fullmatch(marker):
+            raise SinkError("the role marker is not plain")
         pw = new_password()
         r = space.role
         self.ensure_database(space)
@@ -208,19 +237,61 @@ class PostgresSink:
             cur.execute(f"CREATE ROLE {r} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
                         f"NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 8 "
                         f"PASSWORD '{pw}'")
+            cur.execute(f"COMMENT ON ROLE {r} IS '{MARKER_PREFIX}{marker}'")
             for d in dbs:
                 cur.execute(f"REVOKE ALL ON DATABASE {d} FROM PUBLIC")
             cur.execute(f"GRANT CONNECT ON DATABASE {space.database} TO {r}")
 
         self._run("creating the run's role", cluster)
-
-        def grants(con: Any, cur: Any) -> None:
-            cur.execute(f"GRANT USAGE ON SCHEMA public TO {r}")
-            cur.execute(f"GRANT SELECT ON ALL TABLES IN SCHEMA public TO {r}")
-
-        self._run("granting the run's role its reads", grants, space.database)
+        self._grant_reads(space)
         self.log.write(engine="postgres", purpose="run_role", role=r, database=space.database)
         return pw
+
+    def repair_run_role(self, space: RunSpace, marker: str) -> str:
+        """Finish a role this setup created and marked (a crash between its creation and
+        its grants); refuses any role without this setup's marker. Returns a new password."""
+        if self.role_marker(space) != f"{MARKER_PREFIX}{marker}":
+            raise SinkError(f"role {space.role} exists but this run did not create it; "
+                            "a role is never reused")
+        pw = new_password()
+        r = space.role
+        self.ensure_database(space)
+
+        def cluster(con: Any, cur: Any) -> None:
+            cur.execute(f"ALTER ROLE {r} PASSWORD '{pw}'")
+            cur.execute(f"GRANT CONNECT ON DATABASE {space.database} TO {r}")
+
+        self._run("repairing the run's role", cluster)
+        self._grant_reads(space)
+        self.log.write(engine="postgres", purpose="run_role_repaired", role=r)
+        return pw
+
+    def drop_run(self, space: RunSpace, marker: str | None) -> list[str]:
+        """Drop the run's database, then its role if this setup's marker is on it.
+
+        A role without the marker is left alone and reported; never a foreign role."""
+        self._plain(space.role, space.database)
+        done: list[str] = []
+
+        def database(con: Any, cur: Any) -> None:
+            cur.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                        "WHERE datname = %s", (space.database,))
+            cur.execute(f"DROP DATABASE IF EXISTS {space.database}")
+
+        self._run("dropping the run's database", database, autocommit=True)
+        done.append(f"database {space.database}")
+        if not self.role_exists(space):
+            return done
+        if marker is None or self.role_marker(space) != f"{MARKER_PREFIX}{marker}":
+            raise SinkError(f"role {space.role} does not carry this run's marker; "
+                            "it was left in place")
+
+        def role(con: Any, cur: Any) -> None:
+            cur.execute(f"DROP ROLE {space.role}")
+
+        self._run("dropping the run's role", role)
+        done.append(f"role {space.role}")
+        return done
 
     def reset_password(self, space: RunSpace) -> str:
         """A new password for this run's own role (one this run created, per its record)."""

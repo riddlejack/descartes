@@ -7,6 +7,7 @@
     python run.py logs RUN_DIR             the judge's log: models, Engine, Zetaris, answer
     python run.py conformance              World Model's conformance suite, live
     python run.py record RUN_DIR PACK_DIR  record a finished run as a replayable pack
+    python run.py cleanup RUN_DIR          remove a finished run's copies from Zetaris and Postgres
 
 A replay is never shown as live: every recorded line is marked [replay] with its file's
 SHA-256, and only what runs now (the conformance suite, the data layer over the replayed
@@ -128,6 +129,20 @@ def cmd_conformance() -> int:
     return result.exit_code
 
 
+def cmd_cleanup(run_dir: Path) -> int:
+    from stemma.datalayer import cleanup
+    from stemma.datalayer.errors import DataLayerError
+
+    try:
+        removed = cleanup(run_dir)
+    except DataLayerError as exc:
+        print(f"cleanup stopped: {exc}", file=sys.stderr)
+        return 2
+    for item in removed:
+        print(f"[live] removed {item}")
+    return 0
+
+
 def cmd_record(run_dir: Path, pack: Path) -> int:
     from hackathon.replay import ReplayError, record
 
@@ -156,6 +171,8 @@ def main(argv: list[str] | None = None) -> int:
     lg = sub.add_parser("logs", help="the judge's log of a run")
     lg.add_argument("run_dir", type=Path)
     sub.add_parser("conformance", help="World Model's conformance suite, live")
+    cu = sub.add_parser("cleanup", help="remove a finished run's Zetaris and Postgres copies")
+    cu.add_argument("run_dir", type=Path)
     rc = sub.add_parser("record", help="record a finished run as a replayable pack")
     rc.add_argument("run_dir", type=Path)
     rc.add_argument("pack", type=Path)
@@ -175,6 +192,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_logs(args.run_dir)
     if args.cmd == "conformance":
         return cmd_conformance()
+    if args.cmd == "cleanup":
+        return cmd_cleanup(args.run_dir)
     return cmd_record(args.run_dir, args.pack)
 
 

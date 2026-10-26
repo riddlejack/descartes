@@ -365,3 +365,21 @@ What a judge sees in `datalayer/queries.jsonl` (one line per query; times vary):
     {"engine": "memory", "purpose": "query_data", "backend": "zetaris", "rows": 2, "sql": "SELECT c.claim_id, ... FROM claim c JOIN claim_support s ..."}
     {"engine": "zetaris", "purpose": "fallback", "level": "loud", "fallback_to": "sqlite", "reason": "zetaris_unavailable: cannot reach http://localhost:8888/...: Connection refused"}
     {"engine": "datalayer", "purpose": "datalayer_unavailable", "level": "loud", "claim_id": "391d...", "mode": "zetaris", "error": "ZetarisUnavailable: ..."}
+
+### Review of 5f6db32, fixed
+1. **Explicit cleanup** (`python run.py cleanup RUN_DIR`, or `python -m stemma.datalayer
+   cleanup`): removes the run's semantic layer, then its datasource, then its Postgres
+   database, then its role; each step logged (`purpose: cleanup`); refused while the
+   run's status says running; never automatic (a replay or pack needs nothing it removes).
+   A cleaned run is never provisioned or synced to Postgres again. Live: the round-trip
+   test ends with a cleanup that leaves no datasource, layer, database or role.
+2. **Role creation with a recorded marker:** the marker is written to the run's record
+   before the role exists; the role, its marker comment, the revokes and its CONNECT grant
+   are one transaction. A role found later is finished only if it carries that marker
+   (live: grants revoked by hand are repaired); any other role is refused, never adopted
+   or dropped.
+3. **Deprovision stops at the first failure** and names what was and was not removed; the
+   datasource is never dropped while the semantic layer remains, and a layer still listed
+   after its removal is a failure. Existence is read from Zetaris's listings.
+4. **Redacted errors are raised `from None`:** a test formats the full traceback of a
+   driver error that echoed a password and finds no trace of it.
