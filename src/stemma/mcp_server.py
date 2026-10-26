@@ -97,7 +97,7 @@ def _call_as[T](caller: Caller, tool: str, fn: Callable[[Register, Caller], T]) 
 WRITE_TOOLS = frozenset({"file_claim", "record_claim_verdict", "entity_review", "tree_upsert",
                          "propose_branch_done", "record_branch_verdict",
                          "request_frame_critique", "submit_draft", "finish_run",
-                         "proceed_on_assumption"})
+                         "proceed_on_assumption", "record_frame", "record_review"})
 
 
 @server.tool()
@@ -235,10 +235,27 @@ async def await_checks(ctx: Context[Any], ids: list[str | int],
 
 
 @server.tool()
-def finish_run(ctx: Context[Any]) -> dict[str, Any]:
-    """Lead only: release deliverable/answer.md. Refused, with every unmet condition,
-    unless the release gate holds."""
-    return _call(ctx, "finish_run", lambda r, c: r.finish_run(c))
+def record_frame(ctx: Context[Any], kind: str, text: str) -> dict[str, Any]:
+    """Blind framer only: record your own frame (kind "own") or your critique (kind
+    "critique") as markdown text. The register writes framer/own-frame.md or
+    framer/critique.md; those files are written by this tool only."""
+    return _call(ctx, "record_frame", lambda r, c: r.record_frame(c, kind, text))
+
+
+@server.tool()
+def record_review(ctx: Context[Any], version: int, text: str) -> dict[str, Any]:
+    """Final reviewers only: record your review of draft <version> as markdown text. The
+    register writes reviews/v<version>/<your file>; reviews are written by this tool
+    only. The draft under review is register/drafts/answer.v<version>.md."""
+    return _call(ctx, "record_review", lambda r, c: r.record_review(c, version, text))
+
+
+@server.tool()
+def finish_run(ctx: Context[Any], version: int) -> dict[str, Any]:
+    """Lead only: release the submitted, reviewed draft <version> as the deliverable.
+    The register copies the frozen draft to deliverable/answer.md itself. Refused, with
+    every unmet condition, unless the release gate holds."""
+    return _call(ctx, "finish_run", lambda r, c: r.finish_run(c, version))
 
 
 def _register_evidence_tools() -> None:

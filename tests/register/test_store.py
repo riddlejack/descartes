@@ -249,34 +249,54 @@ def test_hostile_tree_changes_refused(reg: Register, node: dict[str, Any], msg: 
 # --- Release gate -------------------------------------------------------------------
 
 
-def ready_run(reg: Register) -> str:
+def launched(reg: Register, role: str, prompt: str, session: str) -> Caller:
+    """Mark the latest request for (role, prompt) launched as `session`, as the driver does."""
+    req = [r for r in checks_api.pending_checks(reg.run_dir)
+           if r.role == role and r.prompt == prompt][-1]
+    checks_api.mark_launched(reg.run_dir, req.request_id, session, "claude-opus-5-5", "high")
+    return Caller(f"stemma:{role}", None, session)
+
+
+def frames_and_reviews(reg: Register, version: int = 1) -> None:
+    """The framer's frame and critique, and the three reviews, through their tools."""
+    if not reg._recorded_frames("own"):
+        checks_api.request_check(reg.run_dir, "blind-framer", "frame:own", "run_start")
+        reg.record_frame(launched(reg, "blind-framer", "frame:own", "s-f1"), "own", "own")
+        (reg.run_dir / "frame.md").write_text("frame")
+        reg.request_frame_critique(LEAD)
+        reg.record_frame(launched(reg, "blind-framer", "frame:critique", "s-f2"), "critique",
+                         "critique")
+        (reg.run_dir / "framer/lead-response.md").write_text("response")
+    for i, role in enumerate(("deciders-eye-reviewer", "evidence-auditor",
+                              "mechanical-reader")):
+        who = launched(reg, role, f"draft:{version}", f"s-r{version}-{i}")
+        reg.record_review(who, version, f"review by {role}")
+
+
+def ready_run(reg: Register, body: str | None = None) -> str:
     reg.tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "x", "branch_id": "b1"})
     write_record(reg, "b1")
     reg.propose_branch_done(WORKER, "b1")
     reg.record_branch_verdict(reviewer_for(reg, "b1"), "b1", "answered", "done")
-    (reg.run_dir / "framer").mkdir()
-    for f in ("own-frame.md", "critique.md", "lead-response.md"):
-        (reg.run_dir / "framer" / f).write_text("x")
-    (reg.run_dir / "draft").mkdir()
-    (reg.run_dir / "draft/answer.v1.md").write_text("draft")
-    reg.submit_draft(LEAD, 1)
-    (reg.run_dir / "reviews/v1").mkdir(parents=True)
-    for f in ("deciders-eye.md", "evidence-audit.md", "mechanical.md"):
-        (reg.run_dir / "reviews/v1" / f).write_text("x")
     cid = reg.file_claim(WORKER, claim())["claim_id"]
-    (reg.run_dir / "deliverable").mkdir()
-    (reg.run_dir / "deliverable/answer.md").write_text(
-        f"# Answer\n\nRevenue was 1.2bn [[c:{cid[:12]}]] in the year to 2025 [[nc:period]].\n")
+    (reg.run_dir / "draft").mkdir()
+    (reg.run_dir / "draft/answer.v1.md").write_text(body if body is not None else (
+        f"# Answer\n\nRevenue was 1.2bn [[c:{cid[:12]}]] in the year to 2025 [[nc:period]].\n"))
+    reg.submit_draft(LEAD, 1)
+    frames_and_reviews(reg, 1)
     return cid
 
 
 def test_finish_run_refused_until_a_verdict_exists(reg: Register) -> None:
     cid = ready_run(reg)
     with pytest.raises(Refused, match=f"claim {cid[:12]} has verdict none"):
-        reg.finish_run(LEAD)
+        reg.finish_run(LEAD, 1)
+    assert not (reg.run_dir / "deliverable/answer.md").exists()
     reg.record_claim_verdict(checker_for(reg, cid), cid, "could_not_check", "source offline")
-    out = reg.finish_run(LEAD)
+    out = reg.finish_run(LEAD, 1)
     assert out["finished"]
+    released = (reg.run_dir / "deliverable/answer.md").read_bytes()
+    assert released == (reg.run_dir / "register/drafts/answer.v1.md").read_bytes()
     reader = (reg.run_dir / "deliverable/answer.reader.md").read_text()
     assert "[1, not checked]" in reader and "[[" not in reader
     assert "(not checked)" in reader
@@ -286,24 +306,26 @@ def test_finish_run_refuses_not_supported_and_untagged(reg: Register) -> None:
     cid = ready_run(reg)
     reg.record_claim_verdict(checker_for(reg, cid), cid, "not_supported", "wrong period")
     with pytest.raises(Refused, match="has verdict not_supported"):
-        reg.finish_run(LEAD)
-    (reg.run_dir / "deliverable/answer.md").write_text("Sales were 40 units.\n")
+        reg.finish_run(LEAD, 1)
+    (reg.run_dir / "draft/answer.v2.md").write_text("Sales were 40 units.\n")
+    reg.submit_draft(LEAD, 2)
+    frames_and_reviews(reg, 2)
     with pytest.raises(Refused, match="untagged number"):
-        reg.finish_run(LEAD)
+        reg.finish_run(LEAD, 2)
 
 
 def test_finish_run_lists_every_missing_producer(reg: Register) -> None:
     with pytest.raises(Refused) as e:
-        reg.finish_run(LEAD)
+        reg.finish_run(LEAD, 1)
     msg = str(e.value)
-    for part in ("the tree has no nodes", "framer/critique.md", "framer/lead-response.md",
-                 "no draft was submitted", "deliverable/answer.md"):
+    for part in ("the tree has no nodes", "critique is not recorded",
+                 "framer/lead-response.md", "version 1 was not submitted"):
         assert part in msg
 
 
 def test_finish_run_only_by_the_lead(reg: Register) -> None:
     with pytest.raises(Refused, match="do not finish the run"):
-        reg.finish_run(WORKER)
+        reg.finish_run(WORKER, 1)
 
 
 def test_await_checks_never_invents(reg: Register) -> None:
@@ -404,12 +426,14 @@ def test_waiting_user_branch_proceeds_on_assumption(reg: Register) -> None:
         reg.record_branch_verdict(rev, "b1", "accept_gap", "x", gap_type="lazy")
     reg.record_branch_verdict(rev, "b1", "accept_gap", "the user holds it", gap_type="user_held")
     assert reg.tree()[0]["status"] == "gap_accepted"
-    (reg.run_dir / "deliverable").mkdir()
-    answer = reg.run_dir / "deliverable/answer.md"
-    answer.write_text("# Answer\n\nThe answer holds.\n")
-    assert "does not list the assumption taken for branch b1" in " ".join(reg.finish_failures())
-    answer.write_text("# Answer\n\nThe answer holds. We assume Europe only.\n")
-    assert "assumption" not in " ".join(reg.finish_failures())
+    (reg.run_dir / "draft").mkdir()
+    (reg.run_dir / "draft/answer.v1.md").write_text("# Answer\n\nThe answer holds.\n")
+    reg.submit_draft(LEAD, 1)
+    assert "does not list the assumption taken for branch b1" in " ".join(reg.finish_failures(1))
+    (reg.run_dir / "draft/answer.v2.md").write_text(
+        "# Answer\n\nThe answer holds. We assume Europe only.\n")
+    reg.submit_draft(LEAD, 2)
+    assert "assumption" not in " ".join(reg.finish_failures(2))
 
 
 def test_user_held_needs_a_recorded_assumption(reg: Register) -> None:
@@ -434,8 +458,9 @@ def test_await_checks_waits_for_a_check_not_yet_requested(reg: Register) -> None
 
     def land_later() -> None:
         _time.sleep(1.0)
-        (reg.run_dir / "framer").mkdir(parents=True, exist_ok=True)
-        (reg.run_dir / "framer/own-frame.md").write_text("x")
+        other = Register(reg.run_dir, evidence=FakeEvidence())
+        checks_api.request_check(reg.run_dir, "blind-framer", "frame:own", "run_start")
+        other.record_frame(launched(other, "blind-framer", "frame:own", "s-f"), "own", "x")
 
     t = threading.Thread(target=land_later)
     t.start()

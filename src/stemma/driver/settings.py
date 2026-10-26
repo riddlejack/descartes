@@ -37,7 +37,7 @@ _TOOL = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\(.*\))?$")
 # is a folder, "**" any depth. Beyond the contract's list: `history/` holds earlier frames,
 # `tree.md` renders `tree.json`, and the final deliverable is a draft in final form.
 CLAIM_CHECKER_DENY: Final = (
-    "frame.md", "history/", "framer/", "draft/", "deliverable/", "reviews/",
+    "frame.md", "history/", "framer/", "draft/", "deliverable/", "reviews/", "register/",
     "branches/**/record.md", "branches/**/order.md", "branches/**/restatement.md",
 )
 FRAMER_OWN_DENY: Final = (
@@ -48,10 +48,14 @@ FRAMER_OWN_DENY: Final = (
 # other name the run folder holds or will hold (section 3) is denied.
 DECIDERS_EYE_KNOWN: Final = (
     "frame.md", "history/", "tree.json", "tree.md", "framer/", "branches/", "store/",
-    "register/", "analysis/", "deliverable/", "events.jsonl", "status.json", "status.html",
-    "retro.md", "run.json",
+    "analysis/", "deliverable/", "events.jsonl", "status.json", "status.html",
+    "retro.md", "run.json", "draft/",
+    # register/ holds the frozen draft the reviewer reads; everything else in it is denied.
+    "register/log.jsonl", "register/log.jsonl.lock", "register/checks.jsonl",
+    "register/checks.jsonl.lock", "register/index.sqlite", "register/register.lock",
+    "register/calls/", "register/frames/", "register/tmp/",
 )
-DECIDERS_EYE_KEEP: Final = frozenset({"task", "intake.md", "CLAUDE.md", "draft", "reviews",
+DECIDERS_EYE_KEEP: Final = frozenset({"task", "intake.md", "CLAUDE.md", "register",
                                       ".stemma", ".claude"})
 
 
@@ -132,7 +136,7 @@ def _draft_version(prompt: str) -> str:
 
 def _deciders_eye_reads(prompt: str) -> list[str]:
     """The only run-folder paths the decider's-eye reviewer reads (section 6)."""
-    return ["task", "intake.md", f"draft/answer.v{_draft_version(prompt)}.md"]
+    return ["task", "intake.md", f"register/drafts/answer.v{_draft_version(prompt)}.md"]
 
 
 def _deciders_eye_denials(run_dir: Path, prompt: str) -> list[str]:
@@ -142,18 +146,18 @@ def _deciders_eye_denials(run_dir: Path, prompt: str) -> list[str]:
         for p in sorted(run_dir.iterdir()):
             if p.name not in DECIDERS_EYE_KEEP:
                 out.append(p.name + ("/" if p.is_dir() else ""))
-    draft = run_dir / "draft"
-    if draft.is_dir():
-        for p in sorted(draft.iterdir()):
+    register = run_dir / "register"
+    if register.is_dir():
+        for p in sorted(register.iterdir()):
+            if p.name != "drafts":
+                out.append(f"register/{p.name}" + ("/" if p.is_dir() else ""))
+    drafts = register / "drafts"
+    if drafts.is_dir():
+        for p in sorted(drafts.iterdir()):
             if p.name != f"answer.v{v}.md":
-                out.append(f"draft/{p.name}" + ("/" if p.is_dir() else ""))
-    reviews = run_dir / "reviews"
-    if reviews.is_dir():
-        for p in sorted(reviews.iterdir()):
-            if p.name != f"v{v}":
-                out.append(f"reviews/{p.name}" + ("/" if p.is_dir() else ""))
-    out += [f"reviews/v{v}/evidence-audit.md", f"reviews/v{v}/mechanical.md"]
-    return out
+                out.append(f"register/drafts/{p.name}" + ("/" if p.is_dir() else ""))
+    out.append("reviews/")  # reviews are tool-written; the reviewer records through a tool
+    return list(dict.fromkeys(out))
 
 
 def build_settings(run_dir: Path, role: str, prompt: str, tools: ToolSets,

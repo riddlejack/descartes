@@ -99,6 +99,9 @@ def test_model_and_effort_arguments_stripped(run_dir: Path) -> None:
     "task/question.md", "CLAUDE.md", "claude.md", ".claude/settings.local.json",
     ".stemma/plugin/agents/lead.md", "branches/b1/verdicts/1.json",
     "branches/b1/sub/b2/verdicts/3.json", "deliverable/answer.reader.md",
+    "deliverable/answer.md", "tree.md", "tree.json.tmp", "reviews/v1/deciders-eye.md",
+    "Reviews/V1/mechanical.md", "framer/own-frame.md", "framer/critique.md",
+    "Framer/Critique.md", "events.jsonl.lock",
 ])
 @pytest.mark.parametrize("tool", ["Write", "Edit", "NotebookEdit"])
 def test_hostile_tool_only_writes_refused(run_dir: Path, tool: str, target: str) -> None:
@@ -120,7 +123,7 @@ def test_absolute_path_into_register_refused(run_dir: Path) -> None:
 
 
 @pytest.mark.parametrize("target", ["analysis/model.py", "branches/b1/record.md", "frame.md",
-                                    "draft/answer.v3.md", "deliverable/answer.md",
+                                    "draft/answer.v3.md", "framer/lead-response.md",
                                     "branches/b1/verdicts.md", "registers.md"])
 def test_ordinary_writes_allowed(run_dir: Path, target: str) -> None:
     r = call(run_dir, "pre", pre(run_dir, "Write", {"file_path": target, "content": "x"}))
@@ -144,7 +147,9 @@ def test_post_write_records_the_writer(run_dir: Path) -> None:
 @pytest.mark.parametrize("target", ["branches/b1/record.md", "branches/b1/sub/b2/record.md",
                                     "branches/b1/order.md", "./branches/b1/../b1/record.md",
                                     "BRANCHES/b1/RECORD.md", "frame.md", "history/frame.v1.md",
-                                    "draft/answer.v1.md", "deliverable/answer.md"])
+                                    "draft/answer.v1.md", "deliverable/answer.md",
+                                    "register/drafts/answer.v1.md", "Register/Log.jsonl",
+                                    "framer/own-frame.md"])
 def test_claim_checker_hostile_reads_refused(run_dir: Path, target: str) -> None:
     r = call(run_dir, "pre", pre(run_dir, "Read", {"file_path": target},
                                  agent_type="stemma:claim-checker"))
@@ -175,17 +180,18 @@ def test_deciders_eye_reads_only_task_intake_and_its_draft(run_dir: Path) -> Non
     req = checks_api.request_check(run_dir, "deciders-eye-reviewer", "draft:2", "submit_draft")
     checks_api.mark_launched(run_dir, req.request_id, "s-1", "claude-opus-5-5", "max")
     who = "stemma:deciders-eye-reviewer"
-    for ok in ("task/question.md", "intake.md", "draft/answer.v2.md"):
+    for ok in ("task/question.md", "intake.md", "register/drafts/answer.v2.md"):
         assert call(run_dir, "pre", pre(run_dir, "Read", {"file_path": ok},
                                         agent_type=who)).returncode == 0, ok
-    for bad in ("draft/answer.v1.md", "frame.md", "branches/b1/record.md", "register/x",
-                "store/text/a.txt", "/etc/hosts", "DRAFT/answer.v1.md"):
+    for bad in ("draft/answer.v1.md", "draft/answer.v2.md", "frame.md", "branches/b1/record.md",
+                "register/x", "register/drafts/answer.v1.md", "store/text/a.txt", "/etc/hosts",
+                "DRAFT/answer.v1.md"):
         assert call(run_dir, "pre", pre(run_dir, "Read", {"file_path": bad},
                                         agent_type=who)).returncode == 2, bad
 
 
 def test_deciders_eye_unknown_session_gets_no_draft(run_dir: Path) -> None:
-    r = call(run_dir, "pre", pre(run_dir, "Read", {"file_path": "draft/answer.v2.md"},
+    r = call(run_dir, "pre", pre(run_dir, "Read", {"file_path": "register/drafts/answer.v2.md"},
                                  agent_type="stemma:deciders-eye-reviewer"))
     assert r.returncode == 2
 

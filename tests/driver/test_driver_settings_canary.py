@@ -38,7 +38,8 @@ def test_canary_settings_and_denials() -> None:
     for tool in ("Write", "Edit"):
         for p in ("store/**", "register/**", "tree.json", "events.jsonl", "run.json",
                   "status.json", "status.html", "task/**", "CLAUDE.md", ".claude/**",
-                  ".stemma/**", "branches/**/verdicts/**", "deliverable/answer.reader.md"):
+                  ".stemma/**", "branches/**/verdicts/**", "deliverable/**", "reviews/**",
+                  "tree.md", "framer/own-frame.md", "framer/critique.md"):
             assert f"{tool}(//private/tmp/run-x/{p})" in deny, (tool, p)
     sb = s["sandbox"]
     assert sb["enabled"] and sb["failIfUnavailable"] and sb["allowUnsandboxedCommands"] is False
@@ -97,7 +98,9 @@ def test_deciders_eye_reads_only_task_intake_and_its_draft(tmp: Path) -> None:
     run = tmp / "run"
     for rel in ("task/question.md", "intake.md", "frame.md", "draft/answer.v1.md",
                 "draft/answer.v2.md", "draft/notes.md", "reviews/v1/deciders-eye.md",
-                "reviews/v2/mechanical.md", "odd-new-file.md", "branches/b1/record.md"):
+                "reviews/v2/mechanical.md", "odd-new-file.md", "branches/b1/record.md",
+                "register/drafts/answer.v1.md", "register/drafts/answer.v2.md",
+                "register/log.jsonl"):
         (run / rel).parent.mkdir(parents=True, exist_ok=True)
         (run / rel).write_text("x")
     s = build_settings(run, "deciders-eye-reviewer", "draft:2",
@@ -105,15 +108,18 @@ def test_deciders_eye_reads_only_task_intake_and_its_draft(tmp: Path) -> None:
     deny = s["permissions"]["deny"]
     denied = {r[len("Read(/"):-1] for r in deny if r.startswith("Read(")}
     r = str(run)
-    for must in ("frame.md", "branches/**", "odd-new-file.md", "draft/answer.v1.md",
-                 "draft/notes.md", "reviews/v1/**", "reviews/v2/mechanical.md",
-                 "reviews/v2/evidence-audit.md", "tree.json"):
+    # The reviewer reads the frozen draft (register/drafts/), never the editable draft/.
+    for must in ("frame.md", "branches/**", "odd-new-file.md", "draft/**",
+                 "reviews/**", "tree.json", "register/drafts/answer.v1.md",
+                 "register/log.jsonl"):
         assert f"{r}/{must}" in denied, must
-    for allowed in ("task/**", "intake.md", "draft/answer.v2.md", "draft/**"):
+    for allowed in ("task/**", "intake.md", "register/drafts/answer.v2.md", "register/**",
+                    "register/drafts/**"):
         assert f"{r}/{allowed}" not in denied, allowed
     fs = s["sandbox"]["filesystem"]
     assert fs["denyRead"] == [r, "/cfg/projects"]
-    assert fs["allowRead"] == [f"{r}/task", f"{r}/intake.md", f"{r}/draft/answer.v2.md"]
+    assert fs["allowRead"] == [f"{r}/task", f"{r}/intake.md",
+                               f"{r}/register/drafts/answer.v2.md"]
     with pytest.raises(AgentFileInvalid):
         build_settings(run, "deciders-eye-reviewer", "draft:x", split_tools([]), CONFIG)
 

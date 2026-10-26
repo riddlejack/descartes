@@ -125,7 +125,8 @@ def write_event(hook: dict[str, Any], run_dir: Path) -> dict[str, Any]:
 # --- Blind roles' reads ------------------------------------------------------------
 
 _CHECKER_HIDDEN_BRANCH_FILES = frozenset({"record.md", "order.md", "restatement.md"})
-_CHECKER_HIDDEN_TOP = frozenset({"frame.md", "history", "draft", "deliverable", "reviews"})
+_CHECKER_HIDDEN_TOP = frozenset({"frame.md", "history", "draft", "deliverable", "reviews",
+                                 "register", "framer"})
 _FRAMER_HIDDEN_TOP = frozenset(
     {"frame.md", "history", "tree.json", "tree.md", "branches", "draft", "deliverable", "reviews"}
 )
@@ -134,7 +135,9 @@ _FRAMER_HIDDEN_TOP = frozenset(
 def _deciders_eye_allowed(rel: PurePosixPath, draft_version: str | None) -> bool:
     if paths.under(rel, "task") or rel == PurePosixPath("intake.md"):
         return True
-    return draft_version is not None and rel == PurePosixPath(f"draft/answer.v{draft_version}.md")
+    # The frozen copy submit_draft made: what was submitted, whatever draft/ holds now.
+    return draft_version is not None and \
+        rel == PurePosixPath(f"register/drafts/answer.v{draft_version}.md")
 
 
 def blind_read_refusal(role: str, rel: PurePosixPath, run_dir: Path,

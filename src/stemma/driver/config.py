@@ -30,6 +30,8 @@ TOOL_ONLY: Final = (
     "store/",
     "register/",
     "tree.json",
+    "tree.json.tmp",
+    "tree.md",
     "events.jsonl",
     "events.jsonl.lock",
     "run.json",
@@ -40,7 +42,10 @@ TOOL_ONLY: Final = (
     ".claude/",
     ".stemma/",
     "branches/**/verdicts/",
-    "deliverable/answer.reader.md",
+    "deliverable/",
+    "reviews/",
+    "framer/own-frame.md",
+    "framer/critique.md",
 )
 
 # Models a run may use (invariant: CONTRACTS section 6, `availableModels`; never Haiku).

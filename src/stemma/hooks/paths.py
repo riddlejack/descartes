@@ -46,9 +46,11 @@ def _parts(rel: PurePosixPath) -> tuple[str, ...]:
 # Written only by Stemma's tools, the driver or the hooks (CONTRACTS section 3), plus the
 # files that configure later sessions (`CLAUDE.md`, `.claude/`), which no agent may change.
 _TOOL_ONLY_TOP = frozenset(
-    {"store", "register", "tree.json", "events.jsonl", "run.json", "status.json",
-     "status.html", "task", "claude.md", ".claude", ".stemma"}
+    {"store", "register", "tree.json", "tree.md", "events.jsonl", "run.json", "status.json",
+     "status.html", "task", "claude.md", ".claude", ".stemma", "reviews", "deliverable"}
 )
+# Tool-written files inside an otherwise author-written folder (casefolded).
+_TOOL_ONLY_FILES = frozenset({("framer", "own-frame.md"), ("framer", "critique.md")})
 
 
 def is_tool_only(rel: PurePosixPath) -> bool:
@@ -61,7 +63,9 @@ def is_tool_only(rel: PurePosixPath) -> bool:
         return True
     if parts[0] == "branches" and len(parts) >= 2 and parts[-1] == "verdicts":
         return True
-    return parts == ("deliverable", "answer.reader.md")
+    if parts[0].endswith((".tmp", ".lock")) or parts[0].startswith(("tree.json", "tree.md")):
+        return True  # host temp and lock names beside tool-only files
+    return parts in _TOOL_ONLY_FILES
 
 
 def is_branch_file(rel: PurePosixPath, names: frozenset[str]) -> bool:

@@ -27,16 +27,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
-from stemma.register import checks_api, filing, jsonl, roles, tags
+from stemma.register import checks_api, filing, jsonl, roles, safeio, tags
 from stemma.register.derivation import RerunResult, rerun
 from stemma.register.evidence_port import Evidence, QuoteCheckFailed
 from stemma.register.evidence_port import load as load_evidence
@@ -51,10 +52,13 @@ RELEASABLE = frozenset({"holds", "holds_with_correction", "could_not_check"})
 NODE_KINDS = ("option", "condition", "rival", "open_lane")
 NODE_FIELDS = frozenset({"id", "parent", "kind", "statement", "doubt", "settles_by",
                          "flip_point", "crux", "branch_id", "status"})
+NODE_RECORD_FIELDS = NODE_FIELDS | {"reopened_from"}
 STATUSES = ("open", "in_progress", "proposed_done", "answered", "gap_accepted",
             "waiting_user", "stopped_by_limit")
 DONE = frozenset({"answered", "gap_accepted", "stopped_by_limit"})
 SETTABLE_BY_AUTHORS = frozenset({"open", "in_progress"})
+# Statuses a branch verdict set or is about to set; content changes reopen the node.
+REVIEWED = frozenset({"proposed_done", "answered", "gap_accepted"})
 GAP_TYPES = ("user_held", "source_unavailable", "method_exhausted", "out_of_scope")
 BRANCH_VERDICTS = {"answered": "answered", "accept_gap": "gap_accepted",
                    "find_more": "in_progress", "analyse": "in_progress",
@@ -63,6 +67,8 @@ RECORD_HEADINGS = ("Conclusion and confidence", "Claims (ids)", "Model", "Rival 
                    "Methods tried and what each returned", "Gaps (typed)",
                    "Implications for other branches", "What was not checked")
 REVIEW_FILES = ("deciders-eye.md", "evidence-audit.md", "mechanical.md")
+REVIEW_FILE_OF = dict(zip(roles.FINAL_REVIEWERS, REVIEW_FILES, strict=True))
+FRAME_FILES = {"own": "framer/own-frame.md", "critique": "framer/critique.md"}
 
 # Resource limits: how long await_checks may block in one call, and how often it looks.
 AWAIT_MAX_S = 300
@@ -90,8 +96,8 @@ def node_entity(node_id: str) -> str:
     return f"node:{SYSTEM}:{node_id}"
 
 
-def sha256_file(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 class Register:
@@ -140,6 +146,24 @@ class Register:
         state = checks_api.state_for_session(self.run_dir, caller.session_id)
         if state is None or state.request.role != role or state.request.prompt != prompt:
             raise Refused(f"Refused: this session was not started for {prompt}.")
+        rounds = checks_api.for_prompt(self.run_dir, role, prompt)
+        if state.request.round != max(r.request.round for r in rounds):
+            raise Refused(f"Refused: this session was started for an earlier round of {prompt}.")
+
+    def _read(self, rel: str | PurePosixPath) -> bytes:
+        """An agent-written file's bytes, refusing symlinks anywhere on the path."""
+        try:
+            return safeio.read_bytes(self.run_dir, rel)
+        except FileNotFoundError as exc:
+            raise Refused(f"Refused: {rel} does not exist.") from exc
+        except (safeio.UnsafePath, NotADirectoryError) as exc:
+            raise Refused(f"Refused: {rel} is not a plain file.") from exc
+
+    def _write(self, rel: str | PurePosixPath, text: str) -> None:
+        try:
+            safeio.write_text(self.run_dir, rel, text)
+        except (safeio.UnsafePath, NotADirectoryError) as exc:
+            raise Refused(f"Refused: {rel} cannot be written safely.") from exc
 
     # ------------------------------------------------------------------- claims
     def resolve_claim_id(self, given: str) -> str:
@@ -260,9 +284,10 @@ class Register:
             source = self._src(caller, kind="claim-checker")
             out: dict[str, Any] = {"claim_id": cid, "verdict": verdict}
             if corrected is not None:
+                new_id = filing.claim_id_of(corrected.claim)
+                if self.wm.view("graph").entity(claim_entity(new_id)) is not None:
+                    raise Refused("Refused: the corrected claim is already in the register.")
                 new_cid, _ = self._store_claim(corrected, caller, cid)
-                if new_cid == cid:
-                    raise Refused("Refused: the corrected claim is identical to the claim.")
                 self.wm.assertFact({"about": claim_entity(cid), "predicate": "superseded_by",
                                     "value": new_cid, "source": source})
                 self.wm.assertFact({"about": claim_entity(new_cid), "predicate": "verdict",
@@ -330,15 +355,18 @@ class Register:
                 writers[str(ev["path"])] = str(ev.get("agent_type"))
         skip = {"store", "register", ".stemma", ".claude"}
         out = []
-        for path in sorted(self.run_dir.rglob("*")):
-            rel = path.relative_to(self.run_dir)
-            if not path.is_file() or (rel.parts and rel.parts[0] in skip):
+        files: list[PurePosixPath] = []
+        for top, dirs, names in os.walk(self.run_dir, followlinks=False):
+            base = PurePosixPath(Path(top).relative_to(self.run_dir).as_posix())
+            if base.parts and base.parts[0] in skip:
+                dirs[:] = []
                 continue
-            if path.suffix not in (".md", ".py", ".json", ".txt", ".csv"):
-                continue
-            try:
-                text = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
+            files += [base / n for n in names
+                      if PurePosixPath(n).suffix in (".md", ".py", ".json", ".txt", ".csv")]
+        for rel in sorted(files):
+            try:  # regular files only: a planted symlink or FIFO is skipped, never followed
+                text = safeio.read_text(self.run_dir, rel)
+            except (OSError, UnicodeDecodeError, safeio.UnsafePath):
                 continue
             if short in tags.claim_tags(text) or claim_id in text:
                 key = str(rel).casefold()
@@ -399,9 +427,7 @@ class Register:
     def _write_tree(self) -> None:
         nodes = self.tree()
         data = {"nodes": nodes, "log_tx": len(self.wm.audit())}
-        tmp = self.run_dir / "tree.json.tmp"
-        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(self.run_dir / "tree.json")
+        self._write("tree.json", json.dumps(data, indent=2, ensure_ascii=False))
         lines = ["# Issue tree (rendered from tree.json)", ""]
         children: dict[str | None, list[dict[str, Any]]] = {}
         for n in nodes:
@@ -415,7 +441,7 @@ class Register:
                 walk(str(n["id"]), depth + 1)
 
         walk(None, 0)
-        (self.run_dir / "tree.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self._write("tree.md", "\n".join(lines) + "\n")
 
     def _put_node(self, node: dict[str, Any], source: dict[str, Any]) -> None:
         self.wm.upsertEntity({"type": "node", "externalKey": {"system": SYSTEM,
@@ -427,6 +453,7 @@ class Register:
         bad = sorted(set(node) - NODE_FIELDS)
         if bad:
             raise Refused(f"Refused: unknown node field {bad[0]}.")
+        node = dict(node)
         nid = node.get("id")
         if not isinstance(nid, str) or not _SAFE_ID.fullmatch(nid):
             raise Refused("Refused: a node needs a plain id.")
@@ -449,24 +476,37 @@ class Register:
             if branch is not None and (not isinstance(branch, str)
                                        or not _SAFE_ID.fullmatch(branch)):
                 raise Refused("Refused: branch_id is not a plain id.")
-            old_status = (existing.get(nid) or {}).get("status")
+            old = existing.get(nid) or {}
+            old_status = old.get("status")
             if ("status" in node and node["status"] != old_status
                     and node["status"] not in SETTABLE_BY_AUTHORS):
                 raise Refused(f"Refused: status {node['status']} is not set by tree_upsert.")
+            changed = [k for k in NODE_FIELDS - {"id", "status"} if merged.get(k) != old.get(k)]
+            if old and old_status in REVIEWED and changed:
+                # A reviewed (or under-review) node that changes is no longer what was
+                # reviewed: it reopens, and only a new branch verdict can close it again.
+                merged["status"] = "in_progress"
+                merged["reopened_from"] = old_status
             self._put_node(merged, self._src(caller))
             self._write_tree()
         return merged
 
-    def _branch_dir(self, branch_id: str) -> Path:
-        if not _SAFE_ID.fullmatch(branch_id):
+    def _branch_dir(self, branch_id: str) -> PurePosixPath:
+        """The branch's folder, relative to the run folder, reached without symlinks."""
+        if not isinstance(branch_id, str) or not _SAFE_ID.fullmatch(branch_id):
             raise Refused("Refused: branch_id is not a plain id.")
-        direct = self.run_dir / "branches" / branch_id
-        if direct.is_dir():
-            return direct
-        hits = [p for p in (self.run_dir / "branches").glob(f"**/sub/{branch_id}") if p.is_dir()]
+        root = self.run_dir / "branches"
+        hits = [root / branch_id] if (root / branch_id).is_dir() else \
+            [p for p in root.glob(f"**/sub/{branch_id}") if p.is_dir()]
         if len(hits) != 1:
             raise Refused(f"Refused: branch {branch_id} has no folder.")
-        return hits[0]
+        rel = PurePosixPath(hits[0].relative_to(self.run_dir).as_posix())
+        here = self.run_dir
+        for part in rel.parts:
+            here = here / part
+            if here.is_symlink() or not here.is_dir():
+                raise Refused(f"Refused: branch {branch_id}'s folder is not a plain folder.")
+        return rel
 
     def _branch_nodes(self, branch_id: str) -> list[dict[str, Any]]:
         nodes = [n for n in self.tree() if n.get("branch_id") == branch_id]
@@ -477,10 +517,14 @@ class Register:
     def propose_branch_done(self, caller: Caller, branch_id: str) -> dict[str, Any]:
         self._require(caller, roles.AUTHORS, "propose a branch done")
         record = self._branch_dir(branch_id) / "record.md"
-        if not record.is_file():
-            raise Refused("Refused: the branch has no record.md.")
+        try:
+            record_bytes = safeio.read_bytes(self.run_dir, record)
+        except FileNotFoundError as exc:
+            raise Refused("Refused: the branch has no record.md.") from exc
+        except (safeio.UnsafePath, NotADirectoryError) as exc:
+            raise Refused("Refused: record.md is not a plain file.") from exc
         headings = [h.strip() for h in re.findall(r"^#{1,6}\s+(.+?)\s*$",
-                                                   record.read_text(encoding="utf-8"), re.MULTILINE)]
+                                                   record_bytes.decode("utf-8"), re.MULTILINE)]
         missing = [h for h in RECORD_HEADINGS if h not in headings]
         if missing:
             raise Refused(f"Refused: record.md lacks the heading {missing[0]!r}.")
@@ -494,7 +538,7 @@ class Register:
             req = checks_api.request_check(self.run_dir, roles.BRANCH_REVIEWER,
                                            f"branch:{branch_id}", "propose_branch_done",
                                            round_no=len(prior) + 1)
-        return {"branch_id": branch_id, "record_digest": sha256_file(record),
+        return {"branch_id": branch_id, "record_digest": sha256_bytes(record_bytes),
                 "check_requested": req.request_id}
 
     def record_branch_verdict(self, caller: Caller, branch_id: str, verdict: str,
@@ -519,7 +563,7 @@ class Register:
             nodes = self._branch_nodes(branch_id)
             if any(n["status"] != "proposed_done" for n in nodes):
                 raise Refused("Refused: the branch is not proposed done.")
-            digest = sha256_file(branch_dir / "record.md")
+            digest = sha256_bytes(self._read(branch_dir / "record.md"))
             body = {"branch_id": branch_id, "verdict": verdict, "reason": reason,
                     "method": method, "gap_type": gap_type, "record_digest": digest, "by": caller.agent_type,
                     "session": caller.session_id, "at": now()}
@@ -529,11 +573,18 @@ class Register:
                                     "value": body, "source": source})
                 self._put_node({**n, "status": BRANCH_VERDICTS[verdict]}, source)
             vdir = branch_dir / "verdicts"
-            vdir.mkdir(exist_ok=True)
-            number = len(list(vdir.glob("*.json"))) + 1
-            (vdir / f"{number}.json").write_text(json.dumps(body, indent=2), encoding="utf-8")
+            number = len(self._verdict_files(branch_dir)) + 1
+            self._write(vdir / f"{number}.json", json.dumps(body, indent=2))
             self._write_tree()
-        return {**body, "verdict_file": str((vdir / f"{number}.json").relative_to(self.run_dir))}
+        return {**body, "verdict_file": str(vdir / f"{number}.json")}
+
+    def _verdict_files(self, branch_dir: PurePosixPath) -> list[PurePosixPath]:
+        vdir = self.run_dir / branch_dir / "verdicts"
+        if vdir.is_symlink() or not vdir.is_dir():
+            return []
+        names = sorted((p for p in vdir.glob("*.json") if p.stem.isdigit()),
+                       key=lambda p: int(p.stem))
+        return [branch_dir / "verdicts" / p.name for p in names]
 
     def assumptions(self, branch_id: str | None = None) -> list[dict[str, Any]]:
         """Assumptions taken in place of a user's answer, oldest first."""
@@ -553,10 +604,9 @@ class Register:
             if any(n["status"] != "waiting_user" for n in nodes):
                 raise Refused("Refused: the branch is not waiting on the user.")
             question = None
-            vdir = branch_dir / "verdicts"
-            files = sorted(vdir.glob("*.json"), key=lambda p: int(p.stem)) if vdir.is_dir() else []
+            files = self._verdict_files(branch_dir)
             if files:
-                question = json.loads(files[-1].read_text(encoding="utf-8")).get("reason")
+                question = json.loads(self._read(files[-1])).get("reason")
             source = self._src(caller)
             record = {"branch_id": branch_id, "question": question,
                       "assumption": assumption.strip(), "at": source["at"]}
@@ -581,9 +631,8 @@ class Register:
 
     def request_frame_critique(self, caller: Caller) -> dict[str, Any]:
         self._require(caller, frozenset({roles.LEAD}), "ask for the frame critique")
-        if not (self.run_dir / "frame.md").is_file():
-            raise Refused("Refused: frame.md does not exist.")
-        if not (self.run_dir / "framer" / "own-frame.md").is_file():
+        frame = self._read("frame.md")
+        if not self._recorded_frames("own"):
             raise Refused("Refused: the blind framer's own frame has not landed.")
         with jsonl.exclusive(self._lock):
             self.wm.refresh()
@@ -591,7 +640,7 @@ class Register:
             req = checks_api.request_check(self.run_dir, roles.BLIND_FRAMER, "frame:critique",
                                            "request_frame_critique", round_no=len(prior) + 1)
             self._run_fact(caller, "frame_critique_requested",
-                           {"frame_digest": sha256_file(self.run_dir / "frame.md"),
+                           {"frame_digest": sha256_bytes(frame),
                             "round": req.round})
         return {"check_requested": req.request_id, "round": req.round}
 
@@ -603,25 +652,77 @@ class Register:
         self._require(caller, frozenset({roles.LEAD}), "submit drafts")
         if isinstance(version, bool) or not isinstance(version, int) or version < 1:
             raise Refused("Refused: version is a positive whole number.")
-        path = self.run_dir / "draft" / f"answer.v{version}.md"
-        if not path.is_file():
-            raise Refused(f"Refused: draft/answer.v{version}.md does not exist.")
+        data = self._read(f"draft/answer.v{version}.md")
         with jsonl.exclusive(self._lock):
             done = self.submitted_versions()
             if done and version <= max(done):
                 raise Refused(f"Refused: version {version} is not after version {max(done)}.")
-            frozen = self.dir / "drafts" / f"answer.v{version}.md"
-            frozen.parent.mkdir(exist_ok=True)
-            frozen.write_bytes(path.read_bytes())
+            try:
+                safeio.write_bytes(self.run_dir, frozen_draft(version), data)
+            except safeio.UnsafePath as exc:
+                raise Refused("Refused: the frozen draft cannot be written safely.") from exc
             self._run_fact(caller, "draft_submitted",
-                           {"version": version, "sha256": sha256_file(path)})
+                           {"version": version, "sha256": sha256_bytes(data)})
             reqs = [checks_api.request_check(self.run_dir, role, f"draft:{version}",
                                              "submit_draft").request_id
                     for role in roles.FINAL_REVIEWERS]
         return {"version": version, "checks_requested": reqs}
 
-    def finish_failures(self) -> list[str]:
-        """Every unmet condition of the release gate (CONTRACTS section 6)."""
+    # ------------------------------------------- frames and reviews (tool-written)
+    def _recorded_frames(self, kind: str) -> list[dict[str, Any]]:
+        self.wm.refresh()
+        return [f for f in self._run_facts("frame_recorded") if f["kind"] == kind]
+
+    def _recorded_reviews(self, version: int) -> dict[str, dict[str, Any]]:
+        self.wm.refresh()
+        return {r["role"]: r for r in self._run_facts("review_recorded")
+                if r["version"] == version}
+
+    def record_frame(self, caller: Caller, kind: str, text: str) -> dict[str, Any]:
+        """Blind framer only: its own frame (`own`) or its critique (`critique`), from the
+        session the driver launched for frame:<kind>, latest round."""
+        self._require(caller, frozenset({roles.BLIND_FRAMER}), "record frames")
+        if kind not in FRAME_FILES:
+            raise Refused("Refused: kind is own or critique.")
+        self._session_prompt_is(caller, "blind-framer", f"frame:{kind}")
+        if not isinstance(text, str) or not text.strip():
+            raise Refused("Refused: the frame text is empty.")
+        if kind == "critique" and not self._recorded_frames("own"):
+            raise Refused("Refused: the own frame comes before the critique.")
+        with jsonl.exclusive(self._lock):
+            rnd = len(self._recorded_frames(kind)) + 1
+            self._write(FRAME_FILES[kind], text)
+            self._write(f"register/frames/{kind}.r{rnd}.md", text)
+            record = {"kind": kind, "round": rnd, "sha256": sha256_bytes(text.encode("utf-8")),
+                      "session": caller.session_id}
+            self._run_fact(caller, "frame_recorded", record)
+        return {**record, "file": FRAME_FILES[kind]}
+
+    def record_review(self, caller: Caller, version: int, text: str) -> dict[str, Any]:
+        """A final reviewer only: its review of draft <version>, from the session the
+        driver launched for draft:<version>."""
+        self._require(caller, frozenset(roles.FINAL_REVIEWERS), "record reviews")
+        if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+            raise Refused("Refused: version is a positive whole number.")
+        self._session_prompt_is(caller, roles.short(caller.agent_type), f"draft:{version}")
+        if not isinstance(text, str) or not text.strip():
+            raise Refused("Refused: the review text is empty.")
+        rel = f"reviews/v{version}/{REVIEW_FILE_OF[caller.agent_type]}"
+        with jsonl.exclusive(self._lock):
+            if caller.agent_type in self._recorded_reviews(version):
+                raise Refused("Refused: this review is already recorded.")
+            self._write(rel, text)
+            record = {"version": version, "role": caller.agent_type,
+                      "sha256": sha256_bytes(text.encode("utf-8")), "session": caller.session_id}
+            self._run_fact(caller, "review_recorded", record)
+        return {**record, "file": rel}
+
+    # ------------------------------------------------------------- release gate
+    def finish_failures(self, version: int | None = None,
+                        text: str | None = None) -> list[str]:
+        """Every unmet condition of the release gate (CONTRACTS section 6) for releasing
+        the frozen draft `version` (default: the latest submitted). `text` is that
+        draft's text when the caller has already read it."""
         failures: list[str] = []
         nodes = self.tree()
         if not nodes:
@@ -629,26 +730,32 @@ class Register:
         for n in nodes:
             if n["status"] not in DONE:
                 failures.append(f"node {n['id']} is {n['status']}")
-        for f in ("framer/critique.md", "framer/lead-response.md"):
-            if not (self.run_dir / f).is_file():
-                failures.append(f"{f} does not exist")
+        if not self._recorded_frames("critique"):
+            failures.append("the blind framer's critique is not recorded")
+        if not safeio.is_file(self.run_dir, "framer/lead-response.md"):
+            failures.append("framer/lead-response.md does not exist")
         versions = self.submitted_versions()
-        if not versions:
+        if version is None:
+            version = max(versions) if versions else None
+        if version is None:
             failures.append("no draft was submitted")
-        else:
-            v = max(versions)
-            for r in REVIEW_FILES:
-                if not (self.run_dir / "reviews" / f"v{v}" / r).is_file():
-                    failures.append(f"reviews/v{v}/{r} does not exist")
-        answer = self.run_dir / "deliverable" / "answer.md"
-        if not answer.is_file():
-            failures.append("deliverable/answer.md does not exist")
             return failures
-        text = answer.read_text(encoding="utf-8")
+        if version not in versions:
+            failures.append(f"version {version} was not submitted")
+            return failures
+        have = self._recorded_reviews(version)
+        for role in roles.FINAL_REVIEWERS:
+            if role not in have:
+                failures.append(f"the {roles.short(role)} review of version {version} "
+                                f"is not recorded")
+        if text is None:
+            text = safeio.read_text(self.run_dir, frozen_draft(version))
         for a in self.assumptions():
             if a["assumption"] not in text:
                 failures.append(f"the deliverable does not list the assumption taken for "
                                 f"branch {a['branch_id']}")
+        for line, raw in tags.malformed_tags(text):
+            failures.append(f"deliverable line {line}: malformed tag {raw!r}")
         for seg in tags.untagged_number_segments(text):
             failures.append(f"deliverable line {seg.line}: untagged number in {seg.text[:60]!r}")
         for short in dict.fromkeys(tags.claim_tags(text)):
@@ -664,40 +771,51 @@ class Register:
                 failures.append(f"claim {short} has verdict {verdict or 'none'}")
         return failures
 
-    def finish_run(self, caller: Caller) -> dict[str, Any]:
+    def finish_run(self, caller: Caller, version: int) -> dict[str, Any]:
+        """Release the frozen, reviewed draft `version` as the deliverable. The bytes read
+        once here are the bytes the gate checks and the bytes released and rendered."""
         self._require(caller, frozenset({roles.LEAD}), "finish the run")
+        if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+            raise Refused("Refused: version is a positive whole number.")
         with jsonl.exclusive(self._lock):
-            failures = self.finish_failures()
+            self.wm.refresh()
+            try:
+                data = safeio.read_bytes(self.run_dir, frozen_draft(version))
+            except (FileNotFoundError, safeio.UnsafePath):
+                data = b""
+            text = data.decode("utf-8")
+            failures = self.finish_failures(version, text)
             if failures:
                 raise Refused("Refused: finish_run: " + "; ".join(failures) + ".")
-            self._render_reader()
-            self._run_fact(caller, "finished", {"at": now()})
+            self._write("deliverable/answer.md", text)
+            self._write("deliverable/answer.reader.md", self._render_reader(text))
+            self._run_fact(caller, "finished", {"at": now(), "version": version,
+                                                "sha256": sha256_bytes(data)})
             req = checks_api.request_check(self.run_dir, roles.RETRO_WRITER, "retro:run",
                                            "finish_run")
-        return {"finished": True, "reader": "deliverable/answer.reader.md",
-                "check_requested": req.request_id}
+        return {"finished": True, "version": version, "deliverable": "deliverable/answer.md",
+                "reader": "deliverable/answer.reader.md", "check_requested": req.request_id}
 
-    def _render_reader(self) -> None:
-        text = (self.run_dir / "deliverable" / "answer.md").read_text(encoding="utf-8")
+    def _render_reader(self, text: str) -> str:
         order: dict[str, int] = {}
         refs: list[str] = []
+        unchecked: set[str] = set()
 
         def ref(m: re.Match[str]) -> str:
             short = m.group(1)
             if short not in order:
                 order[short] = len(order) + 1
                 rec = self.get_claim(short)
-                unchecked = (rec["verdict"] or {}).get("verdict") == "could_not_check"
-                mark = " (not checked)" if unchecked else ""
+                if (rec["verdict"] or {}).get("verdict") == "could_not_check":
+                    unchecked.add(short)
+                mark = " (not checked)" if short in unchecked else ""
                 receipts = ", ".join(s["receipt_id"] for s in rec["support"]) or rec["tier"]
                 refs.append(f"{order[short]}. {rec['statement']} [{rec['tier']}; {receipts}]{mark}")
-            rec_unchecked = refs[order[short] - 1].endswith("(not checked)")
-            return f"[{order[short]}{', not checked' if rec_unchecked else ''}]"
+            return f"[{order[short]}{', not checked' if short in unchecked else ''}]"
 
         body = tags.C_TAG.sub(ref, text)
         body = re.sub(r"[ \t]?" + tags.NC_TAG.pattern, "", body)
-        out = body.rstrip() + "\n\n## References\n\n" + "\n".join(refs) + "\n"
-        (self.run_dir / "deliverable" / "answer.reader.md").write_text(out, encoding="utf-8")
+        return body.rstrip() + "\n\n## References\n\n" + "\n".join(refs) + "\n"
 
     # ------------------------------------------------------------------- await
     def _landed(self, target: str) -> dict[str, Any] | None:
@@ -707,21 +825,22 @@ class Register:
                 self.resolve_claim_id(ident))["verdict"]
             return verdict
         if kind == "branch":
-            vdir = self._branch_dir(ident) / "verdicts"
             rounds = checks_api.for_prompt(self.run_dir, "branch-reviewer", target)
-            files = sorted(vdir.glob("*.json"), key=lambda p: int(p.stem)) if vdir.is_dir() else []
+            files = self._verdict_files(self._branch_dir(ident))
             if rounds and len(files) >= len(rounds):
-                result: dict[str, Any] = json.loads(files[-1].read_text(encoding="utf-8"))
+                result: dict[str, Any] = json.loads(self._read(files[-1]))
                 return result
             return None
         if kind == "draft":
-            have = [r for r in REVIEW_FILES if (self.run_dir / "reviews" / f"v{ident}" / r).is_file()]
-            return {"reviews": have} if len(have) == len(REVIEW_FILES) else None
-        if kind == "frame":
-            f = {"own": "framer/own-frame.md", "critique": "framer/critique.md"}.get(ident)
-            if f is None:
+            if not ident.isdigit():
                 raise Refused(f"Refused: {target} is not a check id.")
-            return {"file": f} if (self.run_dir / f).is_file() else None
+            have = self._recorded_reviews(int(ident))
+            return {"reviews": sorted(have)} if len(have) == len(REVIEW_FILES) else None
+        if kind == "frame":
+            if ident not in FRAME_FILES:
+                raise Refused(f"Refused: {target} is not a check id.")
+            got = self._recorded_frames(ident)
+            return {"file": FRAME_FILES[ident], "round": got[-1]["round"]} if got else None
         raise Refused(f"Refused: {target} is not a check id.")
 
     def _normalise_target(self, given: str | int) -> str:
@@ -792,6 +911,11 @@ class Register:
         finally:
             con.close()
         tmp.replace(path)
+
+
+def frozen_draft(version: int) -> str:
+    """Where submit_draft freezes a draft (tool-only; what reviewers read and release uses)."""
+    return f"register/drafts/answer.v{version}.md"
 
 
 def open_register(run_dir: Path) -> Register:
