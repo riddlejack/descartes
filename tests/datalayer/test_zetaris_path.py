@@ -50,7 +50,7 @@ class FakeZetaris:
         if self.body is not None:
             return self.status, self.body
         assert body is not None and self.rows_db is not None
-        sql = re.sub(rf"{re.escape(NS)}\.{MODEL}\.", "", json.loads(body)["sql"])
+        sql = re.sub(rf"{re.escape(NS)}\.{MODEL}\.", "main.", json.loads(body)["sql"])
         con = sqlite3.connect(self.rows_db)
         rows = [list(r) for r in con.execute(sql).fetchall()]
         con.close()

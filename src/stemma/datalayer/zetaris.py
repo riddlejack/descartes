@@ -108,17 +108,18 @@ class ZetarisClient:
         except ValueError as exc:
             raise QueryError(f"the answer is not JSON: {_short(raw)}") from exc
 
-    def _send(self, sql: str, purpose: str,
-              columns: Sequence[str] | None) -> tuple[Any, list[tuple[Any, ...]] | None]:
+    def _send(self, sql: str, purpose: str, columns: Sequence[str] | None, parse: bool,
+              limit: int = ROW_LIMIT, **extra: Any
+              ) -> tuple[Any, list[tuple[Any, ...]] | None]:
         query_id = str(uuid.uuid4())
         start = time.monotonic()
         entry: dict[str, Any] = {"engine": "zetaris", "purpose": purpose, "query_id": query_id,
-                                 "sql": sql}
+                                 "sql": sql, **extra}
         try:
             answer = self.call("/sql-editor/sqls/run", {"queryId": query_id, "sql": sql,
                                                          "source": "SqlEditor",
-                                                         "limit": ROW_LIMIT})
-            rows = rows_of(answer, columns) if purpose == "query" else None
+                                                         "limit": limit})
+            rows = rows_of(answer, columns) if parse else None
         except QueryError as exc:
             self.log.write(**entry, ok=False, error=str(exc),
                            ms=round((time.monotonic() - start) * 1000))
@@ -127,17 +128,23 @@ class ZetarisClient:
                        ms=round((time.monotonic() - start) * 1000))
         return answer, rows
 
+    def run_page(self, sql: str, columns: Sequence[str] | None, limit: int,
+                 purpose: str = "query", **extra: Any) -> list[tuple[Any, ...]]:
+        """At most `limit` rows of one query; the caller decides what a full page means."""
+        _, rows = self._send(sql, purpose, columns, True, limit, **extra)
+        assert rows is not None  # logical invariant: parse=True always yields rows
+        return rows
+
     def run(self, sql: str, columns: Sequence[str] | None = None) -> list[tuple[Any, ...]]:
         """Run one query and return its rows. Logged whether it succeeds or not."""
-        _, rows = self._send(sql, "query", columns)
-        assert rows is not None  # logical invariant: a query always parses rows
+        rows = self.run_page(sql, columns, ROW_LIMIT)
         if len(rows) >= ROW_LIMIT:
             raise QueryError(f"the answer reached the {ROW_LIMIT}-row limit and may be cut short")
         return rows
 
     def execute(self, sql: str) -> Any:
         """Run one statement (DDL, registration) and return Zetaris's answer as given."""
-        answer, _ = self._send(sql, "statement", None)
+        answer, _ = self._send(sql, "statement", None, False)
         return answer
 
     def datasources(self) -> Any:

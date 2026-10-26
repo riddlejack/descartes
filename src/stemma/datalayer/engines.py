@@ -16,7 +16,7 @@ from typing import Any, Protocol
 from stemma.datalayer.errors import QueryError
 from stemma.datalayer.querylog import QueryLog
 from stemma.datalayer.safepath import check_sqlite_file
-from stemma.datalayer.zetaris import ZetarisClient
+from stemma.datalayer.zetaris import ROW_LIMIT, ZetarisClient
 
 
 class Engine(Protocol):
@@ -43,25 +43,34 @@ class SqliteEngine:
             return check_sqlite_file(self.root, self.path.as_posix())
         return self.path
 
-    def query(self, sql: str, columns: Sequence[str]) -> list[tuple[Any, ...]]:
+    def query_page(self, sql: str, limit: int, purpose: str = "query", **extra: Any
+                   ) -> tuple[tuple[str, ...], list[tuple[Any, ...]]]:
+        """Column names and at most `limit` rows, from a read-only connection."""
         start = time.monotonic()
         path = self.resolved()
+        entry: dict[str, Any] = {"engine": self.name, "purpose": purpose, "sql": sql, **extra}
         if not path.is_file():
-            self.log.write(engine=self.name, purpose="query", sql=sql, ok=False,
-                           error="no SQLite file")
+            self.log.write(**entry, ok=False, error="no SQLite file")
             raise QueryError(f"no evidence tables at {path}; sync the run first")
         try:
-            con = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True,
-                                  timeout=30)
+            con = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30)
             try:
-                rows = [tuple(r) for r in con.execute(sql).fetchall()]
+                cur = con.execute(sql)
+                cols = tuple(d[0] for d in cur.description or ())
+                rows = [tuple(r) for r in cur.fetchmany(limit)]
             finally:
                 con.close()
         except sqlite3.Error as exc:
-            self.log.write(engine=self.name, purpose="query", sql=sql, ok=False, error=str(exc))
+            self.log.write(**entry, ok=False, error=str(exc))
             raise QueryError(f"SQLite: {exc}") from exc
-        self.log.write(engine=self.name, purpose="query", sql=sql, ok=True, rows=len(rows),
+        self.log.write(**entry, ok=True, rows=len(rows),
                        ms=round((time.monotonic() - start) * 1000))
+        return cols, rows
+
+    def query(self, sql: str, columns: Sequence[str]) -> list[tuple[Any, ...]]:
+        _, rows = self.query_page(sql, ROW_LIMIT)
+        if len(rows) >= ROW_LIMIT:
+            raise QueryError(f"the answer reached the {ROW_LIMIT}-row limit and may be cut short")
         return rows
 
 
