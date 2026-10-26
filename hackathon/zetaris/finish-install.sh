@@ -53,7 +53,7 @@ fi
 cat <<'EOF'
 
 Zetaris is running. One last step for the owner (about 2 minutes):
-  1. Open http://localhost:3000 and sign in with the email and password in
+  1. Open http://localhost:3300 and sign in with the email and password in
      ~/.private/zetaris/admin.txt
   2. Sidebar: Management -> API Tokens -> "+" -> copy the key (shown once).
   3. Add this line to ~/.private/zetaris/stemma.env:  ZETARIS_API_KEY=<the key>
