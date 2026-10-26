@@ -18,6 +18,8 @@ evidence = [              # part A
     "pypdfium2==5.14.0",
     "edgartools==5.62.1",
     "certifi==2026.10.23",
+    "openpyxl==3.1.5",
+    "xlrd==2.0.2",
 ]
 evidence-tables = ["docling==2.142.1"]     # part A, optional: derived table view
 register = []             # part B

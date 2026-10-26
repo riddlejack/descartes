@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from importlib import metadata
 from typing import Any
 
-from stemma.evidence import charset, htmltext, limits
+from stemma.evidence import charset, datafiles, htmltext, limits
 from stemma.evidence.errors import CaptureStatus
 
 _ATX = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
@@ -39,8 +39,41 @@ HTML_TYPES = frozenset({"text/html", "application/xhtml+xml"})
 XML_TYPES = frozenset({"text/xml", "application/xml", "application/rss+xml",
                        "application/atom+xml", "application/xbrl+xml"})
 TEXT_TYPES = frozenset({"text/plain", "text/csv", "application/json", "text/markdown",
-                        "text/tab-separated-values", "application/ld+json"})
+                        "text/tab-separated-values", "application/ld+json", "application/csv",
+                        "text/json", "application/geo+json"})
+CSV_TYPES = frozenset({"text/csv", "application/csv"})
+TSV_TYPE = "text/tab-separated-values"
 PDF_TYPE = "application/pdf"
+XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+XLS_TYPE = "application/vnd.ms-excel"
+_OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+def is_xml(media: str) -> bool:
+    """XML by name: the listed types and any `+xml` type other than XHTML."""
+    return media in XML_TYPES or (media.endswith("+xml") and media != "application/xhtml+xml")
+
+
+def is_json(media: str) -> bool:
+    return media in ("application/json", "text/json", "application/ld+json") or (
+        media.endswith("+json"))
+
+
+def is_text(media: str) -> bool:
+    return media in TEXT_TYPES or media.startswith("text/") or is_json(media)
+
+
+def _is_xlsx(body: bytes) -> bool:
+    if not body.startswith(b"PK\x03\x04"):
+        return False
+    import io
+    import zipfile
+
+    try:
+        names = zipfile.ZipFile(io.BytesIO(body)).namelist()
+    except (zipfile.BadZipFile, ValueError, OSError):
+        return False
+    return "xl/workbook.xml" in names
 
 
 @dataclass
@@ -57,6 +90,8 @@ class Extraction:
     # Regions of the stored text a reader would not see, or tables whose cells the
     # converter may have misaligned: [{start, end, kind}].
     flagged: list[dict[str, Any]] = field(default_factory=list)
+    # Format facts recorded on the receipt: a CSV dialect, a JSON depth, sheets.
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 def _version(dist: str) -> str:
@@ -72,12 +107,14 @@ def extractor_versions() -> dict[str, str]:
         "markdownify": _version("markdownify"),
         "beautifulsoup4": _version("beautifulsoup4"),
         "pypdfium2": _version("pypdfium2"),
+        "openpyxl": _version("openpyxl"),
+        "xlrd": _version("xlrd"),
         "stemma_extract": EXTRACT_RULES_VERSION,
     }
 
 
 # Invariant: bumped whenever this module's rules change the text it produces.
-EXTRACT_RULES_VERSION = "5"
+EXTRACT_RULES_VERSION = "7"
 
 
 def sniff_content_type(declared: str | None, body: bytes, name_hint: str = "") -> str:
@@ -87,6 +124,18 @@ def sniff_content_type(declared: str | None, body: bytes, name_hint: str = "") -
     if body[:5] == b"%PDF-" or (b"%PDF-" in body[:1024] and media in ("", "application/octet-stream")):
         return PDF_TYPE
     lower_hint = name_hint.lower()
+    # A spreadsheet's signature beats a vague or wrong header (servers often send
+    # XLSX as application/vnd.ms-excel or application/zip).
+    if media in ("", "application/octet-stream", "binary/octet-stream", "application/zip",
+                 "application/x-zip-compressed", XLS_TYPE, XLSX_TYPE) and _is_xlsx(body):
+        return XLSX_TYPE
+    if body.startswith(_OLE_MAGIC) and (media == XLS_TYPE or lower_hint.endswith(".xls")):
+        return XLS_TYPE
+    if media in ("text/plain", "", "application/octet-stream", "binary/octet-stream"):
+        if lower_hint.endswith(".csv"):
+            return "text/csv"
+        if lower_hint.endswith(".tsv"):
+            return TSV_TYPE
     if media in ("", "application/octet-stream", "binary/octet-stream"):
         if lower_hint.endswith(".pdf"):
             return PDF_TYPE
@@ -169,7 +218,8 @@ def _pdf_worker_argv() -> list[str]:
     return [sys.executable, "-I", "-m", "stemma.evidence.pdfworker", str(limits.PDF_MAX_TEXT_CHARS)]
 
 
-def _run_worker(argv: list[str], body: bytes) -> tuple[bytes, bytes]:
+def _run_worker(argv: list[str], body: bytes,
+                timeout: float | None = None) -> tuple[bytes, bytes]:
     """Run the worker, feeding `body` and reading both pipes in bounded chunks. Past
     a recorded byte limit on either pipe, or the time limit, the child is killed and
     the extraction fails typed; nothing accumulates without a bound."""
@@ -202,16 +252,17 @@ def _run_worker(argv: list[str], body: bytes) -> tuple[bytes, bytes]:
     for thread in threads:
         thread.start()
     try:
-        proc.wait(timeout=limits.PDF_EXTRACT_TIMEOUT_S)
+        proc.wait(timeout=limits.PDF_EXTRACT_TIMEOUT_S if timeout is None else timeout)
     except subprocess.TimeoutExpired as exc:
         proc.kill()
         proc.wait()
         raise PdfExtractionError(
-            f"PDF extraction passed its time limit of {limits.PDF_EXTRACT_TIMEOUT_S} s") from exc
+            f"extraction passed its time limit of "
+            f"{limits.PDF_EXTRACT_TIMEOUT_S if timeout is None else timeout} s") from exc
     for thread in threads:
         thread.join(5)
     if over.is_set():
-        raise PdfExtractionError("PDF extraction output passed its byte limit")
+        raise PdfExtractionError("extraction output passed its byte limit")
     return bytes(buffers["stdout"]), bytes(buffers["stderr"])
 
 
@@ -241,6 +292,10 @@ def pdf_to_text(body: bytes) -> tuple[str, list[dict[str, Any]], int, list[str],
         warnings.append(f"invisible_pdf_text_kept: {invisible} ranges")
     if white:
         warnings.append(f"white_pdf_text_kept: {white} ranges")
+    raised = sum(1 for r in flagged if r["kind"] == "superscript")
+    if raised:
+        warnings.append(f"raised_markers_separated: {raised} footnote or superscript markers "
+                        "set apart by a space and flagged")
     return str(ok["text"]), list(ok["outline"]), int(ok["pages"]), warnings, flagged
 
 
@@ -266,10 +321,47 @@ def _sanity(text: str, body_len: int, markup: bool,
     return CaptureStatus.OK, []
 
 
+def _sheet_worker_argv(kind: str) -> list[str]:
+    return [sys.executable, "-I", "-m", "stemma.evidence.sheetworker", kind,
+            str(limits.DATA_MAX_TEXT_CHARS), str(limits.SHEET_MAX_CELLS),
+            str(limits.SHEET_MAX_UNZIPPED_BYTES)]
+
+
+def spreadsheet_to_text(kind: str, body: bytes) -> dict[str, Any]:
+    stdout, stderr = _run_worker(_sheet_worker_argv(kind), body, limits.SHEET_EXTRACT_TIMEOUT_S)
+    try:
+        result: dict[str, Any] = json.loads(stdout.decode("ascii"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        detail = stderr.decode("utf-8", "replace")[-300:]
+        raise PdfExtractionError(f"spreadsheet worker gave no result: {detail}") from exc
+    if "error" in result:
+        suffix = " (size limit)" if result["error"] == "too_much" else ""
+        raise PdfExtractionError(f"{result.get('detail', '')}{suffix}")
+    ok: dict[str, Any] = result["ok"]
+    return ok
+
+
 def extract(body: bytes, declared_type: str | None, name_hint: str = "") -> Extraction:
     """Extract stored text from bytes. Never raises for bad input; returns a status."""
     content_type = sniff_content_type(declared_type, body, name_hint)
     versions = extractor_versions()
+    if content_type in (XLSX_TYPE, XLS_TYPE):
+        kind = "xlsx" if content_type == XLSX_TYPE else "xls"
+        library = "openpyxl" if kind == "xlsx" else "xlrd"
+        extractor = {"name": "stemma-xlsx-stream" if kind == "xlsx" else library,
+                     "version": _version(library),
+                     "rules": EXTRACT_RULES_VERSION}
+        try:
+            sheets = spreadsheet_to_text(kind, body)
+        except PdfExtractionError as exc:
+            return Extraction(CaptureStatus.EXTRACTION_FAILED, content_type,
+                              extractor=extractor, detail=f"{library}: {exc}")
+        text = str(sheets["text"])
+        status, flags = _sanity(text, len(body), False, sheets["flagged"])
+        details = {"sheets": sheets["sheets"], "cells": sheets["cells"]}
+        return Extraction(status, content_type, text, list(sheets["outline"]),
+                          list(sheets["warnings"]) + flags, None, extractor,
+                          flagged=list(sheets["flagged"]), details=details)
     if content_type == PDF_TYPE:
         extractor = {"name": "pypdfium2", "version": versions["pypdfium2"],
                      "rules": EXTRACT_RULES_VERSION}
@@ -290,9 +382,9 @@ def extract(body: bytes, declared_type: str | None, name_hint: str = "") -> Extr
             status = CaptureStatus.SHORT_TEXT
         return Extraction(status, content_type, text, outline, warnings + flags, None,
                           extractor, pages=pages, flagged=pdf_flagged)
-    xml = content_type in XML_TYPES or content_type == "application/xhtml+xml"
-    markup = content_type in HTML_TYPES or content_type in XML_TYPES
-    if markup or content_type in TEXT_TYPES or content_type.startswith("text/"):
+    xml = is_xml(content_type) or content_type == "application/xhtml+xml"
+    markup = content_type in HTML_TYPES or is_xml(content_type)
+    if markup or is_text(content_type):
         kind = "xml" if xml else ("html" if markup else "text")
         decoded, label, warnings = charset.decode(body, declared_type, kind)
         if decoded is None:
@@ -310,13 +402,26 @@ def extract(body: bytes, declared_type: str | None, name_hint: str = "") -> Extr
                                   extractor=extractor, detail=f"markdownify: {exc}")
             warnings += convert_warnings
             outline = markdown_outline(text)
+        elif is_json(content_type):
+            extractor = {"name": "json-pretty", "version": datafiles.JSON_RULES_VERSION,
+                         "rules": EXTRACT_RULES_VERSION}
+            text, details, json_warnings = datafiles.json_text(_normalise_newlines(decoded))
+            warnings += json_warnings
+            outline = []
         else:
             extractor = {"name": "decode", "version": EXTRACT_RULES_VERSION,
                          "rules": EXTRACT_RULES_VERSION}
             text = _normalise_newlines(decoded)
             outline = []
+            details = {}
+            if content_type in CSV_TYPES or content_type == TSV_TYPE:
+                dialect, csv_warnings = datafiles.csv_dialect(text, content_type == TSV_TYPE)
+                details = {"csv_dialect": dialect}
+                warnings += csv_warnings
+        if markup:
+            details = {}
         status, flags = _sanity(text, len(body), markup, flagged)
         return Extraction(status, content_type, text, outline, warnings + flags, label, extractor,
-                          flagged=flagged)
+                          flagged=flagged, details=details)
     return Extraction(CaptureStatus.UNSUPPORTED_CONTENT_TYPE, content_type,
                       detail=f"no text extractor for {content_type}")

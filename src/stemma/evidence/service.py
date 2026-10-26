@@ -24,10 +24,11 @@ from stemma.evidence.errors import HAS_TEXT, CaptureStatus, EvidenceError
 from stemma.evidence.extract import (
     HTML_TYPES,
     PDF_TYPE,
-    TEXT_TYPES,
     XML_TYPES,
     extract,
     extractor_versions,
+    is_text,
+    is_xml,
     sniff_content_type,
 )
 from stemma.evidence.fetch import Fetcher, FetchResult
@@ -197,6 +198,7 @@ class EvidenceService:
             "outline_truncated": False,
             "pages": None,
             "flagged_ranges": [],
+            "format_details": {},
             "text_id": None,
             "warnings": [],
             "served_from_cache": False,
@@ -233,10 +235,9 @@ class EvidenceService:
         charset chosen, and (for SEC filings) the form that adds Item anchors."""
         content_type = sniff_content_type(declared_type, body, name_hint)
         label: str | None = None
-        if content_type != PDF_TYPE and (content_type in HTML_TYPES or content_type in XML_TYPES
-                                         or content_type in TEXT_TYPES
-                                         or content_type.startswith("text/")):
-            xml = content_type in XML_TYPES or content_type == "application/xhtml+xml"
+        if content_type != PDF_TYPE and (content_type in HTML_TYPES or is_xml(content_type)
+                                         or is_text(content_type)):
+            xml = is_xml(content_type) or content_type == "application/xhtml+xml"
             kind = "xml" if xml else ("html" if content_type in HTML_TYPES else "text")
             label = charset.choose(body, declared_type, kind)
         sec_form = form if sec_outline.applies_to(form) else None
@@ -268,6 +269,7 @@ class EvidenceService:
         receipt["extractor"] = result.extractor or None
         receipt["pages"] = result.pages
         receipt["flagged_ranges"] = result.flagged
+        receipt["format_details"] = result.details
         receipt["warnings"].extend(result.warnings)
         if result.detail:
             receipt["detail"] = result.detail
@@ -280,6 +282,7 @@ class EvidenceService:
                 "extractor": result.extractor or None, "pages": result.pages,
                 "detail": result.detail, "warnings": list(result.warnings),
                 "flagged_ranges": result.flagged, "variant": variant,
+                "format_details": result.details,
             }
             for attempt in (target, f"{sha}~{variant}"):
                 try:
@@ -322,6 +325,7 @@ class EvidenceService:
         for key in ("status", "content_type", "charset", "extractor", "pages", "detail"):
             receipt[key] = earlier[key]
         receipt["flagged_ranges"] = earlier.get("flagged_ranges", [])
+        receipt["format_details"] = earlier.get("format_details", {})
         receipt["warnings"].extend(earlier["warnings"])
         receipt["warnings"].append(f"text_reused_from_receipt {earlier['receipt_id']} (same bytes)")
         outline = self.store.get_outline(text_id)

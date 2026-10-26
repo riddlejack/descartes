@@ -195,3 +195,48 @@ def test_live_archive_reliability() -> None:
         "rows": rows,
     })
     assert rows
+
+
+DATA_CSV = ("https://www2.census.gov/programs-surveys/popest/datasets/2020-2023/state/totals/"
+            "NST-EST2023-ALLDATA.csv")
+DATA_XLSX = ("https://www2.census.gov/programs-surveys/popest/tables/2020-2023/state/totals/"
+             "NST-EST2023-POP.xlsx")
+
+
+def test_live_government_data_files() -> None:
+    svc = new_run()
+    csv_r = svc.capture(DATA_CSV, "live test: government statistics CSV")
+    xlsx_r = svc.capture(DATA_XLSX, "live test: government statistics XLSX")
+    assert csv_r["status"] == "ok" and csv_r["content_type"] == "text/csv", csv_r
+    assert csv_r["format_details"]["csv_dialect"]["delimiter"] == ","
+    assert xlsx_r["status"] == "ok", xlsx_r
+    assert xlsx_r["format_details"]["sheets"] >= 1
+    csv_text = api.read_text(svc.run_dir, csv_r["receipt_id"])
+    xlsx_text = api.read_text(svc.run_dir, xlsx_r["receipt_id"])
+    row = next(line for line in csv_text.splitlines() if line.count(",") > 5 and "Alabama" in line)
+    assert svc.check_quote(csv_r["receipt_id"], row)["found"]
+    cell_line = next(line for line in xlsx_text.splitlines() if "Alabama" in line)
+    first_two = "\t".join(cell_line.split("\t")[:2])
+    assert svc.check_quote(xlsx_r["receipt_id"], first_two)["found"]
+    write("data_files", {"csv": summary(csv_r) | {"dialect": csv_r["format_details"],
+                                                  "quoted_row": row[:200]},
+                         "xlsx": summary(xlsx_r) | {"details": xlsx_r["format_details"],
+                                                    "quoted_cells": first_two,
+                                                    "head": xlsx_text[:400]}})
+
+
+CRS_PDF = "https://www.congress.gov/crs_external_products/R/PDF/R48598/R48598.2.pdf"
+
+
+def test_live_crs_footnote_markers() -> None:
+    import re
+
+    svc = new_run()
+    r = svc.capture(CRS_PDF, "live test: CRS report footnote markers")
+    assert r["status"] == "ok", r
+    text = api.read_text(svc.run_dir, r["receipt_id"])
+    markers = [f for f in r["flagged_ranges"] if f["kind"] == "superscript"]
+    assert markers
+    assert not re.findall(r"[a-z)]\.\d{1,3}\n", text)  # no footnote number fused to a sentence
+    sample = [text[max(0, f["start"] - 40):f["end"] + 8] for f in markers[:10]]
+    write("crs_markers", {"receipt": summary(r), "markers": len(markers), "sample": sample})
