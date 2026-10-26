@@ -247,3 +247,35 @@ and its separate DNS lookup remains a known gap.
 - `check_quote` raises typed errors for unusable input (`unknown_receipt`,
   `bad_receipt_id`, `no_text`, `empty_quote`) and returns `found: false` only when
   the text exists and the quote is not in it.
+
+## For the merge review: where I am least sure, and where to attack
+**Least sure of.**
+- Table fidelity. markdownify flattens `rowspan` and `colspan` without
+  re-aligning cells, and pypdfium2 reads multi-column PDF tables in text order.
+  A figure can then sit under the wrong column header in the stored text, and
+  a quote of that row still checks. Only simple tables were tested.
+- The stdlib transport. It was shown on fakes and about 25 live hosts only.
+- The Item outline. It has run on one company's recent filings, and never on
+  old plain-text filings.
+- The edgartools listing. It is read column by column, and only one company
+  has gone through it live.
+
+**Inputs not tested.**
+- PDFs: scanned PDFs needing OCR, encrypted PDFs live, and invisible or
+  white-on-white text (the old broker marked invisible PDF text; this does not).
+- HTML hidden by CSS (`display:none`), which is kept as text.
+- Live pages that are not UTF-8, and live JATS XML.
+- Bodies near the 64 MiB limit, and IPv6-only hosts.
+- Brotli bodies (refused, typed).
+- SEC: filings before 2001, 10-K/A, and company names that resolve ambiguously.
+
+**Where I would attack, to get wrong text or a wrong figure in silently.**
+- Plant a figure in hidden HTML or invisible PDF text. It becomes quotable,
+  "observed" text.
+- Use a table with spanning cells, so the quoted row binds the figure to the
+  wrong column.
+- Get the archive to hold a pre-date 200 capture that was really a parked page,
+  a soft 404 or a holding page. It passes every date check.
+- Name the company ambiguously. `sec_facts` trusts edgartools' resolution of the
+  company to a CIK, and SEC's `filed` field.
+- In the browser fallback, rebind DNS between the gate's lookup and Chromium's.
