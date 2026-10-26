@@ -2,6 +2,8 @@
 
 - `sync <run_dir>`: copy the run's evidence records to SQLite (and Postgres in Zetaris mode);
 - `values <run_dir> <claim_id>...`: the numbers a recorded script would get;
+- `cleanup <run_dir>`: remove a finished run's Zetaris semantic layer and datasource,
+  then its Postgres database and role (never automatic; refused while the run runs);
 - `provision <run_dir>`: sync, then give the run its own read-only role, datasource and
   semantic layer in Zetaris (done once per run; later calls only check the role);
 - `check-zetaris`: one `SELECT 1` through the REST endpoint.
@@ -15,7 +17,7 @@ import json
 import sys
 from pathlib import Path
 
-from stemma.datalayer import Settings, setup, sync, values_backend
+from stemma.datalayer import Settings, cleanup, setup, sync, values_backend
 from stemma.datalayer.errors import DataLayerError
 from stemma.datalayer.querylog import QueryLog
 from stemma.datalayer.safepath import read_file
@@ -38,6 +40,8 @@ def main(argv: list[str] | None = None) -> int:
     vp.add_argument("ids", nargs="+")
     zp = sub.add_parser("provision")
     zp.add_argument("run_dir", type=Path)
+    cl = sub.add_parser("cleanup")
+    cl.add_argument("run_dir", type=Path)
     cp = sub.add_parser("check-zetaris")
     cp.add_argument("--log", type=Path, default=None)
     args = p.parse_args(argv)
@@ -47,6 +51,9 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(sync(args.run_dir, s), indent=2))
         elif args.cmd == "values":
             print(json.dumps(values_backend(args.run_dir, s).values(args.ids), indent=2))
+        elif args.cmd == "cleanup":
+            for item in cleanup(args.run_dir, s):
+                print(f"removed {item}")
         elif args.cmd == "check-zetaris":
             print(_client(s, args.log).run("SELECT 1 AS one", ("one",)))
         else:

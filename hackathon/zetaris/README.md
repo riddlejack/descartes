@@ -27,10 +27,14 @@ This is how Zetaris becomes the data layer on one Mac. Every secret lives in
 bash ~/.private/zetaris/finish-install.sh
 ```
 
-4. When it ends it says what is left: sign in at http://localhost:3000 with the email and
+4. When it ends it says what is left: sign in at http://localhost:3300 with the email and
    password in `~/.private/zetaris/admin.txt`, create an API key under Management → API
    Tokens, and add `ZETARIS_API_KEY=<key>` to `~/.private/zetaris/stemma.env`. Zetaris's
    guide says an agent must never create or fetch this key.
+
+The interface is on port 3300, not Zetaris's default 3000: on this Mac another app
+already listens on 127.0.0.1:3000. `.env` sets `UI_PORT=127.0.0.1:3300` (loopback only)
+and `ALLOWED_ORIGINS` and `GUI_URL` to match.
 
 ## What the builder prepared
 
@@ -78,8 +82,9 @@ python -m pytest tests/datalayer/test_live.py -v
 One USL model per run, `lightning.metastore.stemma.evidence_<run key>`, with ten tables:
 `sync_state`, `capture`, `claim`, `claim_support`, `claim_input`, `claim_entity`,
 `claim_verdict`, `claim_supersession`, `sec_fact` and `doc_table_cell`. Each run's rows
-live in their own Postgres schema, read by a fresh role that can read that schema and
-nothing else (checked before Zetaris is given it, and on every sync). The definitions come from
+live in their own Postgres database (tables in its `public` schema, where Zetaris's
+registration finds them), read by a fresh role that can connect to that database only and
+read its tables only (checked before Zetaris is given it, and on every sync). The definitions come from
 `src/stemma/datalayer/schema.py`, the one place they are written. Each foreign key
 becomes a Zetaris data-quality rule; for example, every support row must cite a
 receipt in the capture manifest.

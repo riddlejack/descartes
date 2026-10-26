@@ -189,7 +189,7 @@ def test_semantic_layer_statements() -> None:
         f"ACTIVATE USL TABLE {NS}.{space.model}.capture AS SELECT run_id")
     assert steps["usl_activate:capture"].endswith(f"FROM {space.datasource}.capture")
     ds = setup.datasource_sql(space, "stemma-evidence-pg", "stemma", "x" * 32)
-    assert f"jdbc:postgresql://stemma-evidence-pg:5432/stemma?currentSchema={space.schema}" in ds
+    assert f"jdbc:postgresql://stemma-evidence-pg:5432/{space.database}\"" in ds
     assert f'username "{space.role}"' in ds
 
 

@@ -322,3 +322,64 @@ Branch `claude/part-d-stage3`, from main at 2afea16.
 5. **Kept:** `datalayer/providers.jsonl` (the Nightshift receipts) is recorded and shown;
    each conformance run is saved (in the replay folder and under `runs/conformance/`), and
    a log written later shows the saved result labelled `recorded <time> sha:`.
+
+## Zetaris live (26 Oct)
+
+Installed from the owner's bundle (images 2.4.3-v2.4.3.1-hackathon). The interface is on
+port 3300: the owner's own app holds 3000. Zetaris's own checks all pass:
+- `verify.sh`: 9 of 9, ending with a query through ui, api, driver and Spark;
+- the REST smoke test: `SELECT 1` through `POST /sql-editor/sqls/run` (rows come back as
+  lists of text);
+- the getting-started Pikachu recipe: `static` not hidden, `lightning-rod` hidden, as
+  recorded upstream.
+
+**Found live, and changed:** Zetaris's JDBC table registration finds tables only in a
+database's `public` schema (`REGISTER DATASOURCE TABLES` reported "0 injected" for a run's
+own schema while `PREVIEW DATASOURCE SQL` read it). So each run now has its own Postgres
+**database** (tables in its `public`), not a schema: stronger isolation (Postgres cannot
+read across databases) and what Zetaris registers. The role checks moved with it: the run's
+role may connect only to its own database (checked across the cluster), and the table
+checks run inside that database. Shown live: it can read its tables and is refused
+connecting to another run's database or `postgres`, and every write, create, alter and temp
+table; seven planted grants are each found.
+
+**The contract-5a round trip, live** (`tests/datalayer/test_live.py::
+test_invented_run_round_trip_through_zetaris`, repeatable; it removes everything it made):
+sync of the invented run (receipts, five claims with verdicts and a correction) into its
+own database; provisioning (fresh role, datasource, a Unified Semantic Layer of ten tables
+with primary and foreign keys, all activated; `LIST DQ USL` lists the key rules); values
+through the semantic layer equal to SQLite's bit for bit; `query_data` through Zetaris
+returning the verdict rows with their claim ids; each derivation input read back through
+Zetaris with the register's exact bits.
+
+**The fallback, live:** with Zetaris's API stopped, each derivation input took the
+register's own number (bits equal) and raised `datalayer_unavailable`; `query_data`
+answered from SQLite and said "Zetaris was unavailable; answered from SQLite".
+
+What a judge sees in `datalayer/queries.jsonl` (one line per query; times vary):
+
+    {"engine": "zetaris", "purpose": "statement", "ok": true, "sql": "CREATE DATASOURCE stemma_r... OPTIONS (... password \"***\" ...)"}
+    {"engine": "zetaris", "purpose": "statement", "ok": true, "sql": "COMPILE USL IF NOT EXISTS evidence_r... DEPLOY NAMESPACE lightning.metastore.stemma DDL ..."}
+    {"engine": "zetaris", "purpose": "query", "ok": true, "rows": 2, "ms": 479, "sql": "SELECT claim_id, number, number_repr FROM lightning.metastore.stemma.evidence_r....claim WHERE run_id = '...' AND (claim_id LIKE '391d...%' OR ...) ORDER BY claim_id"}
+    {"engine": "zetaris", "purpose": "query_data_load", "ok": true, "rows": 2, "sql": "SELECT run_id, claim_id, ... FROM lightning.metastore.stemma.evidence_r....claim WHERE run_id = '...' ORDER BY run_id, claim_id"}
+    {"engine": "memory", "purpose": "query_data", "backend": "zetaris", "rows": 2, "sql": "SELECT c.claim_id, ... FROM claim c JOIN claim_support s ..."}
+    {"engine": "zetaris", "purpose": "fallback", "level": "loud", "fallback_to": "sqlite", "reason": "zetaris_unavailable: cannot reach http://localhost:8888/...: Connection refused"}
+    {"engine": "datalayer", "purpose": "datalayer_unavailable", "level": "loud", "claim_id": "391d...", "mode": "zetaris", "error": "ZetarisUnavailable: ..."}
+
+### Review of 5f6db32, fixed
+1. **Explicit cleanup** (`python run.py cleanup RUN_DIR`, or `python -m stemma.datalayer
+   cleanup`): removes the run's semantic layer, then its datasource, then its Postgres
+   database, then its role; each step logged (`purpose: cleanup`); refused while the
+   run's status says running; never automatic (a replay or pack needs nothing it removes).
+   A cleaned run is never provisioned or synced to Postgres again. Live: the round-trip
+   test ends with a cleanup that leaves no datasource, layer, database or role.
+2. **Role creation with a recorded marker:** the marker is written to the run's record
+   before the role exists; the role, its marker comment, the revokes and its CONNECT grant
+   are one transaction. A role found later is finished only if it carries that marker
+   (live: grants revoked by hand are repaired); any other role is refused, never adopted
+   or dropped.
+3. **Deprovision stops at the first failure** and names what was and was not removed; the
+   datasource is never dropped while the semantic layer remains, and a layer still listed
+   after its removal is a failure. Existence is read from Zetaris's listings.
+4. **Redacted errors are raised `from None`:** a test formats the full traceback of a
+   driver error that echoed a password and finds no trace of it.
