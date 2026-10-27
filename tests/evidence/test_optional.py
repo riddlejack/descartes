@@ -55,7 +55,7 @@ def test_register_tools_on_real_server(run_dir: Path, monkeypatch: pytest.Monkey
     tools.register_tools(server)
     names = {t.name for t in server._tool_manager.list_tools()}
     assert names == {"capture", "capture_file", "sec_filings", "sec_capture", "sec_facts",
-                     "sec_search", "archived_links", "outline", "read", "read_section",
+                     "sec_search", "archived_links", "market_series", "outline", "read", "read_section",
                      "search_store", "check_quote", "tables"}
 
 

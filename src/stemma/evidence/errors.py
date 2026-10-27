@@ -69,6 +69,12 @@ class CaptureStatus(StrEnum):
     ARCHIVE_UNAVAILABLE = "archive_unavailable"
     # `as_of` mode: a SEC filing dated on or after the run's `as_of` date.
     FILED_AFTER_AS_OF = "filed_after_as_of"
+    # `as_of` mode: a market series came back with a row dated on or after the run's
+    # `as_of` date although the host asked it to end before; nothing was kept.
+    SERIES_PAST_AS_OF = "series_past_as_of"
+    # `market_series`: the answer is not a dated series (no rows, a message instead of
+    # data, a first column that is not a date); nothing was kept.
+    SERIES_UNREADABLE = "series_unreadable"
 
     # `capture_file`: the path is outside the run's `task/` folder.
     PATH_OUTSIDE_TASK = "path_outside_task"

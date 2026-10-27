@@ -1,6 +1,6 @@
 """Discovery without the live web, for `as_of` runs (CONTRACTS section 0d).
 
-Two ways to find sources, neither of which can show what was published on or after
+Three ways to find sources, none of which can show what was published on or after
 `as_of`:
 - `page_links`: the links in a page already captured, which in an `as_of` run is an
   archived copy dated before `as_of`. A worker browses: an archived front page, its
@@ -8,6 +8,9 @@ Two ways to find sources, neither of which can show what was published on or aft
 - `edgar_search_url` and `edgar_hits`: EDGAR full-text search, its end date set by the
   host to the day before `as_of`, never by the caller, and each hit filed before
   `as_of` kept, every other one withheld.
+- `series_url` and `series_rows`: a market series (a FRED series, a stooq daily price
+  history) as CSV, its end date set by the host to the day before `as_of`, never by the
+  caller, and every row checked to be dated before `as_of` before anything is kept.
 
 Pure functions over bytes and JSON; the service does the fetching and the storing.
 """
@@ -141,3 +144,61 @@ def edgar_hits(body: bytes, as_of: str | None) -> list[dict[str, Any]]:
                     "filers": [str(n) for n in src.get("display_names") or []],
                     "ciks": [str(c) for c in src.get("ciks") or []], "document": document})
     return out
+
+
+# Market series sources (CONTRACTS section 4): each serves a dated CSV whose end the
+# request sets. Invariant: the sources' own URLs and parameter names.
+SERIES_SOURCES = ("fred", "stooq")
+_FRED_ID = re.compile(r"[A-Z0-9][A-Z0-9_]{0,39}")
+_STOOQ_SYMBOL = re.compile(r"\^?[a-z0-9][a-z0-9._-]{0,23}")
+SERIES_HOSTS = {"fred": "fred.stlouisfed.org", "stooq": "stooq.com"}
+
+
+def series_url(source: str, symbol: str, as_of: str | None) -> str:
+    """The request for a whole series, ending the day before `as_of` (set here from the
+    run, never by the caller); the symbol is checked, so it can add no parameter."""
+    if source not in SERIES_SOURCES:
+        raise EvidenceError("bad_source", f"source is one of {', '.join(SERIES_SOURCES)}")
+    last = None
+    if as_of is not None:
+        if not _DATE.fullmatch(as_of):
+            raise EvidenceError("bad_run_json", f"run.json as_of is not a date: {as_of!r}")
+        last = date.fromisoformat(as_of) - timedelta(days=1)
+    if source == "fred":
+        if not isinstance(symbol, str) or not _FRED_ID.fullmatch(symbol):
+            raise EvidenceError("bad_symbol", "a FRED series id is capitals, digits and _, "
+                                              "such as DGS10 or BAMLH0A0HYM2")
+        url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={symbol}"
+        return url + (f"&coed={last.isoformat()}" if last else "")
+    if not isinstance(symbol, str) or not _STOOQ_SYMBOL.fullmatch(symbol):
+        raise EvidenceError("bad_symbol", "a stooq symbol is lower case, such as crwv.us "
+                                          "or ^spx")
+    url = f"https://stooq.com/q/d/l/?s={quote(symbol, safe='')}&i=d"
+    return url + (f"&d1=19000101&d2={last.strftime('%Y%m%d')}" if last else "")
+
+
+def series_rows(body: bytes, as_of: str | None) -> tuple[dict[str, Any] | None, str | None]:
+    """(facts, None) for a dated CSV whose every row is dated before `as_of`: the row
+    count, the first and last dates and the header; or (None, why) when it is not one.
+    A row dated on or after `as_of` makes the whole series refused, and `why` says only
+    that, never the date: a later date is itself information from after `as_of`."""
+    try:
+        text = body.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return None, "unreadable: not UTF-8 text"
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return None, "unreadable: no data rows"
+    header = [c.strip() for c in lines[0].split(",")]
+    if len(header) < 2 or header[0].lower() not in ("date", "observation_date"):
+        return None, "unreadable: the first column is not a date"
+    dates = []
+    for ln in lines[1:]:
+        first = ln.split(",", 1)[0].strip()
+        if not _DATE.fullmatch(first):
+            return None, "unreadable: a row does not start with a YYYY-MM-DD date"
+        if as_of is not None and not first < as_of:
+            return None, "past_as_of"
+        dates.append(first)
+    return {"header": header, "rows": len(dates), "first_date": min(dates),
+            "last_date": max(dates)}, None

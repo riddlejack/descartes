@@ -92,6 +92,15 @@ def sec_search(query: str, forms: list[str] | None = None, cik: str | None = Non
     return result
 
 
+def market_series(source: str, symbol: str, reason: str) -> dict[str, Any]:
+    """Capture a whole dated market series as CSV, with a receipt: source "fred" (a FRED
+    series id such as DGS10) or "stooq" (a daily price history such as crwv.us). Read it
+    with read and search_store like any capture. When the run has an as_of date the
+    series ends the day before it, and a series with any later row is refused."""
+    result: dict[str, Any] = _call(lambda s: s.market_series(source, symbol, reason))
+    return result
+
+
 def archived_links(sha256: str) -> dict[str, Any]:
     """The links of a captured HTML page, absolute, each with its text: browse from a
     captured page (a front page, a press or investor page) to the pages it links to,
@@ -147,7 +156,7 @@ def tables(sha256: str) -> dict[str, Any]:
 
 TOOLS: tuple[Callable[..., dict[str, Any]], ...] = (
     capture, capture_file, sec_filings, sec_capture, sec_facts, sec_search, archived_links,
-    outline, read, read_section, search_store, check_quote, tables,
+    market_series, outline, read, read_section, search_store, check_quote, tables,
 )
 
 

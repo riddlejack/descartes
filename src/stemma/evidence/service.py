@@ -20,7 +20,14 @@ from typing import Any
 from stemma.evidence import charset, limits, sec_outline
 from stemma.evidence.archive import Archive
 from stemma.evidence.cache import RequestCache, request_key
-from stemma.evidence.discovery import edgar_hits, edgar_search_url, page_links
+from stemma.evidence.discovery import (
+    SERIES_HOSTS,
+    edgar_hits,
+    edgar_search_url,
+    page_links,
+    series_rows,
+    series_url,
+)
 from stemma.evidence.errors import HAS_TEXT, CaptureStatus, EvidenceError
 from stemma.evidence.extract import (
     HTML_TYPES,
@@ -660,7 +667,16 @@ class EvidenceService:
             return self.fetcher.fetch(url), None, None, None
 
         body, content_type = self._fetch_cached("sec", url, receipt, do_fetch)
-        source = self._finish(receipt, body, content_type, withhold_text=as_of is not None)
+        if as_of is not None and body is not None:
+            # The answer holds every fact SEC has, later ones included, so in an as_of
+            # run it is not stored at all: a worker may Read store/bytes (CONTRACTS 0d).
+            # Its wire hash stays on the receipt for audit.
+            receipt["status"] = CaptureStatus.TEXT_WITHHELD_AS_OF
+            receipt["detail"] = "the answer holds facts filed on or after as_of; not stored"
+            receipt["content_type"] = (content_type or "").split(";")[0] or None
+            source = self._finish(receipt, None, None)
+        else:
+            source = self._finish(receipt, body, content_type)
         if body is None:
             raise EvidenceError(
                 "sec_facts_unavailable",
@@ -766,6 +782,59 @@ class EvidenceService:
                             "the names on the filing date")
         return {"query": query.strip(), "filed_before": as_of, "page": page,
                 "hits": edgar_hits(fetched.body, as_of), "warnings": warnings}
+
+    def market_series(self, source: str, symbol: str, reason: str) -> dict[str, Any]:
+        """A dated market series as CSV, captured with a receipt; in an `as_of` run it
+        ends the day before `as_of`, the end set here from run.json (CONTRACTS 0d)."""
+        self._base_receipt("series", reason)  # a missing reason is refused before any work
+        as_of = self.as_of
+        url = series_url(source, symbol, as_of)
+        return self._receipted("series", reason, {"requested_url": url},
+                               lambda: self._market_series(source, symbol, url, as_of, reason))
+
+    def _market_series(self, source: str, symbol: str, url: str, as_of: str | None,
+                       reason: str) -> dict[str, Any]:
+        receipt = self._base_receipt("series", reason)
+        receipt["requested_url"] = url
+        receipt["series"] = {"source": source, "symbol": symbol, "ends_before": as_of}
+        host = SERIES_HOSTS[source]
+        facts: dict[str, Any] = {}
+
+        def hop_check(hop: Url) -> str | None:
+            return None if hop.host in (host, "www." + host) else f"redirected to {hop.host}"
+
+        def do_fetch() -> tuple[FetchResult | None, None, CaptureStatus | None, str | None]:
+            fetched = self.fetcher.fetch(url, hop_check=hop_check)
+            if fetched.failure is not None or not 200 <= (fetched.http_status or 0) < 300:
+                return fetched, None, None, None
+            # Checked before the cache or the store sees it: a later row is never kept.
+            found, why = series_rows(fetched.body or b"", as_of)
+            if found is None:
+                fetched.body = None
+                if why == "past_as_of":
+                    return fetched, None, CaptureStatus.SERIES_PAST_AS_OF, (
+                        f"the source served rows dated on or after as_of {as_of}; "
+                        f"nothing was kept")
+                return fetched, None, CaptureStatus.SERIES_UNREADABLE, why
+            facts.update(found)
+            return fetched, None, None, None
+
+        body, content_type = self._fetch_cached("series", url, receipt, do_fetch)
+        if body is not None and not facts:  # served from the cache: checked again
+            found, why = series_rows(body, as_of)
+            if found is None:
+                receipt["status"] = (CaptureStatus.SERIES_PAST_AS_OF if why == "past_as_of"
+                                     else CaptureStatus.SERIES_UNREADABLE)
+                receipt["detail"] = "the cached copy is not a series dated before as_of"
+                return self._finish(receipt, None, None)
+            facts.update(found)
+        if as_of is not None and isinstance(receipt.get("http"), dict):
+            # A live response's headers (Last-Modified and the like) may postdate as_of.
+            receipt["http"]["headers"] = [h for h in receipt["http"].get("headers") or []
+                                          if str(h[0]).lower() == "content-type"]
+        receipt["series"].update(facts)
+        return self._finish(receipt, body, "text/csv" if body is not None else content_type,
+                            name_hint=f"{symbol}.csv")
 
     def outline(self, sha256: str) -> dict[str, Any]:
         check_text_id(sha256)

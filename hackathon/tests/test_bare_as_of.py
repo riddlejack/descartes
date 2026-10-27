@@ -19,7 +19,8 @@ from stemma.driver import canary
 from stemma.driver.clean import HarnessError, bare_expectation, clean_launch
 
 AS_OF = "2026-09-30"
-EVIDENCE = {"capture", "capture_file", "archived_links", "sec_search", "sec_filings",
+EVIDENCE = {"capture", "capture_file", "archived_links", "sec_search", "market_series",
+            "sec_filings",
             "sec_capture", "sec_facts", "outline", "read", "read_section", "search_store",
             "check_quote", "tables"}
 

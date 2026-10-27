@@ -139,7 +139,7 @@ def test_sec_facts_as_of_withholds_raw_text(sec_svc: tuple[EvidenceService, Fake
     set_as_of(run_dir, "2024-01-01")
     out = svc.sec_facts("INVT", "Revenues")
     source = svc.store.get_receipt(out["source_receipt_id"])
-    # the bytes are kept for audit, but later figures never become searchable text
+    # the answer is not stored (it holds later figures), so they are never searchable
     assert source["status"] == "text_withheld_as_of" and source["text_path"] is None
     assert svc.search_store("8169", mode="exact")["hits"] == []
     assert all(f["filed"] < "2024-01-01" for f in out["facts"])

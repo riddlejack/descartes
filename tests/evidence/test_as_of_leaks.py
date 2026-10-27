@@ -65,3 +65,22 @@ def test_an_archive_url_dated_later_is_never_fetched(make_service: Factory,
     r = svc.capture(later, "probe")
     assert r["status"] == "no_snapshot_before_as_of" and r["sha256"] is None
     assert [c[0] for c in t.calls] == [cdx_query_url(later, AS_OF)]
+
+
+def test_xbrl_facts_are_filtered_and_the_raw_answer_is_not_stored(
+        make_service: Factory, run_dir: Path) -> None:
+    # Item 5 of the orchestrator's 27 October brief. Facts filed on or after as_of are
+    # dropped; and the raw company-concept answer, which holds them, is not stored,
+    # because a worker may Read store/bytes/<sha256> (Codex-gate probe, 27 October).
+    from test_sec import CONCEPT, FILINGS, routes
+
+    set_as_of(run_dir, "2024-01-01")
+    svc = make_service(FakeTransport(routes()), sec_backend=FakeSec(FILINGS))
+    out = svc.sec_facts("INVT", "Revenues")
+    assert out["facts"] and all(f["filed"] < "2024-01-01" for f in out["facts"])
+    for later in (f for f in CONCEPT["units"]["USD"] if f["filed"] >= "2024-01-01"):
+        assert later["accn"] not in json.dumps(out)
+    source = svc.store.get_receipt(out["source_receipt_id"])
+    assert source["status"] == "text_withheld_as_of" and source["sha256"] is None
+    stored = b"".join(p.read_bytes() for p in (run_dir / "store").rglob("bytes/*"))
+    assert b"0000999999-24-000010" not in stored and b"8169" not in stored

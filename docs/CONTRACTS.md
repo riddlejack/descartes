@@ -377,8 +377,9 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   filing's form, company, document or date.
 - **Discovery.** No keyword web search: a worker browses archived pages (`capture` a
   front, press or investor page, then `archived_links`, each link captured in turn) and
-  searches filings with `sec_search`, whose end date the host sets (section 4). The
-  worker and the claim checker hold both tools and are told so in one line each.
+  searches filings with `sec_search`, whose end date the host sets (section 4); rates
+  and prices come from `market_series`, its end set by the host too. The worker and the
+  claim checker hold these tools and are told so in one line each.
 - **Every path an as_of run has to the network** (the list the leakage audit scans; any
   other is a defect). Agents' own tools reach none: no `WebSearch` or `WebFetch`, and
   Bash, `run_analysis` and the derivation sandbox have no network. The host reaches:
@@ -393,7 +394,12 @@ D1 to D10); where an older line below disagrees, section 0 wins.
      `as_of` kept, the raw answer's text withheld); and the edgartools library's own
      calls for company lookup, filing lists and accession lookup (`sec_filings`,
      `sec_capture`), whose answers are filtered by filing date before anything
-     returns. The company name and ticker mapping is today's (a warning says so);
+     returns. The company name and ticker mapping is today's (a warning says so). The
+     raw XBRL answer is not stored in an `as_of` run (it holds later facts), only
+     the facts filed before `as_of`;
+  3a. `fred.stlouisfed.org` (`fredgraph.csv`) and `stooq.com` (`/q/d/l/`), by the
+     broker's `market_series`: the end date set by the host, every row checked before
+     anything is kept;
   4. the run's own data-layer store, when configured (Postgres and Zetaris, one
      database per run, holding only this run's evidence);
   5. the second-family provider, by the register: claim text and source passages go
@@ -542,6 +548,14 @@ Unicode code points in the stored text.
   1 to 20; in an `as_of` run the host sets the end date to the day before `as_of` and
   withholds any hit filed on or after it without a trace (no total, no highlighted
   text) (section 0d).
+- `market_series(source, symbol, reason)` → a receipt for a whole dated series as CSV:
+  `source` "fred" (a FRED series id, `fredgraph.csv`) or "stooq" (a daily price
+  history); the caller names the series, never a date. In an `as_of` run the host sets
+  the end to the day before `as_of` (FRED `coed`, stooq `d2`), and checks every row's
+  date before anything is cached or stored: a row on or after `as_of` refuses the
+  whole series (`series_past_as_of`, the later date never shown), an answer that is not
+  a dated series is `series_unreadable`, and a live response's headers other than its
+  content type are not kept (section 0d).
 - `archived_links(sha256)` → the links of a captured HTML page, absolute against the
   page's own URL, each with its text; a link into the Wayback Machine is given as the
   page it copies; refused for a page that is not HTML, and in an `as_of` run for a page

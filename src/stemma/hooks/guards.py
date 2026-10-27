@@ -112,7 +112,7 @@ def guard_agent(hook: dict[str, Any]) -> Decision:
 # Invariant: the owner's decision D6 (CONTRACTS v0.4 section 6).
 LEAD_DENIED_MCP = frozenset(roles.MCP_PREFIX + t for t in (
     "capture", "capture_file", "sec_filings", "sec_capture", "sec_facts", "sec_search",
-    "archived_links", "outline", "read", "read_section", "search_store", "tables",
+    "archived_links", "market_series", "outline", "read", "read_section", "search_store", "tables",
     "check_quote", "query_data"))
 LEAD_DENIED_BUILTIN = frozenset({"WebSearch", "WebFetch", "Bash"})
 # What the lead's own thread may Read (Codex review #7): the approved artifacts of the
