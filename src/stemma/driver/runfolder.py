@@ -43,7 +43,8 @@ def _write_task(run_dir: Path, task: Task) -> dict[str, Any]:
               "as_of": task.as_of, "switches": task.switches_given, "scope": task.scope,
               "criteria": list(task.criteria),
               "options": list(task.options) if task.options is not None else None,
-              "roles": task.roles_given, "stop_after": task.stop_after}
+              "roles": task.roles_given, "stop_after": task.stop_after,
+              "second_family": task.second_family}
     hostio.write_json(run_dir, "task/task.json", record)
     if task.criteria:
         # The user's criteria (D4); written by the driver, so no agent may change them.
@@ -52,6 +53,21 @@ def _write_task(run_dir: Path, task: Task) -> dict[str, Any]:
         text = "".join(f"- {o}\n" for o in task.options)
         hostio.write_text(run_dir, "task/options.md", "# Options the user named\n\n" + text)
     return record
+
+
+def second_family_setting(given: bool | None,
+                          env: dict[str, str] | None = None) -> dict[str, Any]:
+    """The N1 setting recorded in run.json: what the task said, else on exactly when the
+    host has Nightshift configured (a runtime token or its state folder)."""
+    from stemma.register import second_family as sf
+
+    e = dict(os.environ) if env is None else env
+    configured = bool(e.get("METERLESS_RUNTIME_TOKEN") or e.get("METERLESS_STATE_DIR"))
+    enabled = configured if given is None else given
+    return {"enabled": enabled, "source": "task" if given is not None else "auto",
+            "nightshift_configured": configured,
+            "models": [sf.PRIMARY_MODEL, sf.FALLBACK_MODEL],
+            "purpose": "adds a check on cited claims; never approves, never blocks a release"}
 
 
 def task_files_notice(record: dict[str, Any]) -> str:
@@ -120,6 +136,7 @@ def create_run(cfg: DriverConfig, task_path: Path, limits: Limits | None = None,
                      "file": CRITERIA_FILE, "count": len(task.criteria)},
         "options": list(task.options) if task.options is not None else None,
         "stop_after": task.stop_after,
+        "second_family": second_family_setting(task.second_family),
         "harness": {"binary": str(cfg.claude_bin), "version": version,
                     "config_dir": str(cfg.claude_config)},
         "plugin": assembly.to_json(),

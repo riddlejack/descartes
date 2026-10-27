@@ -51,7 +51,8 @@ PARKED: Final[dict[tuple[str, str], str]] = {
                                          "which the tree no longer holds (D2)",
 }
 _TASK_KEYS: Final = frozenset({"question", "intake", "attachments", "as_of", "switches",
-                               "scope", "criteria", "options", "roles", "stop_after"})
+                               "scope", "criteria", "options", "roles", "stop_after",
+                               "second_family"})
 # What the research covers (D1): the question asked, or also the broader decision it
 # informs. Invariant: the two readings onboarding offers; the narrow one by default.
 SCOPES: Final = ("question_only", "broader_decision")
@@ -79,6 +80,7 @@ class Task:
     options: tuple[str, ...] | None = None  # only when the user named them (D2)
     roles_given: dict[str, Any] | None = None
     stop_after: str = "full"
+    second_family: bool | None = None  # None: on when Nightshift is configured (N1)
 
 
 def default_models() -> dict[str, dict[str, str]]:
@@ -220,8 +222,11 @@ def load_task(path: Path) -> Task:
     if stop_after not in STOP_AFTER:
         raise TaskInvalid(f"task.json 'stop_after' must be one of {list(STOP_AFTER)}")
     role_models = data.get("roles")
+    second = data.get("second_family")
+    if second is not None and not isinstance(second, bool):
+        raise TaskInvalid("task.json 'second_family' must be true, false or absent")
     return Task(q, intake, tuple(atts), as_of, given, fill_switches(given, role_models),
-                scope, criteria, options, role_models, stop_after)
+                scope, criteria, options, role_models, stop_after, second)
 
 
 def _texts(value: Any, key: str, limit: int) -> tuple[str, ...]:

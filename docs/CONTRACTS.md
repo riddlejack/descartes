@@ -258,6 +258,71 @@ D1 to D10); where an older line below disagrees, section 0 wins.
 - **Live** (`tests/e2e/stop_hook_probe.py`, pinned 2.1.308, headless): the hook refused
   the lead's stops, the background worker ran to completion (none killed) and its
   completion reached the lead.
+## 0a. The second model family (N1; built against fakes, pending the owner's choice)
+- **What it does.** After a draft is submitted and a cited claim has a Claude verdict
+  from a verified session, the host (the driver, never an agent) asks a Nemotron model
+  through Meterless Nightshift whether the claim's exact stored passage (each quotation
+  with up to 600 characters of stored context on each side, a resource limit) supports
+  the claim as stated (entity, period, unit, scope, direction of change): `supports`,
+  `does_not_support` or `cannot_tell`, with a one-line reason, as JSON. Models:
+  `nvidia/nemotron-3-ultra-550b-a55b`, then `nvidia/nemotron-3.5-lightning-30b-a3b` when
+  the first cannot be asked or answers unreadably (recorded in run.json). Claims resting
+  on no passage (estimates, assumptions) are not asked.
+- **Recorded** as a `second_family` fact on the claim: the answer, the model asked, the
+  model the answer names, the Nightshift receipt (no token, no message text), and the
+  Claude verdict and session it was compared with. Each claim is asked once.
+- **It only adds a check.** A disagreement (Claude approves and the answer is
+  `does_not_support`, or Claude rejects and the answer is `supports`; `cannot_tell` and
+  `could_not_check` disagree with nothing) makes the host start one fresh Claude claim
+  checker, prompt `recheck:<claim_id>`, whose assignment
+  (`checks/recheck-<claim_id>.r<n>.json`, via `check_assignment`) holds the claim, its
+  support, both opinions and their reasons. That checker's verdict, the newest, decides.
+  The second family's answer never changes a verdict itself: it never approves and
+  never lowers. While a disagreement's third look is pending or running, the gate
+  refuses the release; once it has ended, the usual verdict rules apply. Every answer
+  and disagreement, with what the third look decided, is in `deliverable/record.json`
+  (`second_family`) for the viewer.
+- **Never blocks.** When Nightshift is not configured, unreachable, refuses the key
+  (`provider_auth_failed`) or cannot route the model, the run records
+  `second_family_unavailable` (an event and a register fact, once) and carries on;
+  nothing about it can refuse a release. Questions still in flight at release are
+  dropped, never recorded into the sealed run. At most `max_second_family` questions
+  are in flight at once (a resource limit, default 2).
+- **Setting.** task.json `second_family`: `true`, `false`, or absent (on exactly when the
+  host has Nightshift configured: `METERLESS_RUNTIME_TOKEN` or `METERLESS_STATE_DIR`);
+  run.json records `second_family: {enabled, source, nightshift_configured, models}`.
+  The runtime token stays in the driver process and never enters a session.
+- **Pinned model.** The Nightshift client sends a provider model id (for example
+  `nvidia/nemotron-3-ultra-550b-a55b`) by name only when `GET /v1/models` lists it, and
+  refuses one it does not list; `meterless/*` routes work as before. The receipt says
+  `pinned` and records the model the answer names; an answer named by any other model
+  than the one pinned is a failed second-family verdict for that claim (recorded on the
+  claim, loudly, never a silent substitute); the claim's Claude verdict stands and it is
+  not asked again. An unreadable answer from both models is the same.
+- **Reading the answer** (Codex review of N1): only a final answer counts: every complete
+  think block is removed, an unfinished one is refused, and the reply must end with one
+  JSON object, `{verdict, reason}` and nothing else, nothing after it; an answer cut
+  short (`finish_reason` other than `stop`) is unreadable. A passage that cannot be
+  placed in the stored text ends the claim's look before anything is asked; an answer
+  named by another model ends it at once (no fallback rescues it); a gateway error or a
+  malformed response is this claim's failure, while a refused key, an offline gateway
+  or an unlisted model is the run's. A failure is recorded on the claim (never asked
+  again); a claim is put to the second family at most `max_second_family_attempts`
+  times (a resource limit, default 2).
+- **What is kept:** the receipt is cut to an allowlist (route, pinned, sizes and
+  digests, timing, HTTP status, served model, finish reason, whole-number usage), every
+  string scrubbed of registered secrets; headers and response ids are dropped. Every
+  attempt's cleaned receipt is kept, for the spend.
+- **Sealed runs:** every second-family write checks, inside the register's lock, that
+  the run is not released, and refuses after the seal (a late answer is discarded,
+  logged only to events.jsonl).
+- **The third look is recoverable:** a disagreement whose request was cut off by a crash
+  gets it on the driver's next step (`repair_rechecks`), and the gate counts a
+  disagreement with no request as an unfinished third look.
+- **Role text:** the claim checker's text must handle `recheck:<claim_id>`.
+- **Replay:** `tests/e2e/replay_n1.py <copy of run 1>` builds every question from run 1's
+  stored passages (248 claims with a Claude verdict and a passage; run 1 started 407
+  checks) and asks only with `--live`.
 
 ## 1. Parts and owners
 - **A. Evidence service:** `src/stemma/evidence/`, `tests/evidence/`.

@@ -50,7 +50,12 @@ PLACEHOLDER_TOKEN = "rt-local"
 
 
 class NightshiftError(Exception):
-    """The runtime answered, but not with something usable."""
+    """The runtime answered, but not with something usable. `receipt` is the call's
+    logged receipt when there was one, so its spend is never lost (Codex re-check D)."""
+
+    def __init__(self, message: str, receipt: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.receipt = receipt
 
 
 class NightshiftOffline(NightshiftError):
@@ -202,12 +207,38 @@ class NightshiftClient:
             raise NightshiftOffline(s.detail)
         return s.models
 
+    def _listed(self) -> tuple[str, ...]:
+        """Every model id `GET /v1/models` lists (asked once per client)."""
+        if getattr(self, "_listed_ids", None) is None:
+            ans = self.transport("GET", f"{self.base_url}/models", None,  # offline: raises
+                                 self._headers(False), PROBE_TIMEOUT_S)
+            if ans.status in (401, 403):
+                raise NightshiftUnauthorized(f"HTTP {ans.status}")
+            try:
+                data = json.loads(ans.body.decode("utf-8"))
+                ids = tuple(str(m["id"]) for m in data["data"]
+                            if isinstance(m, dict) and "id" in m)
+            except (ValueError, KeyError, TypeError) as exc:
+                raise NightshiftError("GET /v1/models did not answer a model list") from exc
+            self._listed_ids: tuple[str, ...] | None = ids
+        assert self._listed_ids is not None  # invariant: set above
+        return self._listed_ids
+
     def chat(self, messages: Sequence[Mapping[str, Any]], route: str = "meterless/deep",
              tools: Sequence[Mapping[str, Any]] | None = None, purpose: str = "chat",
              **params: Any) -> ChatResult:
-        """One chat completion through the runtime, with a logged receipt."""
-        if not route.startswith("meterless/"):
-            raise NightshiftError(f"{route!r} is not a meterless routing mode")
+        """One chat completion through the runtime, with a logged receipt. `route` is a
+        `meterless/*` routing mode, or a provider model id pinned by name (for example
+        `nvidia/nemotron-3-ultra-550b-a55b`), which is sent only when `GET /v1/models`
+        lists it; the receipt then says `pinned` and the caller compares the model the
+        answer names with it."""
+        pinned = not route.startswith("meterless/")
+        if pinned:
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._:-]*", route):
+                raise NightshiftError(f"{route!r} is neither a meterless routing mode nor a "
+                                      f"provider model id")
+            if route not in self._listed():
+                raise NightshiftError(f"{route} is not listed by GET /v1/models")
         body: dict[str, Any] = {"model": route, "messages": list(messages), **params}
         if tools:
             body["tools"] = list(tools)
@@ -215,7 +246,8 @@ class NightshiftClient:
         local_id = str(uuid.uuid4())
         receipt: dict[str, Any] = {
             "provider": "nightshift", "contract": CONTRACT, "purpose": purpose,
-            "local_request_id": local_id, "route": route, "base_url": self.base_url,
+            "local_request_id": local_id, "route": route, "pinned": pinned,
+            "base_url": self.base_url,
             "request_sha256": hashlib.sha256(payload).hexdigest(),
             "request_bytes": len(payload), "messages": len(body["messages"]),
             "tools": len(body.get("tools", [])),
@@ -241,21 +273,32 @@ class NightshiftClient:
                 raw = json.loads(ans.body.decode("utf-8"))
                 choice = raw["choices"][0]
                 message = choice["message"]
+                if not isinstance(raw, dict) or not isinstance(choice, dict) \
+                        or not isinstance(message, dict):
+                    raise TypeError("a choice or its message is not an object")
             except (ValueError, KeyError, IndexError, TypeError) as exc:
                 raise NightshiftError(f"not a chat completion ({digest(ans.body)})") from exc
         except NightshiftError as exc:
             self.log.write(**receipt, ok=False, error=str(exc))
+            exc.receipt = receipt
             raise
         served = raw.get("model") if isinstance(raw.get("model"), str) else None
-        usage = raw.get("usage") if isinstance(raw.get("usage"), dict) else {}
+        raw_usage = raw.get("usage")
+        usage: dict[str, Any] = raw_usage if isinstance(raw_usage, dict) else {}
         receipt.update({"ok": True, "served_model": served, "response_id": raw.get("id"),
                         "finish_reason": choice.get("finish_reason"), "usage": usage,
                         "response_sha256": hashlib.sha256(ans.body).hexdigest()})
-        self.log.write(**receipt)
         content = message.get("content")
+        tool_calls = message.get("tool_calls")
+        if not isinstance(content, str | None) or not isinstance(tool_calls, list | None):
+            receipt["ok"] = False
+            problem = f"a malformed message: content or tool_calls ({digest(ans.body)})"
+            self.log.write(**receipt, error=problem)
+            raise NightshiftError(problem, receipt)  # spent tokens stay on the receipt
+        self.log.write(**receipt)
         return ChatResult(
-            text=content if isinstance(content, str) else None,
-            tool_calls=list(message.get("tool_calls") or []),
+            text=content,
+            tool_calls=list(tool_calls or []),
             finish_reason=choice.get("finish_reason"), route=route, served_model=served,
             usage=usage, receipt=receipt, raw=raw)
 
