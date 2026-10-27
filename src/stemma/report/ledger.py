@@ -18,8 +18,10 @@ through `safefs` and a strict parser here, never the register's unbounded reader
 
 STOP-GAP: `_memory_world` and `_read_only_register` reach private attributes of the
 register's classes (`WorldModel._log`, `Register.__init__` bypassed, three read methods
-replaced on the instance). Replace them with W2's public read-only constructor once it
-exists, so that the viewer and verify read the register through the register's own code.
+replaced on the instance). W2's public `Register.read_only(run_dir)` exists, but it folds
+the whole log file and reads checks.jsonl with the register's own reader; a release must
+be read from its sealed bytes only. Replace these two functions with `read_only` once it
+can take the sealed bytes of the log and of checks.jsonl.
 """
 
 from __future__ import annotations
@@ -34,8 +36,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from stemma.register.manifest import LogError, parse_log
 from stemma.report import safefs
-from stemma.report.compat import w2
 from stemma.report.errors import RunReadError
 
 LOG: Final = "register/log.jsonl"
@@ -68,12 +70,10 @@ def _check_terminated(data: bytes, rel: str) -> None:
 
 def read_log(run_dir: Path) -> Log:
     data = safefs.read_bytes(run_dir, LOG, LOG_MAX_BYTES)
-    parse_log = w2("stemma.register.manifest", "parse_log")
-    if parse_log is not None:  # the register's own parser: a torn or corrupt line refused
-        try:
-            parse_log(data)
-        except w2("stemma.register.manifest", "LogError") as exc:
-            raise RunReadError(str(exc)) from exc
+    try:  # the register's own parser: a torn or corrupt line refused
+        parse_log(data)
+    except LogError as exc:
+        raise RunReadError(str(exc)) from exc
     _check_terminated(data, LOG)
     return Log(data, data.splitlines(keepends=True))
 
