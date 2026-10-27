@@ -94,13 +94,13 @@ def test_an_unplaceable_quotation_is_marked_not_hidden(reg: Register) -> None:
 
 @pytest.mark.parametrize(("text", "ok"), [
     ('{"verdict": "supports", "reason": "matches"}', True),
-    ('Sure: {"verdict": "does_not_support", "reason": "FY2024 not FY2025"}', True),
+    ('Sure: {"verdict": "does_not_support", "reason": "FY2024 not FY2025"}', False),
     ('{"verdict": "cannot_tell"}', True),
     ('{"verdict": "maybe"}', False), ("supports", False), ("", False), (None, False),
     (("<think>The format is {\"verdict\": \"supports\"}; but FY2024 is not FY2025."
       "</think>{\"verdict\": \"does_not_support\", \"reason\": \"wrong year\"}"), True),
     (("The user wants me to reply with {\"verdict\": \"supports\" | ...}. Looking at the "
-      "passage, the year differs.\n{\"verdict\": \"cannot_tell\", \"reason\": \"x\"}"), True),
+      "passage, the year differs.\n{\"verdict\": \"cannot_tell\", \"reason\": \"x\"}"), False),
 ])
 def test_only_a_three_way_json_answer_is_read(text: str | None, ok: bool) -> None:
     if ok:
@@ -286,10 +286,15 @@ def test_uncited_and_unverified_claims_are_not_asked(reg: Register) -> None:
 
 
 def test_reasoning_before_the_answer_is_never_the_verdict() -> None:
+    # Reasoning is read past only when closed by </think> (re-check A): open prose
+    # before an object is refused, never mined for the last object.
     text = ('The user wants me to reply with JSON like {"verdict": "supports", "reason": '
             '"..."}. The passage says FY2024.\n'
             '{"verdict": "does_not_support", "reason": "the passage is FY2024"}')
-    assert sf.parse(text) == ("does_not_support", "the passage is FY2024")
+    with pytest.raises(ValueError):
+        sf.parse(text)
+    closed = text.replace(".\n{", ".</think>{")
+    assert sf.parse(closed) == ("does_not_support", "the passage is FY2024")
     think = '<think>{"verdict": "supports"}</think>no final answer'
     with pytest.raises(ValueError):
         sf.parse(think)
@@ -318,7 +323,7 @@ def test_only_a_final_schema_valid_verdict_is_read(text: str) -> None:
 
 
 def test_a_fenced_final_answer_after_reasoning_is_read() -> None:
-    text = ('I think it is {"verdict": "supports"} at first, but the year differs.\n'
+    text = ('I think it is {"verdict": "supports"} at first, but the year differs.</think>\n'
             '```json\n{"verdict": "does_not_support", "reason": "FY2024"}\n```')
     assert sf.parse(text) == ("does_not_support", "FY2024")
 
@@ -436,7 +441,8 @@ def test_every_attempts_spend_is_kept(reg: Register) -> None:
     def asker(model: str, msgs: Any) -> tuple[str, str, dict[str, Any]]:
         if model == sf.PRIMARY_MODEL:
             return "thinking only", model, {"usage": {"total_tokens": 100}}
-        return '{"verdict": "supports", "reason": "x"}', model, {"usage": {"total_tokens": 7}}
+        return '{"verdict": "supports", "reason": "x"}', model, {"usage": {"total_tokens": 7},
+                                                                  "finish_reason": "stop"}
 
     ans = sf.ask(asker, reg.run_dir, claim(), FakeEvidence())
     assert sum(a["receipt"]["usage"]["total_tokens"] for a in ans.attempts) == 107
@@ -480,3 +486,93 @@ def test_an_estimate_is_not_asked(reg: Register) -> None:
                       if cid == e else {})}
     reg._verified = lambda: frozenset({"s"})  # type: ignore[method-assign]
     assert not reg.second_family_eligible(e)
+
+
+# --- Codex re-check of N1 (b62b609): the final round, one test per finding ----------
+
+def _script(name: str) -> Any:
+    """A tests/e2e script, imported for its pure parts (the scripts are not collected)."""
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "e2e" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"e2e_{name}", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.parametrize("text", [
+    'Example format only: {"verdict":"does_not_support","reason":"example"}',
+    '{"verdict":"supports","reason":"a"}{"verdict":"does_not_support","reason":"b"}',
+    '{"verdict":"supports","reason":"a"}\n{"verdict":"does_not_support","reason":"b"}',
+    'r</think>{"verdict":"supports","reason":"a"}{"verdict":"does_not_support","reason":"b"}',
+])
+def test_a_only_one_object_alone_is_an_answer(text: str) -> None:
+    # Re-check A: an example after some words, or two objects, is never the verdict.
+    with pytest.raises((ValueError, json.JSONDecodeError)):
+        sf.parse(text)
+
+
+@pytest.mark.parametrize("receipt", [{}, {"finish_reason": None}])
+def test_a_answer_with_no_completion_status_is_not_read(reg: Register,
+                                                         receipt: dict[str, Any]) -> None:
+    # Re-check A: the contract requires finish_reason "stop"; absent is not "stop".
+    def asker(model: str, msgs: Any) -> tuple[str, str, dict[str, Any]]:
+        return '{"verdict": "supports", "reason": "x"}', model, dict(receipt)
+
+    with pytest.raises(sf.SecondFamilyFailed, match="did not complete"):
+        sf.ask(asker, reg.run_dir, claim(), FakeEvidence())
+
+
+def test_b_the_replay_keeps_no_reflected_secret() -> None:
+    # Re-check B: a reason echoing a registered secret is cleaned before the --out file.
+    from stemma.datalayer.querylog import register_secret
+
+    register_secret(TOKEN)
+    replay = _script("replay_n1")
+    a = sf.Answer("supports", f"the token is {TOKEN}", sf.PRIMARY_MODEL,
+                  f"model-{TOKEN}", {"ms": 5}, [])
+    rec = replay.answer_record({"claim_id": "c1", "verdict": {"verdict": "holds"}}, a)
+    assert TOKEN not in json.dumps(rec) and rec["second_family"] == "supports"
+
+
+def test_c_a_fenced_answer_after_reasoning_is_read() -> None:
+    # Re-check C: the two supported shapes together.
+    text = 'reasoning</think>```json\n{"verdict":"supports","reason":"ok"}\n```'
+    assert sf.parse(text) == ("supports", "ok")
+    assert sf.parse('r</think>\n```\n{"verdict":"cannot_tell","reason":"x"}\n```\n') == (
+        "cannot_tell", "x")
+
+
+def test_d_a_malformed_response_keeps_its_spend(reg: Register) -> None:
+    # Re-check D: tool_calls 17 after usage 100, then a fallback using 7: 107 kept.
+    class BadToolCalls(FakeTransport):
+        def __call__(self, method: str, url: str, body: bytes | None, headers: dict[str, str],
+                     timeout: float) -> HttpAnswer:
+            ans = super().__call__(method, url, body, headers, timeout)
+            if method == "GET":
+                return ans
+            raw = json.loads(ans.body)
+            primary = json.loads(body or b"{}")["model"] == sf.PRIMARY_MODEL
+            raw["usage"] = {"total_tokens": 100 if primary else 7}
+            if primary:
+                raw["choices"][0]["message"]["tool_calls"] = 17
+            raw["model"] = json.loads(body or b"{}")["model"]
+            return HttpAnswer(200, {}, json.dumps(raw).encode())
+
+    t = BadToolCalls(['{"verdict": "supports", "reason": "x"}'] * 2)
+    ans = sf.ask(sf.nightshift_asker(client(t)), reg.run_dir, claim(), FakeEvidence())
+    assert ans.model_asked == sf.FALLBACK_MODEL
+    assert sum(((a["receipt"] or {}).get("usage") or {}).get("total_tokens", 0)
+               for a in ans.attempts) == 107
+
+
+def test_e_the_third_look_is_only_the_recheck_sessions_verdict() -> None:
+    # Re-check E: a verdict the recheck session did not file is no third look.
+    look = _script("third_look").third_look_verdict
+    before = {"verdict": "holds", "session": "s-first"}
+    assert look(before, {"s-recheck"}) is None  # the recheck filed nothing
+    assert look(None, {"s-recheck"}) is None
+    assert look({"verdict": "holds", "session": "s-recheck"}, {"s-recheck"}) == "holds"
+    assert look({"verdict": "not_supported", "session": "s-other"}, {"s-recheck"}) is None

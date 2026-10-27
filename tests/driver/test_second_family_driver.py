@@ -80,7 +80,8 @@ def test_the_host_asks_records_and_starts_a_third_look(cfg: DriverConfig, tmp: P
         asked.append(model)
         assert "1.2bn" in msgs[1]["content"]
         return ('{"verdict": "does_not_support", "reason": "the period is FY2024"}',
-                "nvidia/nemotron-3-ultra-550b-a55b", {"provider": "nightshift"})
+                "nvidia/nemotron-3-ultra-550b-a55b", {"provider": "nightshift",
+                                                       "finish_reason": "stop"})
 
     monkeypatch.setattr(runner, "make_asker", lambda rd: asker)
     d = Driver(cfg, run, checks_api, limits)

@@ -163,3 +163,18 @@ viewer opens a citation. The honest feature is therefore a citation-precision ch
 Nemotron sees only what the reader will see, and its finding goes back to the claim's
 author as "widen or fix the cited span", not to a full third look. The routing change
 is not built.
+
+The final review round (Codex re-check of b62b609, five findings, each now with a test
+that failed before its fix). The model's answer is read only in one form: after the
+last `</think>`, or the whole reply when there is none, exactly one JSON object, alone
+or in one code fence; words before it or a second object are refused, and so is an
+answer whose completion status is anything but "stop", including a missing one. The
+prompt now says so. One consequence to watch in a live run: a model that writes plain
+reasoning before its object without closing it by `</think>` is now refused, falls to
+the fallback model, and then is this claim's recorded failure (loud, never a verdict).
+The replay's raw answers were not stored, so whether every run-1 answer had this form
+is not known; under the replay's parser, any answer that closed its reasoning already
+had to be the object alone. A malformed response from the runtime now keeps its receipt, so
+its tokens are counted. The replay script cleans the model's reason before writing it,
+and the third-look script reports a third look only when the recheck session filed it,
+"missing" otherwise.

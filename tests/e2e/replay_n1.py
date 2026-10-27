@@ -54,6 +54,17 @@ def _usage(attempts: list[dict[str, Any]]) -> dict[str, int]:
     return dict(out)
 
 
+def answer_record(c: dict[str, Any], a: sf.Answer) -> dict[str, Any]:
+    """One answer as the --out file keeps it: the model's reason and named model cleaned
+    of any registered secret, as the register cleans them (Codex re-check B)."""
+    claude = c["verdict"]["verdict"]
+    return {"claim_id": c["claim_id"], "claude": claude, "second_family": a.verdict,
+            "reason": sf.clean_text(a.reason),
+            "served_model": sf.clean_text(a.served_model) if a.served_model else None,
+            "usage": _usage(a.attempts), "attempts": len(a.attempts),
+            "ms": a.receipt.get("ms"), "disagrees": sf.disagrees(claude, a.verdict)}
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("run")
@@ -102,13 +113,7 @@ def main(argv: list[str] | None = None) -> int:
                 c = futs[fut]
                 claude = c["verdict"]["verdict"]
                 try:
-                    a = fut.result()
-                    results.append({"claim_id": c["claim_id"], "claude": claude,
-                                    "second_family": a.verdict, "reason": a.reason,
-                                    "served_model": a.served_model,
-                                    "usage": _usage(a.attempts), "attempts": len(a.attempts),
-                                    "ms": a.receipt.get("ms"),
-                                    "disagrees": sf.disagrees(claude, a.verdict)})
+                    results.append(answer_record(c, fut.result()))
                 except sf.SecondFamilyFailed as exc:
                     results.append({"claim_id": c["claim_id"], "claude": claude,
                                     "failed": sf.clean_text(str(exc)),

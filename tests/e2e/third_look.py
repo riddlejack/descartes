@@ -53,6 +53,16 @@ def prepare(cfg: DriverConfig, src: Path) -> Path:
     return run
 
 
+def third_look_verdict(after: dict[str, Any] | None, recheck_sessions: set[str]
+                       ) -> str | None:
+    """The third look's verdict: the claim's verdict only when a recheck session for it
+    filed it. A checker that failed or filed nothing leaves the earlier verdict in
+    place, which is no third look (Codex re-check E)."""
+    if not after or after.get("session") not in recheck_sessions:
+        return None
+    return str(after.get("verdict"))
+
+
 def main(src: str, results: str) -> int:
     cfg = DriverConfig.from_env(REPO / "plugin")
     run = prepare(cfg, Path(src))
@@ -80,22 +90,29 @@ def main(src: str, results: str) -> int:
                 d._scan_transcripts(live, final=False)
         time.sleep(2)
     reg = Register(run)
+    launched = [e for e in events.read(run) if e.get("event") == "session_launched"]
     out = []
     for r in disagreements:
         cid = r["claim_id"]
         after = reg.get_claim(cid)
+        mine = {str(e.get("session_id")) for e in launched
+                if e.get("prompt") == f"recheck:{cid}"}
+        look = third_look_verdict(after["verdict"], mine)
         out.append({"claim_id": cid, "statement": after["statement"],
                     "claude_before": (before[cid] or {}).get("verdict"),
                     "second_family": r["second_family"], "second_family_reason": r["reason"],
-                    "third_look": (after["verdict"] or {}).get("verdict"),
-                    "third_look_evidence": (after["verdict"] or {}).get("evidence"),
+                    "third_look": look if look is not None else "missing",
+                    "third_look_evidence": (after["verdict"] or {}).get("evidence")
+                    if look is not None else None,
                     "corrected_claim_id": after.get("superseded_by")})
     recs = [x for x in usage.read_records(run) if x.get("kind") == "session"
             and str(x.get("prompt", "")).startswith("recheck:")]
     summary = {
         "wall_s": round(time.time() - started),
         "sessions": len(recs),
-        "changed": sum(1 for o in out if o["third_look"] != o["claude_before"]),
+        "missing": sum(1 for o in out if o["third_look"] == "missing"),
+        "changed": sum(1 for o in out if o["third_look"] not in ("missing",
+                                                                 o["claude_before"])),
         "verdicts": {o["claim_id"][:12]: [o["claude_before"], o["third_look"]] for o in out},
         "tokens": usage.summary(recs).get("tokens") if recs else None,
         "cost_estimate_usd": usage.summary(recs).get("cost_estimate_usd") if recs else None,

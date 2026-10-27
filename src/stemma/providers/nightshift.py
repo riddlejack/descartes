@@ -50,7 +50,12 @@ PLACEHOLDER_TOKEN = "rt-local"
 
 
 class NightshiftError(Exception):
-    """The runtime answered, but not with something usable."""
+    """The runtime answered, but not with something usable. `receipt` is the call's
+    logged receipt when there was one, so its spend is never lost (Codex re-check D)."""
+
+    def __init__(self, message: str, receipt: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.receipt = receipt
 
 
 class NightshiftOffline(NightshiftError):
@@ -275,6 +280,7 @@ class NightshiftClient:
                 raise NightshiftError(f"not a chat completion ({digest(ans.body)})") from exc
         except NightshiftError as exc:
             self.log.write(**receipt, ok=False, error=str(exc))
+            exc.receipt = receipt
             raise
         served = raw.get("model") if isinstance(raw.get("model"), str) else None
         raw_usage = raw.get("usage")
@@ -282,11 +288,17 @@ class NightshiftClient:
         receipt.update({"ok": True, "served_model": served, "response_id": raw.get("id"),
                         "finish_reason": choice.get("finish_reason"), "usage": usage,
                         "response_sha256": hashlib.sha256(ans.body).hexdigest()})
-        self.log.write(**receipt)
         content = message.get("content")
+        tool_calls = message.get("tool_calls")
+        if not isinstance(content, str | None) or not isinstance(tool_calls, list | None):
+            receipt["ok"] = False
+            problem = f"a malformed message: content or tool_calls ({digest(ans.body)})"
+            self.log.write(**receipt, error=problem)
+            raise NightshiftError(problem, receipt)  # spent tokens stay on the receipt
+        self.log.write(**receipt)
         return ChatResult(
-            text=content if isinstance(content, str) else None,
-            tool_calls=list(message.get("tool_calls") or []),
+            text=content,
+            tool_calls=list(tool_calls or []),
             finish_reason=choice.get("finish_reason"), route=route, served_model=served,
             usage=usage, receipt=receipt, raw=raw)
 

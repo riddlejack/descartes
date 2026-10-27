@@ -46,14 +46,20 @@ REJECTING: Final = frozenset({"not_supported"})
 SYSTEM: Final = (
     "You check one factual claim against the exact source passage it cites. Decide only "
     "from the passage. Check the entity, the period, the unit, the scope and the "
-    "direction of any change. End your reply with one JSON object and nothing after it: "
+    "direction of any change. Your answer is one JSON object and nothing else, with no "
+    "words before or after it (any reasoning first must be closed by </think>): "
     '{"verdict": "supports" | "does_not_support" | "cannot_tell", "reason": "<one line>"}.'
 )
 
 
 class SecondFamilyUnavailable(Exception):
     """Nightshift could not be asked at all (not configured, offline, the key refused, or
-    no model routable): recorded once for the run, which carries on."""
+    no model routable): recorded once for the run, which carries on. `receipt` is the
+    call's receipt when the runtime answered (its spend is kept)."""
+
+    def __init__(self, message: str, receipt: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.receipt = receipt
 
 
 class SecondFamilyFailed(Exception):
@@ -141,7 +147,7 @@ def nightshift_asker(client: Any) -> Asker:
         except NightshiftError as exc:
             if "is not listed by GET /v1/models" in str(exc):  # not routable: the run's
                 raise SecondFamilyUnavailable(f"model_not_listed: {exc}") from exc
-            raise SecondFamilyUnavailable(f"nightshift_error: {exc}") from exc
+            raise SecondFamilyUnavailable(f"nightshift_error: {exc}", exc.receipt) from exc
         return res.text, res.served_model, dict(res.receipt)
 
     return ask
@@ -191,55 +197,39 @@ def messages(claim: dict[str, Any], found: Sequence[dict[str, str]]) -> list[dic
             {"role": "user", "content": "\n".join(lines)}]
 
 
-_FENCE_END = re.compile(r"\s*```\s*$")
-_FENCE_START = re.compile(r"```(?:json)?\s*$", re.IGNORECASE)
+_FENCED = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.IGNORECASE | re.DOTALL)
 
 
 def parse(text: str | None) -> tuple[str, str]:
-    """The model's verdict and reason, from its final answer only (Codex review of N1,
-    #1): every complete think block is removed; an unfinished one is refused; then the
-    reply must END with exactly one JSON object, optionally in a code fence, nothing
-    after it, holding only `verdict` (one of the three answers) and `reason` (text).
-    An object found anywhere else (in reasoning, in an example, nested inside another
-    value) is never the verdict. Anything else is a typed error."""
+    """The model's verdict and reason, from its final answer only (Codex review of N1
+    #1 and its re-check A, C). The answer is what follows the last `</think>` (the
+    opening tag may be the chat template's, not in the reply), or the whole reply when
+    there is none. It must be exactly one JSON object, alone or in one code fence,
+    holding only `verdict` (one of the three answers) and `reason` (text). Words before
+    it, a second object, an unfinished `<think>`: each is a typed error, never a verdict
+    taken from an example or from reasoning."""
     if not text:
         raise ValueError("the answer is empty")
-    # A reasoning model's reply is its reasoning, closed by `</think>` (the opening tag
-    # may be the chat template's, not in the reply), then its answer: only what follows
-    # the last `</think>` is the answer, and it must be the object alone. A `<think>`
-    # with no close after it is unfinished reasoning (seen live on nemotron-3-ultra).
     closes = [m.end() for m in re.finditer(r"</think>", text, re.IGNORECASE)]
-    after = text[closes[-1]:] if closes else text
-    if re.search(r"<think>", after, re.IGNORECASE):
+    answer = (text[closes[-1]:] if closes else text).strip()
+    if re.search(r"<think>", answer, re.IGNORECASE):
         raise ValueError("the answer holds unfinished reasoning")
-    body = _FENCE_END.sub("", after.rstrip()).rstrip()
-    if closes:
-        body = _FENCE_START.sub("", body.lstrip()) if body.lstrip().startswith("```") \
-            else body.lstrip()
-        if not body.startswith("{"):
-            raise ValueError("after the reasoning, the answer is not one JSON object")
-    if not body.endswith("}"):
-        raise ValueError("the answer does not end with a JSON object")
-    decoder = json.JSONDecoder()
-    found: dict[str, Any] | None = None
-    start = -1
-    for m in re.finditer(r"\{", body):  # the outermost object that ends the reply
-        try:
-            obj, end = decoder.raw_decode(body, m.start())
-        except json.JSONDecodeError:
-            continue
-        if end == len(body):
-            found, start = obj, m.start()
-            break
-    if not isinstance(found, dict) or (closes and start != 0):
-        raise ValueError("the answer does not end with one complete JSON object")
+    fenced = _FENCED.fullmatch(answer)
+    body = fenced.group(1) if fenced else answer
+    if not body.startswith("{"):
+        raise ValueError("the answer is not one JSON object alone")
+    try:
+        found, end = json.JSONDecoder().raw_decode(body)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"the answer is not valid JSON ({exc.msg})") from None
+    if end != len(body) or not isinstance(found, dict):
+        raise ValueError("the answer is not one JSON object alone")
     if not set(found) <= {"verdict", "reason"} or found.get("verdict") not in ANSWERS:
-        raise ValueError("the final object is not {verdict: one of "
+        raise ValueError("the object is not {verdict: one of "
                          f"{', '.join(ANSWERS)}, reason: text}}")
     reason = found.get("reason", "")
     if not isinstance(reason, str):
-        raise ValueError("the final object's reason is not text")  # noqa: TRY004
-    _ = _FENCE_START.sub("", body[:start])  # what precedes is reasoning, never read
+        raise ValueError("the object's reason is not text")  # noqa: TRY004
     return str(found["verdict"]), reason[:REASON_MAX_CHARS]
 
 
@@ -269,7 +259,7 @@ def ask(asker: Asker, run_dir: Path, claim: dict[str, Any], evidence: Evidence,
             text, served, receipt = asker(model, msgs)
         except SecondFamilyUnavailable as exc:
             problems.append(f"{model}: {exc}")
-            attempts.append(_attempt(model, None, str(exc)))
+            attempts.append(_attempt(model, exc.receipt, str(exc)))
             if str(exc).startswith("provider_auth_failed"):
                 break  # the same key fails for every model
             if str(exc).startswith("nightshift_error"):
@@ -288,7 +278,7 @@ def ask(asker: Asker, run_dir: Path, claim: dict[str, Any], evidence: Evidence,
             raise SecondFamilyFailed("; ".join([*problems, problem]), attempts)
         finish = receipt.get("finish_reason")
         try:
-            if finish not in (None, "stop"):
+            if finish != "stop":  # the contract's completion; absent is not "stop"
                 raise ValueError(f"the answer did not complete (finish_reason {finish})")
             verdict, reason = parse(text)
         except (ValueError, json.JSONDecodeError) as exc:
