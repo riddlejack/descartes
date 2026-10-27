@@ -97,7 +97,7 @@ def test_sec_capture_refuses_filed_after_as_of(sec_svc: tuple[EvidenceService, F
     svc, t = sec_svc
     set_as_of(run_dir, "2024-02-21")  # filed on the as_of date is not before it
     r = svc.sec_capture("0000999999-24-000010")
-    assert r["status"] == "filed_after_as_of" and r["sha256"] is None
+    assert r["status"] == "no_filing_before_as_of" and r["sha256"] is None
     assert t.calls == []
 
 
@@ -139,7 +139,7 @@ def test_sec_facts_as_of_withholds_raw_text(sec_svc: tuple[EvidenceService, Fake
     set_as_of(run_dir, "2024-01-01")
     out = svc.sec_facts("INVT", "Revenues")
     source = svc.store.get_receipt(out["source_receipt_id"])
-    # the bytes are kept for audit, but later figures never become searchable text
+    # the answer is not stored (it holds later figures), so they are never searchable
     assert source["status"] == "text_withheld_as_of" and source["text_path"] is None
     assert svc.search_store("8169", mode="exact")["hits"] == []
     assert all(f["filed"] < "2024-01-01" for f in out["facts"])

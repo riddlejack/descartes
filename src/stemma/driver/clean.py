@@ -165,9 +165,11 @@ def clean_launch(binary: Path, config_dir: Path, prompt: str, *, cwd: Path, mode
                  env_extra: dict[str, str] | None = None, session_id: str | None = None,
                  resume: bool = False, strict_mcp_config: bool = False,
                  disable_slash_commands: bool = False,
-                 settings_writer: Callable[[str], None] | None = None) -> CleanLaunch:
+                 settings_writer: Callable[[str], None] | None = None,
+                 mcp_config: Path | None = None) -> CleanLaunch:
     """Build a clean launch and write its settings file; the caller starts `argv` with
-    `env` in `cwd`, stdin closed."""
+    `env` in `cwd`, stdin closed. `mcp_config` (with `strict_mcp_config`) names the one
+    MCP configuration a session without a plugin may load: an as_of bare arm's broker."""
     if not prompt or prompt.startswith("-"):
         raise HarnessError(f"prompt must not be empty or start with '-': {prompt!r}")
     if model not in AVAILABLE_MODELS:
@@ -181,6 +183,9 @@ def clean_launch(binary: Path, config_dir: Path, prompt: str, *, cwd: Path, mode
         raise HarnessError("an agent needs the plugin that defines it")
     if resume and not session_id:
         raise HarnessError("resume needs the session id to resume")
+    if mcp_config is not None and not strict_mcp_config:
+        raise HarnessError("--mcp-config is passed only with --strict-mcp-config, so it is "
+                           "the only MCP configuration the session loads")
     for t in tools:
         if not t or "," in t or t.startswith("mcp__"):
             raise HarnessError(f"--tools takes built-in tool names, got {t!r}")
@@ -200,6 +205,8 @@ def clean_launch(binary: Path, config_dir: Path, prompt: str, *, cwd: Path, mode
     if plugin_dir is not None:
         argv += ["--plugin-dir", str(plugin_dir)]
     argv += ["--settings", str(settings_path), "--tools", ",".join(tools)]
+    if mcp_config is not None:
+        argv += ["--mcp-config", str(mcp_config)]
     if strict_mcp_config:
         argv.append("--strict-mcp-config")
     if disable_slash_commands:
@@ -238,10 +245,14 @@ def stemma_expectation(*, cwd: Path, plugin_dir: Path, agents: list[str] | froze
 
 def bare_expectation(*, cwd: Path, tools: list[str] | tuple[str, ...], harness_version: str,
                      session_id: str | None,
-                     builtin_agents: frozenset[str] = frozenset()) -> Expectation:
-    """A bare baseline (no plugin, no agent): no plugins, no MCP servers or MCP tools, no
-    skills, exactly the --tools list, and the agents in `builtin_agents` (none when the
-    session's env sets CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS=1)."""
+                     builtin_agents: frozenset[str] = frozenset(),
+                     mcp_server: str | None = None) -> Expectation:
+    """A bare baseline (no plugin, no agent): no plugins, no skills, exactly the --tools
+    list, the agents in `builtin_agents` (none when the session's env sets
+    CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS=1), and no MCP server or MCP tool, or with
+    `mcp_server` exactly that server and only its tools (an as_of bare arm's broker)."""
     return Expectation(cwd=cwd, plugin_dir=None, agents=builtin_agents, skills=frozenset(),
                        builtin_tools=frozenset(tools), harness_version=harness_version.split()[0],
-                       session_id=session_id, mcp_servers=())
+                       session_id=session_id,
+                       mcp_servers=(mcp_server,) if mcp_server else (),
+                       mcp_prefix=f"mcp__{mcp_server}__" if mcp_server else "mcp__")

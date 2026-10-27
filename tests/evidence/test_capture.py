@@ -98,6 +98,7 @@ def test_cache_serves_only_the_same_request(make_service: Factory, run_dir: Path
     # A second run (its own folder) making the same request is served from the cache.
     other = tmp_path / "run2"
     other.mkdir()
+    (other / "run.json").write_text('{"run_id": "t2", "as_of": null}')
     svc2 = EvidenceService(other, transport=t, cache_dir=tmp_path / "cache",
                            throttle=False)
     second = svc2.capture(url, "second run")

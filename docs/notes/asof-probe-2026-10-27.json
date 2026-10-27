@@ -1,0 +1,711 @@
+{
+ "as_of": "2026-10-01",
+ "cutoff_utc": "2026-10-01T00:00:00+00:00",
+ "at": "2026-10-27T18:17:36.019383+00:00",
+ "seed_attempts": [
+  {
+   "url": "https://investors.coreweave.com/",
+   "status": "no_snapshot_before_as_of",
+   "kind": "archive",
+   "detail": "CDX lists no capture",
+   "sha256": null,
+   "snapshot_timestamp": null,
+   "memento_datetime": null,
+   "snapshot_age_days": null,
+   "final_url": null,
+   "text_chars": null
+  },
+  {
+   "url": "https://investors.coreweave.com/news-events/press-releases",
+   "status": "no_snapshot_before_as_of",
+   "kind": "archive",
+   "detail": "CDX lists no capture",
+   "sha256": null,
+   "snapshot_timestamp": null,
+   "memento_datetime": null,
+   "snapshot_age_days": null,
+   "final_url": null,
+   "text_chars": null
+  },
+  {
+   "url": "https://www.coreweave.com/newsroom",
+   "status": "ok",
+   "kind": "archive",
+   "detail": null,
+   "sha256": "229c34030f2e7c2b145003f3afe94ac05b18a28912efffdb52198cdabf0fa1de",
+   "snapshot_timestamp": "20260924174621",
+   "memento_datetime": [
+    "Thu, 24 Sep 2026 17:46:21 GMT"
+   ],
+   "snapshot_age_days": 6,
+   "final_url": "https://web.archive.org/web/20260924174621id_/https://coreweave.com/newsroom",
+   "text_chars": 25176
+  }
+ ],
+ "seed": "https://www.coreweave.com/newsroom",
+ "links": {
+  "base_url": "https://coreweave.com/newsroom",
+  "count": 151,
+  "truncated": false,
+  "not_web_links": 0,
+  "first_40": [
+   {
+    "url": "https://www.coreweave.com/news/coreweave-becomes-the-only-provider-to-earn-semianalysis-platinum-clustermax-tm-rating-three-consecutive-times",
+    "text": "Read more"
+   },
+   {
+    "url": "https://coreweave.com/news/coreweave-becomes-the-only-provider-to-earn-semianalysis-platinum-clustermax-tm-rating-three-consecutive-times",
+    "text": ""
+   },
+   {
+    "url": "https://coreweave.com/",
+    "text": "Read more"
+   },
+   {
+    "url": "https://coreweave.com/newsroom",
+    "text": "Main menu"
+   },
+   {
+    "url": "https://coreweave.com/platform",
+    "text": "View the platform"
+   },
+   {
+    "url": "https://coreweave.com/why-coreweave",
+    "text": "Why CoreWeave?"
+   },
+   {
+    "url": "https://coreweave.com/coreweave-arena",
+    "text": "CoreWeave ARENA"
+   },
+   {
+    "url": "https://coreweave.com/trust",
+    "text": "Trust center"
+   },
+   {
+    "url": "https://coreweave.com/ai-data-centers",
+    "text": "Global AI data centers"
+   },
+   {
+    "url": "https://coreweave.com/resources/videos/the-coreweave-effect-powering-the-next-era-of-ai-innovation",
+    "text": ""
+   },
+   {
+    "url": "https://coreweave.com/products/gpu-compute",
+    "text": "GPU compute"
+   },
+   {
+    "url": "https://coreweave.com/products/nvidia-vera-rubin",
+    "text": "NVIDIA Vera Rubin"
+   },
+   {
+    "url": "https://coreweave.com/products/nvidia-blackwell",
+    "text": "NVIDIA Blackwell"
+   },
+   {
+    "url": "https://coreweave.com/products/hgx-h100-h200",
+    "text": "NVIDIA Hopper"
+   },
+   {
+    "url": "https://coreweave.com/products/cpu-compute",
+    "text": "CPU compute"
+   },
+   {
+    "url": "https://coreweave.com/products/bare-metal",
+    "text": "Bare metal servers"
+   },
+   {
+    "url": "https://coreweave.com/products/networking",
+    "text": "Networking"
+   },
+   {
+    "url": "https://coreweave.com/semianalysis",
+    "text": "See why we earned Platinum"
+   },
+   {
+    "url": "https://coreweave.com/products/storage",
+    "text": "AI Object storage"
+   },
+   {
+    "url": "https://coreweave.com/products/storage/dedicated-vast-storage",
+    "text": "Dedicated VAST Storage"
+   },
+   {
+    "url": "https://coreweave.com/products/storage/zero-egress-migration-program",
+    "text": "Get started today"
+   },
+   {
+    "url": "https://coreweave.com/products/coreweave-kubernetes-service",
+    "text": "Managed Kubernetes"
+   },
+   {
+    "url": "https://cdn.prod.website-files.com/62bc66d283fd9c34ffec780a/68f2ac6e70a9958b1fea8e70_COR_WP_00004_TheEssentialCloudForAI_WEB%20(1).pdf",
+    "text": ""
+   },
+   {
+    "url": "https://cdn.prod.website-files.com/62bc66d283fd9c34ffec780a/68f2ac6e70a9958b1fea8e70_COR_WP_00004_TheEssentialCloudForAI_WEB%20(1).pdf?utm_source=coreweave.com&utm_medium=site",
+    "text": "Download whitepaper"
+   },
+   {
+    "url": "https://coreweave.com/products/sunk",
+    "text": "SUNK"
+   },
+   {
+    "url": "https://coreweave.com/products/sunk/sunk-anywhere",
+    "text": "SUNK Anywhere"
+   },
+   {
+    "url": "https://wandb.ai/site/serverless-rl/",
+    "text": "Serverless RL"
+   },
+   {
+    "url": "https://coreweave.com/products/serverless-inference",
+    "text": "Serverless Inference"
+   },
+   {
+    "url": "https://coreweave.com/products/dedicated-inference",
+    "text": "Dedicated Inference"
+   },
+   {
+    "url": "https://coreweave.com/resources/whitepapers/scaling-frontier-class-ai-training-on-coreweave-a-deep-technical-analysis-of-mlperf-r-training-v6-0-results",
+    "text": "Download our report"
+   },
+   {
+    "url": "https://coreweave.com/products/coreweave-sandboxes",
+    "text": "CoreWeave Sandbox Preview"
+   },
+   {
+    "url": "https://wandb.ai/site/models/",
+    "text": "Training"
+   },
+   {
+    "url": "https://wandb.ai/site/wb-training/",
+    "text": "Fine-tuning"
+   },
+   {
+    "url": "https://wandb.ai/site/agent/",
+    "text": "ARIA - AI Research and Iteration Agent"
+   },
+   {
+    "url": "https://wandb.ai/site/weave/",
+    "text": "Monitor"
+   },
+   {
+    "url": "https://coreweave.com/mission-control",
+    "text": "Mission Control"
+   },
+   {
+    "url": "https://coreweave.com/observability",
+    "text": "Observability"
+   },
+   {
+    "url": "https://coreweave.com/security",
+    "text": "Security"
+   },
+   {
+    "url": "https://coreweave.com/solutions/ai-inference",
+    "text": "Tensorizer"
+   },
+   {
+    "url": "https://coreweave.com/solutions/ai-model-training",
+    "text": "AI model training Train large-scale AI models with purpose-built GPU infrastructure"
+   }
+  ]
+ },
+ "followed": [
+  {
+   "url": "https://www.coreweave.com/news/coreweave-becomes-the-only-provider-to-earn-semianalysis-platinum-clustermax-tm-rating-three-consecutive-times",
+   "status": "ok",
+   "kind": "archive",
+   "detail": null,
+   "sha256": "b33a2e280a7ff1c6d9834fdffee9ded405f642d756564c8f2e6fa811e18c277e",
+   "snapshot_timestamp": "20260929182229",
+   "memento_datetime": [
+    "Tue, 29 Sep 2026 18:22:29 GMT"
+   ],
+   "snapshot_age_days": 1,
+   "final_url": "https://web.archive.org/web/20260929182229id_/https://www.coreweave.com/news/coreweave-becomes-the-only-provider-to-earn-semianalysis-platinum-clustermax-tm-rating-three-consecutive-times",
+   "text_chars": 21611
+  },
+  {
+   "url": "https://coreweave.com/news/coreweave-becomes-the-only-provider-to-earn-semianalysis-platinum-clustermax-tm-rating-three-consecutive-times",
+   "status": "ok",
+   "kind": "archive",
+   "detail": null,
+   "sha256": "b33a2e280a7ff1c6d9834fdffee9ded405f642d756564c8f2e6fa811e18c277e",
+   "snapshot_timestamp": "20260929182229",
+   "memento_datetime": [
+    "Tue, 29 Sep 2026 18:22:29 GMT"
+   ],
+   "snapshot_age_days": 1,
+   "final_url": "https://web.archive.org/web/20260929182229id_/https://www.coreweave.com/news/coreweave-becomes-the-only-provider-to-earn-semianalysis-platinum-clustermax-tm-rating-three-consecutive-times",
+   "text_chars": 21611
+  },
+  {
+   "url": "https://coreweave.com/newsroom",
+   "status": "ok",
+   "kind": "archive",
+   "detail": null,
+   "sha256": "229c34030f2e7c2b145003f3afe94ac05b18a28912efffdb52198cdabf0fa1de",
+   "snapshot_timestamp": "20260924174621",
+   "memento_datetime": [
+    "Thu, 24 Sep 2026 17:46:21 GMT"
+   ],
+   "snapshot_age_days": 6,
+   "final_url": "https://web.archive.org/web/20260924174621id_/https://coreweave.com/newsroom",
+   "text_chars": 25176
+  }
+ ],
+ "sec_search": [
+  {
+   "args": [
+    "CoreWeave",
+    null,
+    null,
+    1
+   ],
+   "hits": 100,
+   "earliest": "2021-06-24",
+   "latest": "2026-09-28",
+   "forms": [
+    "10-K",
+    "10-Q",
+    "144",
+    "424B2",
+    "424B3",
+    "425",
+    "8-K",
+    "8-K/A",
+    "DEFM14A",
+    "DFAN14A",
+    "NPORT-P",
+    "PREC14A",
+    "S-1",
+    "S-1/A",
+    "S-4",
+    "S-4/A",
+    "SCHEDULE 13D"
+   ],
+   "sample": [
+    {
+     "accession": "0001213900-21-033998",
+     "form": "8-K/A",
+     "filing_date": "2021-06-24",
+     "filers": [
+      "Sysorex, Inc.  (SYSX)  (CIK 0001737372)"
+     ],
+     "ciks": [
+      "0001737372"
+     ],
+     "document": "ea143111ex10-1_sysorex.htm"
+    },
+    {
+     "accession": "0001193125-25-044231",
+     "form": "S-1",
+     "filing_date": "2025-03-03",
+     "filers": [
+      "CoreWeave, Inc.  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "d899798dex1023.htm"
+    },
+    {
+     "accession": "0000950103-25-008523",
+     "form": "425",
+     "filing_date": "2025-07-07",
+     "filers": [
+      "Core Scientific, Inc./tx  (CORZ, CORZR, CORZW, CORZZ)  (CIK 0001839341)",
+      "CoreWeave, Inc.  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001839341",
+      "0001769628"
+     ],
+     "document": "dp231290_425.htm"
+    },
+    {
+     "accession": "0001140361-25-037969",
+     "form": "8-K",
+     "filing_date": "2025-10-14",
+     "filers": [
+      "Core Scientific, Inc./tx  (CORZ, CORZR, CORZW, CORZZ)  (CIK 0001839341)"
+     ],
+     "ciks": [
+      "0001839341"
+     ],
+     "document": "ef20056907_ex99-1.htm"
+    },
+    {
+     "accession": "0001140361-25-036118",
+     "form": "S-4/A",
+     "filing_date": "2025-09-25",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "ny20053122x6_s4a.htm"
+    },
+    {
+     "accession": "0001140361-25-038209",
+     "form": "425",
+     "filing_date": "2025-10-15",
+     "filers": [
+      "Core Scientific, Inc./tx  (CORZ, CORZR, CORZW, CORZZ)  (CIK 0001839341)"
+     ],
+     "ciks": [
+      "0001839341"
+     ],
+     "document": "ef20057150_ex99-1.htm"
+    },
+    {
+     "accession": "0000902664-25-004376",
+     "form": "DFAN14A",
+     "filing_date": "2025-10-10",
+     "filers": [
+      "Core Scientific, Inc./tx  (CORZ, CORZR, CORZW, CORZZ)  (CIK 0001839341)",
+      "Two Seas Capital LP  (CIK 0001823138)"
+     ],
+     "ciks": [
+      "0001839341",
+      "0001823138"
+     ],
+     "document": "p25-2168exhibit1.htm"
+    },
+    {
+     "accession": "0001769628-25-000050",
+     "form": "8-K",
+     "filing_date": "2025-09-30",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "redactedmetamsa929finald.htm"
+    }
+   ],
+   "warnings": [
+    "filer names are EDGAR's names today, which may differ from the names on the filing date"
+   ]
+  },
+  {
+   "args": [
+    "CoreWeave",
+    [
+     "S-1",
+     "424B4",
+     "10-Q",
+     "8-K"
+    ],
+    null,
+    1
+   ],
+   "hits": 100,
+   "earliest": "2021-06-24",
+   "latest": "2026-09-25",
+   "forms": [
+    "10-Q",
+    "10-Q/A",
+    "8-K",
+    "8-K/A",
+    "S-1",
+    "S-1/A"
+   ],
+   "sample": [
+    {
+     "accession": "0001213900-21-033998",
+     "form": "8-K/A",
+     "filing_date": "2021-06-24",
+     "filers": [
+      "Sysorex, Inc.  (SYSX)  (CIK 0001737372)"
+     ],
+     "ciks": [
+      "0001737372"
+     ],
+     "document": "ea143111ex10-1_sysorex.htm"
+    },
+    {
+     "accession": "0001193125-25-044231",
+     "form": "S-1",
+     "filing_date": "2025-03-03",
+     "filers": [
+      "CoreWeave, Inc.  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "d899798dex1023.htm"
+    },
+    {
+     "accession": "0001140361-25-037969",
+     "form": "8-K",
+     "filing_date": "2025-10-14",
+     "filers": [
+      "Core Scientific, Inc./tx  (CORZ, CORZR, CORZW, CORZZ)  (CIK 0001839341)"
+     ],
+     "ciks": [
+      "0001839341"
+     ],
+     "document": "ef20056907_ex99-1.htm"
+    },
+    {
+     "accession": "0001769628-25-000050",
+     "form": "8-K",
+     "filing_date": "2025-09-30",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "redactedmetamsa929finald.htm"
+    },
+    {
+     "accession": "0001769628-25-000062",
+     "form": "10-Q",
+     "filing_date": "2025-11-13",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "exhibit105.htm"
+    },
+    {
+     "accession": "0001769628-26-000183",
+     "form": "8-K",
+     "filing_date": "2026-04-21",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "crwv-20260416.htm"
+    },
+    {
+     "accession": "0001193125-25-155925",
+     "form": "8-K",
+     "filing_date": "2025-07-07",
+     "filers": [
+      "Core Scientific, Inc./tx  (CORZ, CORZR, CORZW, CORZZ)  (CIK 0001839341)"
+     ],
+     "ciks": [
+      "0001839341"
+     ],
+     "document": "d52423dex991.htm"
+    },
+    {
+     "accession": "0001769628-25-000105",
+     "form": "8-K",
+     "filing_date": "2025-12-11",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "exhibit991pressrelease.htm"
+    }
+   ],
+   "warnings": [
+    "filer names are EDGAR's names today, which may differ from the names on the filing date"
+   ]
+  },
+  {
+   "args": [
+    "CoreWeave",
+    null,
+    "1769628",
+    1
+   ],
+   "hits": 100,
+   "earliest": "2022-03-01",
+   "latest": "2026-09-22",
+   "forms": [
+    "10-K",
+    "10-Q",
+    "144",
+    "424B3",
+    "425",
+    "8-K",
+    "CORRESP",
+    "S-1",
+    "S-1/A",
+    "S-4",
+    "S-4/A",
+    "S-8",
+    "SC 13D/A"
+   ],
+   "sample": [
+    {
+     "accession": "0001193125-25-044231",
+     "form": "S-1",
+     "filing_date": "2025-03-03",
+     "filers": [
+      "CoreWeave, Inc.  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "d899798dex1023.htm"
+    },
+    {
+     "accession": "0000950103-25-008523",
+     "form": "425",
+     "filing_date": "2025-07-07",
+     "filers": [
+      "Core Scientific, Inc./tx  (CORZ, CORZR, CORZW, CORZZ)  (CIK 0001839341)",
+      "CoreWeave, Inc.  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001839341",
+      "0001769628"
+     ],
+     "document": "dp231290_425.htm"
+    },
+    {
+     "accession": "0001140361-25-036118",
+     "form": "S-4/A",
+     "filing_date": "2025-09-25",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "ny20053122x6_s4a.htm"
+    },
+    {
+     "accession": "0001769628-25-000050",
+     "form": "8-K",
+     "filing_date": "2025-09-30",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "redactedmetamsa929finald.htm"
+    },
+    {
+     "accession": "0000950103-25-008540",
+     "form": "425",
+     "filing_date": "2025-07-08",
+     "filers": [
+      "Core Scientific, Inc./tx  (CORZ, CORZR, CORZW, CORZZ)  (CIK 0001839341)",
+      "CoreWeave, Inc.  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001839341",
+      "0001769628"
+     ],
+     "document": "dp231328_425-transcriptceo.htm"
+    },
+    {
+     "accession": "0001769628-25-000062",
+     "form": "10-Q",
+     "filing_date": "2025-11-13",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "exhibit105.htm"
+    },
+    {
+     "accession": "0001769628-26-000183",
+     "form": "8-K",
+     "filing_date": "2026-04-21",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "crwv-20260416.htm"
+    },
+    {
+     "accession": "0000950103-25-012940",
+     "form": "425",
+     "filing_date": "2025-10-07",
+     "filers": [
+      "Core Scientific, Inc./tx  (CORZ, CORZR, CORZW, CORZZ)  (CIK 0001839341)",
+      "CoreWeave, Inc.  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001839341",
+      "0001769628"
+     ],
+     "document": "dp235625_425-bloomberg.htm"
+    }
+   ],
+   "warnings": [
+    "filer names are EDGAR's names today, which may differ from the names on the filing date"
+   ]
+  }
+ ],
+ "series": [
+  {
+   "source": "stooq",
+   "symbol": "crwv.us",
+   "status": "series_unreadable",
+   "detail": "unreadable: the source answered with a web page, not CSV (a browser check or an error page)",
+   "rows": null,
+   "first_date": null,
+   "last_date": null,
+   "requested_url": "https://stooq.com/q/d/l/?s=crwv.us&i=d&d1=19000101&d2=20260930",
+   "sha256": null
+  },
+  {
+   "source": "stooq",
+   "symbol": "nvda.us",
+   "status": "series_unreadable",
+   "detail": "unreadable: the source answered with a web page, not CSV (a browser check or an error page)",
+   "rows": null,
+   "first_date": null,
+   "last_date": null,
+   "requested_url": "https://stooq.com/q/d/l/?s=nvda.us&i=d&d1=19000101&d2=20260930",
+   "sha256": null
+  },
+  {
+   "source": "fred",
+   "symbol": "DGS10",
+   "status": "ok",
+   "detail": null,
+   "rows": 16892,
+   "first_date": "1962-01-02",
+   "last_date": "2026-09-30",
+   "requested_url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10&coed=2026-09-30",
+   "sha256": "bddfe0bd82ba14663bc36fb07b825db9f6c5c5bed75dc050e9822f18f5ae5dca"
+  },
+  {
+   "source": "fred",
+   "symbol": "BAMLH0A0HYM2",
+   "status": "ok",
+   "detail": null,
+   "rows": 774,
+   "first_date": "2023-10-30",
+   "last_date": "2026-09-30",
+   "requested_url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=BAMLH0A0HYM2&coed=2026-09-30",
+   "sha256": "31da066ece2d8b190502e9b8db97c0a8928b399115d21341b03899b74301c7c6"
+  },
+  {
+   "source": "fred",
+   "symbol": "SOFR",
+   "status": "ok",
+   "detail": null,
+   "rows": 2217,
+   "first_date": "2018-04-03",
+   "last_date": "2026-09-30",
+   "requested_url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=SOFR&coed=2026-09-30",
+   "sha256": "c27bdda93270133213b6420e316a359d0e58125706d853c40b59920e0e6c45f9"
+  }
+ ],
+ "violations": []
+}

@@ -242,6 +242,13 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   sum of its sessions, never the gaps between them (usage waits, a driver that was
   down); every launch gets only what is left of `lead_max_s`, and the Stop hook, the
   resume of an ended lead and the automatic resume all read the same count.
+- **Running-time notices** (27 Oct): at each fraction in `limits.lead_notice_fractions`
+  (run.json, a resource limit, default 0.6 and 0.8) of `lead_max_s`, the driver queues a
+  notice for a running lead of an unreleased run, delivered like an arrival on its next
+  tool call: how many minutes it has run and how many remain; the last says to submit
+  its draft and call `finish_run` before the limit, since a lead stopped at the limit
+  ends the run with no deliverable. Each fraction is told once, across resumes; a lead
+  that has ended, or a run already released, is told nothing. Event: `lead_time_notice`.
 - **A usage stop is shared at once:** any session's usage rejection sets one stop flag
   and persists `usage_limited` under the lock every lead launch decision takes (a
   session already marked rate-limited counts, even while its reader waits to persist
@@ -356,6 +363,69 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   refused, naming it) or finds the node removed (and is refused). A review or branch
   verdict checks its points' nodes again under the same lock before it writes, so a
   point never lands on a node removed after the first check.
+
+## 0d. An as_of run sees no live web (reality-graded runs, 27 Oct)
+- **Why.** A run with `as_of` is graded against what happened after that date, so
+  nothing it reads or searches may show later information. Date-filtered web search
+  leaks (updated pages, ranking, related-content modules), so it is not used.
+- **Built-in web tools.** When `run.json` has `as_of`, the driver leaves `WebSearch`
+  and `WebFetch` out of every session's `--tools` (by name or as a rule) and denies
+  both in its settings; the guard refuses both to every caller, subagents included,
+  and refuses them too when `run.json` is missing, unreadable, or its `as_of` is not a
+  `YYYY-MM-DD` date. Tool arguments never change this; only `run.json` (driver-written,
+  tool-only) says what the run is. A run without `as_of` is unchanged (`WebFetch` stays
+  denied in every run).
+- **The shell.** Every session's sandbox has `network.allowedDomains: []`,
+  `allowUnsandboxedCommands: false` and `failIfUnavailable: true`, as in every run.
+- **The broker.** Every other path to the network runs in the MCP server: `capture`
+  takes an archived copy dated before `as_of` (section 4), and the `sec_*` tools keep
+  only filings dated before it. A refusal says nothing dated on or after `as_of`: a
+  `sec_capture` of a later filing and one of an accession that does not exist get the
+  same refusal (`no_filing_before_as_of`, the accession given and nothing else), and a
+  later filing is never remembered in the store. Every SEC redirect hop stays in the
+  approved filing's own folder on `www.sec.gov` (or the requested path on
+  `data.sec.gov`), or the fetch is refused. No error page's body is stored in an
+  `as_of` run, and no response holding later content is stored where a session can
+  read it. `archived_links` reads only a successful capture shown to predate `as_of`
+  (an archive copy with a full capture timestamp before it, or a filing dated before
+  it). The broker reads `as_of` from `run.json` on every call; a `run.json` that is
+  missing, unreadable or not an object, or whose `as_of` is set but not a real date
+  (an empty one included), refuses the call (`bad_run_json`), never falls back to live.
+- **Discovery.** No keyword web search: a worker browses archived pages (`capture` a
+  front, press or investor page, then `archived_links`, each link captured in turn) and
+  searches filings with `sec_search`, whose end date the host sets (section 4); rates
+  and prices come from `market_series`, its end set by the host too. The worker and the
+  claim checker hold these tools and are told so in one line each.
+- **Every path an as_of run has to the network** (the list the leakage audit scans; any
+  other is a defect). Agents' own tools reach none: no `WebSearch` or `WebFetch`, and
+  Bash, `run_analysis` and the derivation sandbox have no network. The host reaches:
+  1. the model provider, by the harness: model calls only, which carry no source;
+  2. `web.archive.org`, by the broker's `capture`: the CDX index (`/cdx/search/cdx`,
+     `to=` the day before `as_of`) and replays (`/web/<timestamp>id_/<url>`), every hop
+     on that host and dated before `as_of`, the replay's `Memento-Datetime` too;
+  3. SEC EDGAR, by the broker: `efts.sec.gov` full-text search (`sec_search`, end date
+     set by the host, later hits withheld); `www.sec.gov/Archives/` documents
+     (`sec_capture`, only filings dated before `as_of`, refused before any fetch
+     otherwise); `data.sec.gov` XBRL company concepts (`sec_facts`, facts filed before
+     `as_of` kept, the raw answer's text withheld); and the edgartools library's own
+     calls for company lookup, filing lists and accession lookup (`sec_filings`,
+     `sec_capture`), whose answers are filtered by filing date before anything
+     returns. The company name and ticker mapping is today's (a warning says so). The
+     raw XBRL answer is not stored in an `as_of` run (it holds later facts), only
+     the facts filed before `as_of`;
+  3a. `fred.stlouisfed.org` (`fredgraph.csv`) and `stooq.com` (`/q/d/l/`), by the
+     broker's `market_series`: the end date set by the host, every row checked before
+     anything is kept;
+  4. the run's own data-layer store, when configured (Postgres and Zetaris, one
+     database per run, holding only this run's evidence);
+  5. the second-family provider, by the register: claim text and source passages go
+     out, verdicts come back; whether that model's training reaches past `as_of` is a
+     model choice for the owner, not a path this contract can close.
+  The driver itself makes no network call: it starts sessions and reads their streams
+  (usage and limits come from those streams).
+- **The bare arm.** A head-to-head bare arm given an as-of date gets the same: no live
+  web tool, the guard as a hook, Bash without network, and the broker serving its
+  folder with exactly the evidence tools the worker holds (`hackathon/headtohead/bare.py`).
 
 ## 1. Parts and owners
 - **A. Evidence service:** `src/stemma/evidence/`, `tests/evidence/`.
@@ -489,6 +559,23 @@ Unicode code points in the stored text.
   `sec_capture(accession, document=None)` → a receipt;
   `sec_facts(company, concept, filed_before=None)` → as-filed XBRL facts, each with
   its filing date and the receipt of the filing it came from.
+- `sec_search(query, forms=None, cik=None, page=1)` → EDGAR full-text search hits
+  (`accession`, `form`, `filing_date`, `filers`, `ciks`, `document`), 100 a page, pages
+  1 to 20; in an `as_of` run the host sets the end date to the day before `as_of` and
+  withholds any hit filed on or after it without a trace (no total, no highlighted
+  text) (section 0d).
+- `market_series(source, symbol, reason)` → a receipt for a whole dated series as CSV:
+  `source` "fred" (a FRED series id, `fredgraph.csv`) or "stooq" (a daily price
+  history); the caller names the series, never a date. In an `as_of` run the host sets
+  the end to the day before `as_of` (FRED `coed`, stooq `d2`), and checks every row's
+  date before anything is cached or stored: a row on or after `as_of` refuses the
+  whole series (`series_past_as_of`, the later date never shown), an answer that is not
+  a dated series is `series_unreadable`, and a live response's headers other than its
+  content type are not kept (section 0d).
+- `archived_links(sha256)` → the links of a captured HTML page, absolute against the
+  page's own URL, each with its text; a link into the Wayback Machine is given as the
+  page it copies; refused for a page that is not HTML, and in an `as_of` run for a page
+  captured from the live web (section 0d).
 - `outline(sha256)`, `read(sha256, start, length)`, `read_section(sha256, anchor)`:
   reading in parts; no tool returns a whole long document at once.
 - `search_store(query, mode="words"|"exact", sha256=None, limit)` → hits with

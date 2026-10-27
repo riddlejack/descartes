@@ -81,6 +81,35 @@ def sec_facts(company: str, concept: str, filed_before: str | None = None,
     return result
 
 
+def sec_search(query: str, forms: list[str] | None = None, cik: str | None = None,
+               page: int = 1) -> dict[str, Any]:
+    """Search the full text of SEC filings (EDGAR full-text search, filings since 2001).
+    `forms` keeps only those form codes (e.g. ["S-1", "10-K"]); `cik` only that filer;
+    `page` (1 to 20, 100 hits each) pages on until a page comes back empty. Each hit
+    gives accession, form, filing date, filers and the matching document; capture it
+    with sec_capture. When the run has an as_of date, only filings filed before it."""
+    result: dict[str, Any] = _call(lambda s: s.sec_search(query, forms, cik, page))
+    return result
+
+
+def market_series(source: str, symbol: str, reason: str) -> dict[str, Any]:
+    """Capture a whole dated market series as CSV, with a receipt: source "fred" (a FRED
+    series id such as DGS10) or "stooq" (a daily price history such as crwv.us). Read it
+    with read and search_store like any capture. When the run has an as_of date the
+    series ends the day before it, and a series with any later row is refused."""
+    result: dict[str, Any] = _call(lambda s: s.market_series(source, symbol, reason))
+    return result
+
+
+def archived_links(sha256: str) -> dict[str, Any]:
+    """The links of a captured HTML page, absolute, each with its text: browse from a
+    captured page (a front page, a press or investor page) to the pages it links to,
+    and capture those. When the run has an as_of date, every page was captured from an
+    archive dated before it, and so is each link you capture next."""
+    result: dict[str, Any] = _call(lambda s: s.archived_links(sha256))
+    return result
+
+
 def outline(sha256: str) -> dict[str, Any]:
     """A stored document's outline: headings or pages, each with start and end offsets."""
     result: dict[str, Any] = _call(lambda s: s.outline(sha256))
@@ -126,8 +155,8 @@ def tables(sha256: str) -> dict[str, Any]:
 
 
 TOOLS: tuple[Callable[..., dict[str, Any]], ...] = (
-    capture, capture_file, sec_filings, sec_capture, sec_facts, outline, read,
-    read_section, search_store, check_quote, tables,
+    capture, capture_file, sec_filings, sec_capture, sec_facts, sec_search, archived_links,
+    market_series, outline, read, read_section, search_store, check_quote, tables,
 )
 
 

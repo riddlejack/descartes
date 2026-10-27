@@ -29,6 +29,7 @@ class Expectation:
     harness_version: str  # the bare version, e.g. "2.1.308"
     session_id: str | None  # None when resuming (the harness may report its own)
     mcp_servers: tuple[str, ...] = (MCP_SERVER,)
+    mcp_prefix: str = roles.MCP_PREFIX  # the tool names the expected server serves
 
 
 def _names(xs: Any) -> list[str] | None:
@@ -102,7 +103,7 @@ def check(init: dict[str, Any], exp: Expectation) -> list[str]:
         if builtin != sorted(exp.builtin_tools):
             problems.append(f"built-in tools are {builtin}, expected {sorted(exp.builtin_tools)}")
         if exp.mcp_servers:
-            foreign_mcp = [t for t in mcp if not t.startswith(roles.MCP_PREFIX)]
+            foreign_mcp = [t for t in mcp if not t.startswith(exp.mcp_prefix)]
             if foreign_mcp:
                 problems.append(f"MCP tools outside the stemma server: {foreign_mcp}")
         elif mcp:
