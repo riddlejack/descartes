@@ -73,7 +73,7 @@ def test_wrong_model_relaunch_is_bounded(cfg: DriverConfig, tmp: Path, fake: Fak
           revoke=lambda _r, sid, _why: revoked.append(sid))
     framers = [c for c in fake.calls() if c["role"] == "blind-framer"]
     assert len(framers) == limits.max_check_attempts == len(revoked)
-    st = next(iter(checks_api.states(run).values()))
+    st = checks_api.states(run)[checks_api.request_id_for("blind-framer", "frame:own")]
     assert st.status == "ended" and st.outcome == "model_mismatch"
 
 

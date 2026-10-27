@@ -289,7 +289,8 @@ def submit_draft(ctx: Context[Any], version: int) -> dict[str, Any]:
 async def await_checks(ctx: Context[Any], ids: list[str | int],
                        max_wait_s: float = 60) -> dict[str, Any]:
     """Wait up to max_wait_s for checks: claim ids, branch ids, draft versions, or the
-    forms "claim:<id>", "branch:<id>", "draft:<n>", "frame:own", "frame:critique".
+    forms "claim:<id>", "branch:<id>", "draft:<n>", "frame:own", "frame:critique",
+    "ideas:own" (the idea list, framer/ideas.md).
     Returns what landed and what has not; never invents a verdict."""
     caller = caller_of(ctx)  # read before leaving the request's task
 

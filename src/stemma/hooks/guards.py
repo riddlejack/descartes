@@ -191,6 +191,10 @@ def guard_write(hook: dict[str, Any], run_dir: Path) -> Decision:
         return refuse(hook, f"Refused: {target} is outside the run folder.")
     if paths.is_tool_only(rel):
         return refuse(hook, f"Refused: {rel} is written only by Stemma's tools.")
+    if hook.get("agent_type") == roles.IDEA_GENERATOR and rel != IDEAS_FILE:
+        return refuse(hook, f"Refused: the idea generator writes only {IDEAS_FILE}.")
+    if rel == IDEAS_FILE and hook.get("agent_type") != roles.IDEA_GENERATOR:
+        return refuse(hook, f"Refused: {rel} is written only by the idea generator.")
     if rel == PurePosixPath(criteria.CRITERIA_FILE):
         if criteria.from_task(run_dir):
             return refuse(hook, f"Refused: {rel} holds the user's criteria and is written "
@@ -217,6 +221,12 @@ def write_event(hook: dict[str, Any], run_dir: Path) -> dict[str, Any]:
 _CHECKER_HIDDEN_BRANCH_FILES = frozenset({"record.md", "order.md", "restatement.md"})
 _CHECKER_HIDDEN_TOP = frozenset({"frame.md", "history", "draft", "deliverable", "reviews",
                                  "register", "framer"})
+# The idea generator sees what a plain model would: the question, the onboarding answers
+# and the task's settings (as_of, scope), nothing the run has made. Invariant: brief T3.
+IDEA_GENERATOR_READS = frozenset(PurePosixPath(p) for p in (
+    "task/question.md", "task/intake.md", "task/task.json"))
+# The one file the idea generator writes, and the only role that writes it.
+IDEAS_FILE = PurePosixPath("framer/ideas.md")
 _FRAMER_HIDDEN_TOP = frozenset(
     {"frame.md", "history", "tree.json", "tree.md", "branches", "draft", "deliverable", "reviews"}
 )
@@ -250,6 +260,9 @@ def blind_read_refusal(role: str, rel: PurePosixPath, run_dir: Path,
     elif role == roles.DECIDERS_EYE:
         if not _deciders_eye_allowed(rel, draft_version):
             return f"Refused: the decider's-eye reviewer does not read {rel}."
+    elif role == roles.IDEA_GENERATOR:
+        if rel not in IDEA_GENERATOR_READS:
+            return f"Refused: the idea generator reads only the question and its task files, not {rel}."
     elif role == roles.BLIND_FRAMER:
         own_frame = run_dir / "framer" / "own-frame.md"
         if not own_frame.exists() and rel.parts and rel.parts[0] in _FRAMER_HIDDEN_TOP:

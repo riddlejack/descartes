@@ -99,12 +99,16 @@ def test_full_run_argv_env_canary_and_status(cfg: DriverConfig, tmp: Path, fake:
                     .read_text())
     assert str(run / "frame.md") in fs["sandbox"]["filesystem"]["denyRead"]
 
-    assert len(kinds(run, "canary_passed")) == 2 and not kinds(run, "canary_failed")
+    ideas = calls_for(fake, "idea-generator")
+    assert len(ideas) == 1 and ideas[0]["argv"][1] == "ideas:own"
+    assert len(kinds(run, "canary_passed")) == 3 and not kinds(run, "canary_failed")
     resolved = kinds(run, "resolved_model_effort")
     assert {(r["session"], r["scope"], r["model"], r["effort"], r["match"]) for r in resolved} \
         == {("lead", "main", "claude-opus-5-5", "high", True),
             ("lead", "subagent", "claude-opus-5-5", "high", True),
             (framer and f"check-{checks_api.request_id_for('blind-framer', 'frame:own')}-1",
+             "main", "claude-opus-5-5", "high", True),
+            (f"check-{checks_api.request_id_for('idea-generator', 'ideas:own')}-1",
              "main", "claude-opus-5-5", "high", True)}
     sub = kinds(run, "subagent_seen")
     assert sub[0]["agent_type"] == "stemma:worker" and sub[0]["spawn_depth"] == 1
@@ -116,8 +120,8 @@ def test_full_run_argv_env_canary_and_status(cfg: DriverConfig, tmp: Path, fake:
     assert {e["outcome"] for e in ended} == {"completed"}
 
     st = checks_api.states(run)
-    assert [s.status for s in st.values()] == ["ended"]
-    assert next(iter(st.values())).outcome == "completed"
+    assert [s.status for s in st.values()] == ["ended", "ended"]
+    assert {s.outcome for s in st.values()} == {"completed"}
 
     status = json.loads((run / "status.json").read_text())
     assert status["state"] == "finished" and status["alerts"] == []
@@ -170,7 +174,7 @@ def test_concurrency_limit(cfg: DriverConfig, tmp: Path, fake: Fake, limits: Lim
         checks_api.request_check(run, "claim-checker", f"claim:c{n}", "file_claim")
     assert start(cfg, run, checks_api, limits, released=released) == 0
     spans = [(c["start"], c["end"]) for c in fake.calls() if c["role"] != "lead"]
-    assert len(spans) == 6  # five checks and the blind framer
+    assert len(spans) == 7  # five checks, the blind framer and the idea generator
     peak = max(sum(1 for s, e in spans if s <= t < e) for t, _ in spans)
     assert peak <= limits.max_concurrent_checks == 2
     assert all(s.outcome == "completed" for s in checks_api.states(run).values())
@@ -201,7 +205,7 @@ def test_launch_without_init_is_a_recorded_failure(cfg: DriverConfig, tmp: Path,
     lf = kinds(run, "launch_failed")
     assert lf and "Not logged in" in lf[0]["stderr_tail"]
     assert kinds(run, "stream_unparsed")
-    st = next(iter(checks_api.states(run).values()))
+    st = checks_api.states(run)[checks_api.request_id_for("blind-framer", "frame:own")]
     assert st.outcome == "launch_failed" and st.exit_code == 1
 
 
@@ -230,7 +234,7 @@ def test_hostile_check_requests_are_not_launched(cfg: DriverConfig, tmp: Path, f
     assert start(cfg, run, checks_api, limits, released=released) == 0
     assert kinds(run, "invalid_check_request")[0]["prompt"].startswith("claim:c1 ")
     assert "no agent file" in kinds(run, "launch_failed")[0]["reason"]
-    assert {c["role"] for c in fake.calls()} == {"lead", "blind-framer"}
+    assert {c["role"] for c in fake.calls()} == {"lead", "blind-framer", "idea-generator"}
 
 
 def test_resume_relaunches_lead_and_unended_checks(cfg: DriverConfig, tmp: Path, fake: Fake,

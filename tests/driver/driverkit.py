@@ -59,7 +59,7 @@ You are an invented test role. Reply ok.
 
 
 def write_plugin(root: Path, *, worker_base: bool = True) -> Path:
-    """An invented plugin source with every fragment, three skills and five roles."""
+    """An invented plugin source with every fragment, three skills and six roles."""
     (root / ".claude-plugin").mkdir(parents=True)
     (root / ".claude-plugin" / "plugin.json").write_text(json.dumps(
         {"name": "stemma", "version": "0.0.0-test", "description": "test fixture"}))
@@ -85,7 +85,8 @@ def write_plugin(root: Path, *, worker_base: bool = True) -> Path:
     for role, tools in (("blind-framer", "Read, Bash"),
                         ("claim-checker", "Read, Bash, mcp__plugin_stemma_stemma__get_claim"),
                         ("deciders-eye-reviewer", "Read, Write"),
-                        ("branch-reviewer", "Read")):
+                        ("branch-reviewer", "Read"),
+                        ("idea-generator", "Read, Write")):
         (root / "agents" / f"{role}.md").write_text(AGENT.format(name=role, tools=tools))
     # Real and placebo versions share frontmatter names (contract v0.2.2, section 7).
     for folder, name, body in (("decomposition-method", "method", "REAL METHOD"),

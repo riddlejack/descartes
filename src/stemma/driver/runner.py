@@ -47,9 +47,11 @@ from stemma.register import checks_api, roles, safeio
 CHECK_ROLES: Final = frozenset(roles.short(r) for r in roles.CHECKING_ROLES)
 # An id-only prompt: a kind and an id, nothing an author could use to steer the check.
 ID_PROMPT: Final = re.compile(r"^[a-z][a-z_-]*:[A-Za-z0-9_.\-]+$")
+# The idea generator's prompt and the id the lead awaits (invariant: brief T3).
+IDEAS_PROMPT: Final = "ideas:own"
 # Run-folder files whose arrival is an artifact-landed event (section 3).
 _ARTIFACT_RES: Final = tuple(re.compile(p) for p in (
-    r"^intake\.md$", r"^frame\.md$", r"^framer/(own-frame|critique|lead-response)\.md$",
+    r"^intake\.md$", r"^frame\.md$", r"^framer/(own-frame|critique|lead-response|ideas)\.md$",
     r"^branches/(.+/)?(order|restatement|record)\.md$", r"^branches/(.+/)?verdicts/[^/]+\.json$",
     r"^draft/answer\.v\d+\.md$", r"^reviews/v\d+/[^/]+\.md$",
     r"^deliverable/answer(\.reader)?\.md$", r"^retro\.md$", r"^tree\.json$",
@@ -104,7 +106,7 @@ class ChecksApi(Protocol):
 # Which pending checks start first when sessions are scarce (invariant: the flow of a run,
 # not a quality bar). Frame, branch and draft reviews gate the lead's next step; claim
 # checks are many and each gates only its own figure. Within a rank, oldest first.
-LAUNCH_RANK: Final = {"blind-framer": 0, "branch-reviewer": 1, "deciders-eye-reviewer": 2,
+LAUNCH_RANK: Final = {"idea-generator": 0, "blind-framer": 0, "branch-reviewer": 1, "deciders-eye-reviewer": 2,
                       "evidence-auditor": 2, "mechanical-reader": 2, "claim-checker": 3,
                       "retrospective-writer": 4}
 
@@ -1260,6 +1262,9 @@ def _start_locked(cfg: DriverConfig, run_dir: Path, api: ChecksApi | None,
     d = Driver(cfg, run_dir, api, limits, released=released, revoke=revoke)
     events.emit(d.run_dir, "run_started", run_id=d.run_id,
                 plugin_digest=d.run["plugin"]["digest"], harness=d.version)
+    # The idea list comes first and from the host, so every run has it whatever the
+    # lead may start (a frame-only lead may start no agent).
+    d.api.request_check(d.run_dir, "idea-generator", IDEAS_PROMPT, "run_start")
     d.api.request_check(d.run_dir, "blind-framer", "frame:own", "run_start")
     d.start_lead(resume=False)
     return d.watch() if watch else 0

@@ -18,10 +18,9 @@ MECHANICAL_READER: Final = "stemma:mechanical-reader"
 RETRO_WRITER: Final = "stemma:retrospective-writer"
 IDEA_GENERATOR: Final = "stemma:idea-generator"
 
-# Authors start authors; the host starts every check (section 2). The subagent types a
-# session may start are the worker (who may be a branch lead) and the idea generator,
-# which the lead starts once before the tree to list ideas (brief T3, owner ruling 48).
-SUBAGENT_TYPES: Final = frozenset({WORKER, IDEA_GENERATOR})
+# Authors start authors; the host starts every check (section 2). The only subagent
+# type any session may start is the worker (who may be a branch lead).
+SUBAGENT_TYPES: Final = frozenset({WORKER})
 
 # Sessions the driver starts, never a subagent.
 CHECKING_ROLES: Final = frozenset(
@@ -33,10 +32,11 @@ CHECKING_ROLES: Final = frozenset(
         EVIDENCE_AUDITOR,
         MECHANICAL_READER,
         RETRO_WRITER,
+        IDEA_GENERATOR,  # host-started at run start; writes framer/ideas.md (T3)
     }
 )
 
-ALL_ROLES: Final = CHECKING_ROLES | {LEAD, WORKER, IDEA_GENERATOR}
+ALL_ROLES: Final = CHECKING_ROLES | {LEAD, WORKER}
 
 # Authors: the roles that file claims and change the tree.
 AUTHORS: Final = frozenset({LEAD, WORKER})

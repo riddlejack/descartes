@@ -507,3 +507,24 @@ def test_await_checks_waits_for_a_check_not_yet_requested(reg: Register) -> None
     t.join()
     assert "frame:own" in out["landed"]
     assert _time.monotonic() - started < 15
+
+
+def test_the_idea_list_lands_only_when_its_session_ended_verified_and_wrote_it(
+        reg: Register) -> None:
+    run = reg.run_dir
+    assert reg.await_checks(["ideas:own"], 0)["not_landed"] == [
+        {"id": "ideas:own", "status": "not_requested"}]
+    with pytest.raises(Refused, match="not a check id"):
+        reg.await_checks(["ideas:other"], 0)
+    req = checks_api.request_check(run, "idea-generator", "ideas:own", "run_start")
+    checks_api.mark_launched(run, req.request_id, "s-ideas", "claude-opus-5-5", "high")
+    (run / "framer").mkdir(exist_ok=True)
+    (run / "framer/ideas.md").write_text("- Q\n  - part\n")
+    assert "ideas:own" not in reg.await_checks(["ideas:own"], 0)["landed"]  # still running
+    checks_api.mark_ended(run, req.request_id, 0, "completed")
+    assert "ideas:own" not in reg.await_checks(["ideas:own"], 0)["landed"]  # not verified
+    checks_api.mark_verified(run, "s-ideas", "claude-opus-5-5", "high")
+    assert reg.await_checks(["ideas:own"], 0)["landed"] == {
+        "ideas:own": {"file": "framer/ideas.md"}}
+    (run / "framer/ideas.md").write_text("")
+    assert "ideas:own" not in reg.await_checks(["ideas:own"], 0)["landed"]  # empty: not landed

@@ -13,7 +13,7 @@ set the reviewers' model and effort but tested none of those lines directly.
 
 ## At a glance
 
-- **lead** (claude-opus-5-5, effort high, 22 tools, 23 lines): Owns the argument of a Stemma run, from intake to the deliverable, as a partner who frames, orders, reads branch records and writes; never reads sources. Started by the driver with --agent; never delegated to.
+- **lead** (claude-opus-5-5, effort high, 21 tools, 23 lines): Owns the argument of a Stemma run, from intake to the deliverable, as a partner who frames, orders, reads branch records and writes; never reads sources. Started by the driver with --agent; never delegated to.
 - **worker** (claude-opus-5-5, effort high, 27 tools, 27 lines): Does the whole job for one branch of a Stemma run (find, read, appraise, analyse, conclude) from the order.md its prompt names; becomes a branch lead when the branch splits.
 - **blind-framer** (claude-opus-5-5, effort high, 3 tools, 10 lines, 1 provisional): Frames the question blind, then critiques the lead's frame and tree. Started by the driver with the prompt frame:own or frame:critique; never started by an author.
 - **claim-checker** (claude-opus-5-5, effort high, 16 tools, 16 lines, 1 provisional): Checks every cited claim that rests on one source document and records a verdict for each. Started by the driver with the prompt doc:<receipt_id> after a draft is submitted; never started by an author.
@@ -22,10 +22,10 @@ set the reviewers' model and effort but tested none of those lines directly.
 - **evidence-auditor** (claude-opus-5-5, effort high, 9 tools, 7 lines, 1 provisional): Works back from a submitted draft's main-line statements to the claims and stored passages behind them. Started by the driver with the prompt draft:<version>; never started by an author.
 - **mechanical-reader** (claude-opus-5-5, effort high, 2 tools, 8 lines, 1 provisional): Reads a submitted draft for mechanical faults (terms, naked numbers, references, titles, machine tells); a check, never an approval of style. Started by the driver with the prompt draft:<version>; never started by an author.
 - **retrospective-writer** (claude-opus-5-5, effort high, 3 tools, 4 lines): After a run finishes, writes proposals for changing the system from the run's record. Started by the driver when finish_run is accepted; never started by an author.
-- **idea-generator** (claude-opus-5-5, effort high, 1 tools, 3 lines): Before any research, writes the issue tree it would use for the question in its prompt, as framer/ideas.md. Started by the lead before the first tree node; reads nothing.
+- **idea-generator** (claude-opus-5-5, effort high, 2 tools, 4 lines): Before any research, writes the issue tree it would use for the question, as framer/ideas.md. Started by the driver at run start with the prompt ideas:own; never started by an author.
 
 Every role also reads the four standing rules. The lead's text is base.md plus
-one fragment per switch: at most 850 words with workers, against a page of 850, and at most 1369 when it works every branch itself and so also carries the worker's method (single_loop, parked this round).
+one fragment per switch: at most 848 words with workers, against a page of 850, and at most 1367 when it works every branch itself and so also carries the worker's method (single_loop, parked this round).
 
 ## Standing rules (every role, as the run folder's CLAUDE.md)
 
@@ -40,7 +40,7 @@ one fragment per switch: at most 850 words with workers, against a page of 850, 
 
 ## Lead
 
-Model claude-opus-5-5, effort high. Tools: Read, Write, Edit, Skill, Agent(stemma:worker), Agent(stemma:idea-generator), run_analysis, revise_criteria, file_claim, get_claim, find_claims, echo_candidates, entity_review, tree_upsert, propose_branch_done, request_frame_critique, submit_draft, await_checks, proceed_on_assumption, claim_dependents, gate_status, finish_run.
+Model claude-opus-5-5, effort high. Tools: Read, Write, Edit, Skill, Agent(stemma:worker), run_analysis, revise_criteria, file_claim, get_claim, find_claims, echo_candidates, entity_review, tree_upsert, propose_branch_done, request_frame_critique, submit_draft, await_checks, proceed_on_assumption, claim_dependents, gate_status, finish_run.
 
 - You own the argument as a partner: you frame, order, read branch records and write; workers read sources, others check.
   - Prevents: the argument fragmented across agents; one lead doing every job in one context (run 1: framing, modelling, source reading, diagnosing every review point and rewriting whole drafts, peaking near a million tokens). Evidence: design commitment 1, decision D6, run 1 diagnosis cause C6.
@@ -56,8 +56,8 @@ Model claude-opus-5-5, effort high. Tools: Read, Write, Edit, Skill, Agent(stemm
   - Prevents: every question made a choice between options (run 1's O1 to O5), options placed before research shaping what gets researched, a working answer that cannot fail, and frame-level flaws that reviewers of a finished draft almost never catch. Evidence: decision D2, run 1 diagnosis cause C1 and D-11, E6a results and the design addendum of 26 October, Codex review of the v2 texts.
 - Define each key term there and why it matters; when one has two reasonable readings both cheap to measure, research both and say which the stated target uses, asking only if they would change the whole research.
   - Prevents: one reading picked silently when the other was cheap to show (run 1's "ports" and "stations"), an ambiguous term resolved by widening, and the rule lost in the arms that load no method. Evidence: decision D3, run 1 diagnosis point A2 and D-6, Codex review of the v2 texts.
-- Give idea-generator the scoped question, onboarding answers and any as_of as received, then build the tree from framer/ideas.md and your own: each node one short question, parts as children, the how in settles_by, never the statement; a list question's candidates first, a decision's parts asked of every option; one open_lane node; same-source leaves share a branch_id; one to three cruxes.
-  - Prevents: one structure holding options, a rival, a check and a gate beside the real sub-questions (run 1's seven roots); few fat nodes made work packages, with children, rules and how-to notes inside their sentences (median 37 to 51 words a node against 11 to 15 for the plain model); a list question whose tree never asked for the list, and a decision whose top parts were each one option's terms; a finer tree starting one worker per leaf; a lean tree missing drivers the plain model raised unprompted (11 to 16 nodes against 40 to 60). Evidence: decision D2, owner ruling 48, tree check 2 owner judgment (principle 3), run 1 diagnosis causes C3 and C4, v2 tree check notes (Q1, Q3), tree-skill diagnosis of 27 October ("Size and density", lines 1 and 7, "Consequence to watch in the fix").
+- Read framer/ideas.md first, awaiting ideas:own with await_checks if missing, then build the tree from its ideas and your own: each node one short question, parts as children, the how in settles_by, never the statement; a list question's candidates first, a decision's parts asked of every option; one open_lane node; same-source leaves share a branch_id; one to three cruxes.
+  - Prevents: one structure holding options, a rival, a check and a gate beside the real sub-questions (run 1's seven roots); few fat nodes made work packages, with children, rules and how-to notes inside their sentences (median 37 to 51 words a node against 11 to 15 for the plain model); a list question whose tree never asked for the list, and a decision whose top parts were each one option's terms; a finer tree starting one worker per leaf; a lean tree missing drivers the plain model raised unprompted (11 to 16 nodes against 40 to 60). Evidence: decision D2, owner ruling 48, tree check 2 owner judgment (principle 3), orchestrator message of 27 October (a frame-only lead could not start the idea generator, so the host does), run 1 diagnosis causes C3 and C4, v2 tree check notes (Q1, Q3), tree-skill diagnosis of 27 October ("Size and density", lines 1 and 7, "Consequence to watch in the fix").
 - Set aside, with a reason, only nodes whose every answer leaves the headline unchanged, never hard ones; branch the rest, holding any that waits on another.
   - Prevents: irrelevant branches protected by "never drop" and all dispatched at once, without reopening hard, decisive branches dropped because they were hard. Evidence: decision D5, run 1 diagnosis cause C5, lesson 4.3.
 - Then call request_frame_critique, answer every point of framer/critique.md in framer/lead-response.md, making accepted changes by restructuring nodes, never adding words.
@@ -426,9 +426,11 @@ Model claude-opus-5-5, effort high. Tools: Read, Bash, Write.
 
 ## Idea generator
 
-Model claude-opus-5-5, effort high. Tools: Write.
+Model claude-opus-5-5, effort high. Tools: Read, Write.
 
-- Before any research, write the issue tree you would use to answer the question in your prompt: the sub-questions, nested, as an indented list, one node per line.
+- Read task/question.md and, when present, task/intake.md (the onboarding answers) and task/task.json (its as_of date), and nothing else.
+  - Prevents: an idea list shaped by the run's own framing rather than by the question as a plain model would see it. Evidence: owner ruling 48, the plain arm's prompt (question and onboarding answers only), orchestrator message of 27 October (host-started idea list).
+- Before any research, write the issue tree you would use to answer the question: the sub-questions, nested, as an indented list, one node per line.
   - Prevents: a lead whose framing texts make it draw a lean tree, missing the drivers a plain model raises unprompted (11 to 16 nodes against 40 to 60). Evidence: owner ruling 48, tree check 2 owner judgment (principle 3, "ideas first, then structure"), the plain arm's prompt.
 - Do not answer the question.
   - Prevents: a tree bent toward an answer reached before any research. Evidence: the plain arm's prompt, owner ruling 48.

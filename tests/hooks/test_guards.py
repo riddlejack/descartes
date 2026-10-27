@@ -54,21 +54,44 @@ def events(run_dir: Path) -> list[dict[str, Any]]:
 # --- Agent calls -------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("sub", ["stemma:worker", "stemma:idea-generator"])
-def test_worker_subagent_allowed(run_dir: Path, sub: str) -> None:
-    r = call(run_dir, "pre", pre(run_dir, "Agent", {"subagent_type": sub, "prompt": "go"}))
+def test_worker_subagent_allowed(run_dir: Path) -> None:
+    r = call(run_dir, "pre", pre(run_dir, "Agent", {"subagent_type": "stemma:worker",
+                                                    "prompt": "go"}))
     assert (r.returncode, r.stdout, r.stderr) == (0, "", "")
 
 
-def test_idea_generator_writes_its_ideas_but_not_the_framers_files(run_dir: Path) -> None:
-    def write(name: str) -> subprocess.CompletedProcess[str]:
+def test_only_the_idea_generator_writes_the_idea_list_and_only_that(run_dir: Path) -> None:
+    def write(rel: str, who: str, **extra: Any) -> subprocess.CompletedProcess[str]:
         return call(run_dir, "pre", pre(run_dir, "Write", {
-            "file_path": str(run_dir / "framer" / name), "content": "x"},
-            agent_type="stemma:idea-generator", agent_id="a-1"))
-    assert write("ideas.md").returncode == 0
-    for tool_only in ("critique.md", "own-frame.md"):
-        r = write(tool_only)
+            "file_path": str(run_dir / rel), "content": "x"}, agent_type=who, **extra))
+    assert write("framer/ideas.md", "stemma:idea-generator").returncode == 0
+    for other in ("frame.md", "intake.md", "framer/lead-response.md", "branches/b1/x.md",
+                  "framer/../frame.md"):
+        r = write(other, "stemma:idea-generator")
+        assert r.returncode == 2 and "Refused" in r.stderr, other
+    for who, extra in (("stemma:lead", {}), ("stemma:worker", {"agent_id": "a-1"}),
+                       ("stemma:lead", {"agent_id": "a-2"}), ("stemma:blind-framer", {})):
+        r = write("framer/ideas.md", who, **extra)
+        assert r.returncode == 2 and "only by the idea generator" in r.stderr, who
+    for tool_only in ("framer/critique.md", "framer/own-frame.md"):
+        r = write(tool_only, "stemma:idea-generator")
         assert r.returncode == 2 and "written only by Stemma's tools" in r.stderr
+
+
+@pytest.mark.parametrize("rel", ["task/question.md", "task/intake.md", "task/task.json"])
+def test_the_idea_generator_reads_the_task(run_dir: Path, rel: str) -> None:
+    r = call(run_dir, "pre", pre(run_dir, "Read", {"file_path": str(run_dir / rel)},
+                                 agent_type="stemma:idea-generator"))
+    assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.parametrize("rel", ["frame.md", "intake.md", "criteria.md", "framer/own-frame.md",
+                                 "task/options.md", "task/arrivals/1/x.md", "branches/b1/record.md",
+                                 "task/../frame.md"])
+def test_the_idea_generator_reads_nothing_the_run_made(run_dir: Path, rel: str) -> None:
+    r = call(run_dir, "pre", pre(run_dir, "Read", {"file_path": str(run_dir / rel)},
+                                 agent_type="stemma:idea-generator"))
+    assert r.returncode == 2 and r.stderr.startswith("Refused"), rel
 
 
 def test_the_blind_frame_cannot_read_the_idea_list(run_dir: Path) -> None:
@@ -80,7 +103,7 @@ def test_the_blind_frame_cannot_read_the_idea_list(run_dir: Path) -> None:
 @pytest.mark.parametrize("sub", [None, "fork", "general-purpose", "Explore", "Plan",
                                  "stemma:claim-checker", "stemma:branch-reviewer",
                                  "stemma:blind-framer", "Stemma:worker", "stemma:worker ",
-                                 "stemma:lead", "worker", "idea-generator",
+                                 "stemma:lead", "worker", "idea-generator", "stemma:idea-generator",
                                  "Stemma:idea-generator", "stemma:idea-generator "])
 def test_hostile_subagent_types_refused(run_dir: Path, sub: str | None) -> None:
     ti: dict[str, Any] = {"prompt": "go"}

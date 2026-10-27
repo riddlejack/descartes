@@ -46,6 +46,13 @@ CLAIM_CHECKER_DENY: Final = (
     "frame.md", "history/", "framer/", "draft/", "deliverable/", "reviews/", "register/",
     "branches/**/record.md", "branches/**/order.md", "branches/**/restatement.md",
 )
+# The idea generator reads task/ only (the hook allows three files there; this is the
+# harness-side backstop). Invariant: brief T3.
+IDEA_GENERATOR_DENY: Final = (
+    "frame.md", "intake.md", "criteria.md", "history/", "tree.json", "tree.md", "framer/",
+    "branches/", "draft/", "deliverable/", "reviews/", "analysis/", "register/", "store/",
+    "checks/",
+)
 FRAMER_OWN_DENY: Final = (
     "frame.md", "history/", "tree.json", "tree.md", "branches/", "draft/", "deliverable/",
     "reviews/", "analysis/", "register/", "framer/ideas.md",
@@ -132,6 +139,8 @@ def read_denials(run_dir: Path, role: str, prompt: str) -> list[str]:
         deny += CLAIM_CHECKER_DENY
     elif role == "blind-framer" and prompt == "frame:own":
         deny += FRAMER_OWN_DENY
+    elif role == "idea-generator":
+        deny += IDEA_GENERATOR_DENY
     elif role == "deciders-eye-reviewer":
         deny += _deciders_eye_denials(run_dir, prompt)
     return list(dict.fromkeys(deny))

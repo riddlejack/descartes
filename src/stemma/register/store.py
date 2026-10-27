@@ -2410,6 +2410,18 @@ class Register:
             have = {r: v for r, v in self._recorded_reviews(int(ident)).items()
                     if v["session"] in verified}
             return {"reviews": sorted(have)} if len(have) == len(REVIEW_FILES) else None
+        if kind == "ideas":
+            # The idea list lands once its host-started session ended verified and the
+            # file it alone may write exists (brief T3).
+            if ident != "own":
+                raise Refused(f"Refused: {target} is not a check id.")
+            ended = [s for s in checks_api.for_prompt(self.run_dir, "idea-generator", target,
+                                                      records=self._ck_records)
+                     if s.status == "ended" and s.session_id in verified]
+            ideas = self.run_dir / "framer" / "ideas.md"
+            if ended and ideas.is_file() and ideas.stat().st_size > 0:
+                return {"file": "framer/ideas.md"}
+            return None
         if kind == "frame":
             if ident not in FRAME_FILES:
                 raise Refused(f"Refused: {target} is not a check id.")
@@ -2418,12 +2430,12 @@ class Register:
         raise Refused(f"Refused: {target} is not a check id.")
 
     def _normalise_target(self, given: str | int) -> str:
-        """`claim:<id>`, `branch:<id>`, `draft:<n>`, `frame:own|critique`; or a bare claim
+        """`claim:<id>`, `branch:<id>`, `draft:<n>`, `frame:own|critique`, `ideas:own`; or a bare claim
         id, branch id or draft version."""
         if isinstance(given, int) and not isinstance(given, bool):
             return f"draft:{given}"
         g = str(given).strip()
-        if g.split(":", 1)[0] in ("claim", "branch", "draft", "frame"):
+        if g.split(":", 1)[0] in ("claim", "branch", "draft", "frame", "ideas"):
             if g.startswith("claim:"):
                 return "claim:" + self.resolve_claim_id(g)
             return g

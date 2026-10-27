@@ -147,8 +147,12 @@ def test_frame_only_ends_when_the_frame_is_done(cfg: DriverConfig, tmp: Path, fa
     log = [json.loads(x) for x in (run / ".stemma/arrivals.jsonl").read_text().splitlines()]
     frame = [r for r in log if r["kind"] == "notice" and r["name"] == "frame_only"]
     assert frame and "stops after the frame" in frame[0]["text"]
-    # No draft review or claim check was ever asked for.
-    assert {s.request.role for s in checks_api.states(run).values()} == {"blind-framer"}
+    # No draft review or claim check was ever asked for; the idea list was, by the host,
+    # since the lead may start no agent (orchestrator message of 27 October).
+    assert {s.request.role for s in checks_api.states(run).values()} == {
+        "blind-framer", "idea-generator"}
+    ideas = [c for c in fake.calls() if c["role"] == "idea-generator"]
+    assert len(ideas) == 1 and ideas[0]["argv"][1] == "ideas:own"
 
 
 def test_frame_only_without_a_response_does_not_claim_completion(

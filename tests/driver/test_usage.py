@@ -106,12 +106,14 @@ def test_a_run_records_every_session_and_subagent(cfg: DriverConfig, tmp: Path, 
                  "subagents": [{"agentType": "stemma:worker", "model": "claude-opus-5-5",
                                 "effort": "high", "branch": "b2-supply",
                                 "usage": u(4, 80, 900, 2000)}]},
-        "blind-framer": {"cost": 0.1, "usage": u(1, 30, 400, 600)}})
+        "blind-framer": {"cost": 0.1, "usage": u(1, 30, 400, 600)},
+        "idea-generator": {"cost": 0.0}})
     run = create_run(cfg, write_task(tmp), limits=limits)
     start(cfg, run, checks_api, limits)
     recs = usage.read_records(run)
     kinds = sorted((r["kind"], r["role"]) for r in recs)
-    assert kinds == [("session", "blind-framer"), ("session", "lead"), ("subagent", "worker")]
+    assert kinds == [("session", "blind-framer"), ("session", "idea-generator"),
+                     ("session", "lead"), ("subagent", "worker")]
     lead = next(r for r in recs if r["role"] == "lead")
     assert lead["tokens"] == u(10, 200, 3000, 9000)  # the message in two entries, once
     assert lead["harness"]["cost_estimate_usd"] == 1.5

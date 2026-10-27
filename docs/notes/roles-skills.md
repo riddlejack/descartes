@@ -571,3 +571,17 @@ IDEA_GENERATOR to SUBAGENT_TYPES and ALL_ROLES (so the Agent guard admits it and
 s5_models gives it a model); `driver/settings.py` hides framer/ideas.md from the blind
 framer's own frame. Not done: contract section 8 does not yet list the role; the run's
 CLAUDE.md (the standing rules) still loads for the subagent as for every session.
+
+### Idea list host-started (27 October, after tree check 3's dev runs)
+
+A frame-only lead has no Agent tool, so the lead-started idea generator never ran (run
+20261027-170208-69c255 says so in its frame.md). The driver now requests `ideas:own`
+for the idea-generator at run start, beside `frame:own`, through the same check
+machinery. The generator reads only task/question.md, task/intake.md and task/task.json
+(hook and harness deny rules) and writes only framer/ideas.md, which no other role may
+write; the blind framer's own frame cannot read it. The lead reads framer/ideas.md first,
+awaiting `ideas:own` with await_checks if it is missing; `ideas:own` lands once the
+generator's session ended verified and the file is non-empty. Why not a restricted Agent
+tool for the lead: the frame-only deny of Agent is deliberate, and a lead-started list
+depends on the lead choosing to start it and on what it passes; the host's is the same
+in every arm and every run.
