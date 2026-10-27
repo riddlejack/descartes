@@ -316,6 +316,8 @@ def _branch_verdicts(run_dir: Path) -> dict[str, dict[str, Any]]:
 
 def node_state(n: dict[str, Any]) -> tuple[str, str]:
     """(state key, the reason a node was set aside or bounded, if recorded)."""
+    if n.get("closes_by") == "ancestor_set_aside":
+        return "set_aside", f"it sits under {n.get('set_aside_by')}, which was set aside"
     reason = str(n.get("set_aside_reason") or n.get("reason_set_aside") or
                  (n.get("set_aside") if isinstance(n.get("set_aside"), str) else "") or "")
     if n.get("set_aside") or reason or n.get("status") == "set_aside":
@@ -588,6 +590,106 @@ def reviews_html(run: Run) -> str:
     return "\n".join(out)
 
 
+# ------------------------------------------------------- the driver and the task
+# The driver's outcomes and exit codes (W2's OUTCOME_CODES, contract v0.4), in words.
+OUTCOME_WORDS = {
+    "released": "released",
+    "ended_without_release": "the lead stopped and nothing released the run",
+    "canary_failed": "the lead did not start clean (the canary failed)",
+    "stopped_by_limit": "stopped at a recorded resource limit",
+    "lead_failed": "the lead could not start or crashed",
+    "release_withdrawn": "released, then withdrawn: a check it rested on was revoked",
+    "revocation_failed": "a wrong-model check could not be revoked, so release is blocked",
+    "usage_limited": "stopped by the account's usage limit; a resume continues it",
+    "frame_complete": "a frame-only run: it ended once the frame, the tree and the answer "
+                      "to the frame critique existed",
+    "driver_stopped": "the driver was stopped",
+}
+
+
+def driver_outcome(run: Run) -> tuple[str | None, int | None]:
+    """The last `driver_finished` event's outcome and exit code, as recorded."""
+    for e in reversed(_events(run.dir)):
+        if e.get("event") == "driver_finished":
+            code = e.get("exit_code")
+            return (str(e.get("outcome")) if e.get("outcome") else None,
+                    code if isinstance(code, int) and not isinstance(code, bool) else None)
+    return None, None
+
+
+def waiting_html(run: Run) -> str:
+    st = runread.read_json(run.dir, "status.json")
+    if isinstance(st, dict) and st.get("state") == "waiting_for_usage_reset":
+        until = str(st.get("resume_at") or "an unrecorded time")
+        return (f'<div class="banner warn"><strong>Paused for the usage limit.</strong> The '
+                f"account's usage limit stopped the run; the driver resumes it at "
+                f"{esc(until.replace('T', ' '))}. This page shows the run as it stood.</div>")
+    return ""
+
+
+def task_html(run: Run) -> str:
+    t = run.task
+    out = []
+    options = t.get("options")
+    if isinstance(options, list) and options:
+        out.append("<p>Options the user named, compared on the same criteria: "
+                   + "; ".join(esc(o) for o in options) + ".</p>")
+    if t.get("stop_after") == "frame":
+        out.append("<p>Asked for the frame only: the run was to stop once the frame, the "
+                   "tree and the answer to the frame critique existed.</p>")
+    intake = t.get("intake")
+    if isinstance(intake, dict) and intake:
+        rows = "".join(f"<li><strong>{esc(k)}</strong>: {esc(v)}</li>"
+                       for k, v in intake.items())
+        out.append(f"<details><summary>What the user said at the start (intake and "
+                   f"onboarding)</summary><ul>{rows}</ul></details>")
+    return "".join(out)
+
+
+def record_html(run: Run, claims: Claims) -> str:
+    """deliverable/record.json (written by finish_run, v0.4), shown only with a valid
+    release: what the run left open."""
+    if run.release.state != "released":
+        return ""
+    rec = runread.read_json(run.dir, "deliverable/record.json")
+    if not isinstance(rec, dict):
+        return ""
+    out = ["<h3>What the released answer left open</h3><ul>"]
+    for n in rec.get("set_aside") or []:
+        if isinstance(n, dict):
+            why = (f"set aside: {esc(n.get('reason'))}" if n.get("reason")
+                   else f"under {esc(n.get('under'))}, which was set aside")
+            out.append(f"<li><code>{esc(n.get('id'))}</code> {esc(n.get('statement'))} "
+                       f"({why})</li>")
+    for a in rec.get("assumptions") or []:
+        if isinstance(a, dict):
+            out.append(f"<li>Assumed in place of the user's answer (branch "
+                       f"{esc(a.get('branch_id'))}): {esc(a.get('assumption'))}"
+                       + (f". The question was: {esc(a.get('question'))}"
+                          if a.get("question") else "") + "</li>")
+    for b in rec.get("branch_limits") or []:
+        if isinstance(b, dict):
+            out.append(f"<li>An open limit of branch {esc(b.get('branch_id'))}: "
+                       f"{esc(b.get('point'))}</li>")
+    omp = rec.get("open_material_points")
+    seen: set[str] = set()
+    if isinstance(omp, dict):
+        for group in ("by_criterion", "by_node"):
+            for key, pts in (omp.get(group) or {}).items():
+                for p in pts if isinstance(pts, list) else []:
+                    if isinstance(p, dict) and str(p.get("id") or p.get("point")) not in seen:
+                        seen.add(str(p.get("id") or p.get("point")))
+                        out.append(f"<li>A material point left open at the review-round "
+                                   f"limit ({esc(p.get('by'))}, {esc(key)}): "
+                                   f"{esc(p.get('point'))}</li>")
+    rounds = rec.get("review_rounds")
+    if isinstance(rounds, dict):
+        out.append(f"<li>Review rounds used: {esc(rounds.get('used'))} of "
+                   f"{esc(rounds.get('limit'))} ({esc(rounds.get('note'))}).</li>")
+    out.append("</ul>")
+    return "".join(out) if len(out) > 2 else ""
+
+
 # ----------------------------------------------------------------- run facts
 def _events(run_dir: Path) -> list[dict[str, Any]]:
     return runread.jsonl_records(run_dir, "events.jsonl")
@@ -602,6 +704,10 @@ def facts_html(run: Run) -> str:
                f"{esc((start or run.run.get('created_at') or '')[:16].replace('T', ' '))} UTC"
                + (f", last event {esc(end[:16].replace('T', ' '))} UTC" if end else "")
                + _span(start, end) + ".</li>")
+    outcome, code = driver_outcome(run)
+    if outcome:
+        out.append(f"<li>The driver's outcome: {esc(OUTCOME_WORDS.get(outcome, outcome))}"
+                   + (f" (exit {code})" if code is not None else "") + ".</li>")
     harness = (run.run.get("harness") or {}).get("version")
     if harness:
         out.append(f"<li>Harness: Claude Code "
@@ -691,6 +797,10 @@ def status_html(run: Run) -> str:
                 f"{esc(r.detail)}. To check that nothing changed since, run verify (below)."
                 f"</div>")
     if d.kind == "none":
+        if driver_outcome(run)[0] == "frame_complete" or run.task.get("stop_after") == "frame":
+            return ('<div class="banner warn"><strong>A frame-only run.</strong> It stopped '
+                    "once the frame, the tree and the answer to the frame critique existed, "
+                    "as asked; there is no drafted answer. The frame is shown instead.</div>")
         return f'<div class="banner bad">This run produced no draft. {esc(r.detail)}.</div>'
     what = (f"the latest draft submitted for review, v{d.version}" if d.kind == "submitted_draft"
             else f"the latest working draft, v{d.version}, never submitted for review")
@@ -804,7 +914,12 @@ def build(run_dir: Path, verify_result: dict[str, Any] | None = None) -> str:
     claims = Claims(run)
     d = run.deliverable
     date = _date(run.run.get("created_at"))
-    answer = md.render(d.text, claims.chip, heading_shift=0) if d.text else "<p>No text.</p>"
+    if d.text:
+        answer = md.render(d.text, claims.chip, heading_shift=0)
+    else:
+        frame = runread.read_text(run.dir, "frame.md")
+        answer = (f"<h2>The frame</h2>{md.render(frame, claims.chip, heading_shift=1)}"
+                  if frame else "<p>No text.</p>")
     toc = ('<nav class="toc"><a href="#answer">Answer</a><a href="#criteria">Criteria</a>'
            '<a href="#tree">Tree</a><a href="#checked">How it was checked</a>'
            '<a href="#facts">Run facts</a><a href="#verify">Verify</a>'
@@ -838,8 +953,8 @@ def build(run_dir: Path, verify_result: dict[str, Any] | None = None) -> str:
 <h1>{esc(run.question)}</h1>
 <p class="small">A recorded research run of Stemma, shown from its run folder: nothing on this page
 is live. Whether the folder still matches what was checked is what verify (below) tests.
-{esc(scope_line)}</p>{toc}</header>
-{status_html(run)}
+{esc(scope_line)}</p>{task_html(run)}{toc}</header>
+{waiting_html(run)}{status_html(run)}
 <section id="answer"><h2>The answer</h2>
 <p class="small">Each numbered tag after a figure opens the claim behind it: what the source
 says, the exact stored passage, and the checker's verdict.</p>
@@ -848,7 +963,8 @@ says, the exact stored passage, and the checker's verdict.</p>
 <section id="tree"><h2>The question, broken down</h2>
 <p class="small">The issue tree: the sub-questions the answer rests on, and each one's state
 when the run stopped.</p><div class="treewrap">{tree_html(run, claims)}</div></section>
-<section id="checked"><h2>How this was checked</h2>{checked_html(run, claims)}</section>
+<section id="checked"><h2>How this was checked</h2>{record_html(run, claims)}
+{checked_html(run, claims)}</section>
 <section id="facts"><h2>Run facts</h2>{facts_html(run)}</section>
 <section id="verify"><h2>Verify it yourself</h2>{verify_block}</section>
 <section id="claims"><h2>Every figure in the answer</h2>

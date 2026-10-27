@@ -294,3 +294,66 @@ def test_a_huge_file_is_refused_by_its_limit(run: tuple[Path, dict[str, str]],
     run_dir, _ids = run
     monkeypatch.setattr(site, "MAX_SCRIPT_BYTES", 10)
     assert "more than the 10 read" in site._script_text(run_dir, "analysis/proj.py")
+
+
+def test_a_frame_only_run_shows_its_frame_and_exit_8(tmp_path: Path) -> None:
+    run_dir = tmp_path / "frame-run"
+    (run_dir / "register").mkdir(parents=True)
+    (run_dir / "register/log.jsonl").write_bytes(b"")
+    (run_dir / "run.json").write_text(json.dumps({"run_id": "20300101-000000-f00000",
+                                                  "created_at": "2030-01-01T00:00:00Z"}))
+    (run_dir / "task").mkdir()
+    (run_dir / "task/task.json").write_text(json.dumps({
+        "question": "Is the invented river Wend getting wider?", "scope": "question_only",
+        "stop_after": "frame", "options": ["dredge", "wait"],
+        "intake": {"Question type": "fact: whether a measure changes"}}))
+    (run_dir / "frame.md").write_text("# Frame\n\nWorking answer: **no**.\n")
+    (run_dir / "events.jsonl").write_text(json.dumps({
+        "at": "2030-01-01T01:00:00Z", "event": "driver_finished", "exit_code": 8,
+        "outcome": "frame_complete"}) + "\n")
+    page = site.build(run_dir)
+    assert "<strong>A frame-only run.</strong>" in page
+    assert "<h2>The frame</h2>" in page and "Working answer: <strong>no</strong>." in page
+    assert "a frame-only run: it ended once the frame" in page and "(exit 8)" in page
+    assert "Options the user named, compared on the same criteria: dredge; wait." in page
+    assert "Asked for the frame only" in page and "Question type" in page
+
+
+def test_a_run_waiting_for_the_usage_reset_says_so(run: tuple[Path, dict[str, str]]) -> None:
+    run_dir, _ids = run
+    (run_dir / "status.json").write_text(json.dumps({
+        "state": "waiting_for_usage_reset", "resume_at": "2030-01-01T06:00:00+00:00"}))
+    page = site.build(run_dir)
+    assert "Paused for the usage limit." in page and "2030-01-01 06:00:00" in page
+
+
+def test_the_released_record_and_set_aside_nodes_are_shown(
+        run: tuple[Path, dict[str, str]]) -> None:
+    from report_fixture import release
+
+    run_dir, _ids = run
+    release(run_dir)
+    (run_dir / "deliverable/record.json").write_text(json.dumps({
+        "version": 1, "criteria": {"C1": "Says yes or no"},
+        "set_aside": [{"id": "Q2", "statement": "Removals?", "reason": "too few to matter"},
+                      {"id": "Q2a", "statement": "Removals in parks?", "under": "Q2"}],
+        "assumptions": [{"branch_id": "b1", "question": "Which year?",
+                         "assumption": "Calendar 2030"}],
+        "branch_limits": [{"branch_id": "b1", "id": "b1.r1.1", "point": "One source only"}],
+        "open_material_points": {"by_criterion": {"C1": [
+            {"id": "v1.de.1", "by": "deciders-eye-reviewer", "point": "No date given"}]},
+            "by_node": {}},
+        "review_rounds": {"used": 1, "limit": 3, "note": "a resource limit"}}))
+    tree = json.loads((run_dir / "tree.json").read_text())
+    tree["nodes"].append({"id": "Q2a", "parent": "Q2", "kind": "question",
+                          "status": "set_aside", "closes_by": "ancestor_set_aside",
+                          "set_aside_by": "Q2", "statement": "Removals in parks?"})
+    (run_dir / "tree.json").write_text(json.dumps(tree))
+    page = site.build(run_dir)
+    left = page[page.index("What the released answer left open"):]
+    assert "set aside: too few to matter" in left and "under Q2, which was set aside" in left
+    assert "Assumed in place of the user's answer (branch b1): Calendar 2030" in left
+    assert "An open limit of branch b1: One source only" in left
+    assert "deciders-eye-reviewer, C1): No date given" in left
+    assert "Review rounds used: 1 of 3" in left
+    assert "it sits under Q2, which was set aside" in page
