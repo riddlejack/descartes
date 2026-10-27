@@ -487,3 +487,20 @@ Nine findings; the orchestrator's instructions per item:
 Also: the worker may call `run_analysis` (orchestrator); its Bash is unchanged.
 Shown: lint and map check pass; tests/roles 60 pass; whole suite 1,272 pass, 18
 skipped.
+
+### Aligned to part B's Group A (2e4f4f7)
+- Rebased onto 2e4f4f7. The contract now names `run_analysis`, `check_assignment`
+  and `revise_criteria`, so the pending-vocabulary list, its check and its test are
+  deleted; the three tools are in the lint's contract list.
+- Claim checker: assignments `doc:<receipt_id>` or `derivations:v<n>`, its exact list
+  from `check_assignment` (lists are per round and written once); derivation entries
+  carry their citing sentences, which the assumed-claim line now reads.
+- Lead: criteria freeze at the first review; `revise_criteria` only for a criterion
+  that misreads the question, never to fit the draft (it voids earlier final
+  reviews). `draft/response.v<v>.md` answers every point of the last round by id.
+  Longest runnable lead 849/850.
+- Worker: a branch lead adds nodes, never moves one or changes its branch. The
+  send-back lines are merged and the analysis line shortened (worker 812/850), so the
+  lint's append-a-line tests have room.
+- Shown: lint and map check pass; tests/roles 59 pass; whole suite 1,426 pass, 18
+  skipped.

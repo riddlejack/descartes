@@ -361,25 +361,12 @@ def test_lead_with_websearch_fails(rm: ModuleType) -> None:
     assert "the lead holds WebSearch" in errors_of(rm)
 
 
-def test_pending_name_passes_until_the_contract_names_it(rm: ModuleType) -> None:
-    rm.PAGE_WORDS = 2 * rm.PAGE_WORDS  # the real lead fills its page; room for one line
-    edit(
-        rm.LEAD_DIR / "base.md",
-        "## Review\n",
-        "## Review\n\nRun each script with run_analysis. <!-- prevents: x; evidence: y -->\n",
-    )
-    assert rm.check_all() == []
-    contract = rm.CONTRACTS.read_text().replace("## 4.", "- `run_analysis(script)`.\n\n## 4.", 1)
-    rm.CONTRACTS.write_text(contract)
-    assert "'run_analysis' is now in the contract; drop it from pending" in errors_of(rm)
-
-
 def test_lead_with_bash_fails(rm: ModuleType) -> None:
     edit(rm.LEAD_DIR / "base.md", "  - Skill\n", "  - Skill\n  - Bash\n")
     assert "the lead holds Bash" in errors_of(rm)
 
 
-def test_unagreed_path_still_fails_beside_pending_ones(rm: ModuleType) -> None:
+def test_unagreed_path_fails(rm: ModuleType) -> None:
     append(
         rm, "worker", "Keep notes in checklist/notes.md always. <!-- prevents: x; evidence: y -->"
     )

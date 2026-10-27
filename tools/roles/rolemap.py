@@ -92,16 +92,11 @@ CONTRACT_TOOLS = frozenset(
         "query_data",
         "gate_status",
         "finish_run",
+        "run_analysis",
+        "check_assignment",
+        "revise_criteria",
     }
-) | frozenset({"run_analysis"})  # pending: see PENDING_CONTRACT_NAMES
-
-# Logical invariant: names and run-folder paths agreed with part B (orchestrator,
-# 27 October) that docs/CONTRACTS.md v0.4 does not carry yet: `run_analysis`, the host
-# tool that runs the lead's arithmetic script. Prose may use them until the contract
-# does; once it names one, `check` reports it here so the entry is deleted, and this
-# list ends empty.
-PENDING_CONTRACT_NAMES = frozenset({"run_analysis"})
-PENDING_CONTRACT_PATHS: frozenset[str] = frozenset()
+)
 
 # Logical invariant: the tools decision D6 takes from the lead (it reads branch
 # records, never sources), as contract v0.4 section 0 lists them; Bash goes too, since a
@@ -680,8 +675,7 @@ def check_skills(errors: list[str]) -> None:
 
 
 def contract_vocabulary() -> tuple[set[str], set[str], str]:
-    """Snake_case names, top-level run-folder entries, and the contract's text, with
-    the agreed names the contract does not carry yet (PENDING_CONTRACT_*)."""
+    """Snake_case names, top-level run-folder entries, and the contract's text."""
     text = CONTRACTS.read_text()
     names = set(IDENTIFIER.findall(text))
     section = text[text.index("## 3. The run folder") : text.index("## 4.")]
@@ -689,23 +683,7 @@ def contract_vocabulary() -> tuple[set[str], set[str], str]:
     for token in re.findall(r"`([^`]+)`", section):
         first = token.strip().split("/")[0]
         tops.add(first + "/" if "/" in token else first)
-    return names | PENDING_CONTRACT_NAMES, tops | PENDING_CONTRACT_PATHS, text
-
-
-def check_pending(errors: list[str]) -> None:
-    """A pending name the contract now carries is reported, so the list empties."""
-    text = CONTRACTS.read_text()
-    names = set(IDENTIFIER.findall(text))
-    section = text[text.index("## 3. The run folder") : text.index("## 4.")]
-    for name in sorted(PENDING_CONTRACT_NAMES & names):
-        errors.append(
-            f"tools/roles/rolemap.py: {name!r} is now in the contract; drop it from pending"
-        )
-    for path in sorted(PENDING_CONTRACT_PATHS):
-        if f"`{path}" in section:
-            errors.append(
-                f"tools/roles/rolemap.py: {path!r} is now in the contract; drop it from pending"
-            )
+    return names, tops, text
 
 
 def check_prose(doc: Doc, tools: list[str], errors: list[str]) -> None:
@@ -766,7 +744,6 @@ def check_all() -> list[str]:
     check_lead(errors)
     check_skills(errors)
     check_shared(errors)
-    check_pending(errors)
     if not errors:
         check_all_prose(errors)
     return errors
