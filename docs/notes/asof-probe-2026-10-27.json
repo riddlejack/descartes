@@ -1,7 +1,7 @@
 {
  "as_of": "2026-10-01",
  "cutoff_utc": "2026-10-01T00:00:00+00:00",
- "at": "2026-10-27T17:55:07.025888+00:00",
+ "at": "2026-10-27T18:17:36.019383+00:00",
  "seed_attempts": [
   {
    "url": "https://investors.coreweave.com/",
@@ -263,10 +263,133 @@
     null,
     1
    ],
-   "error": {
-    "error": "sec_identity_not_configured",
-    "message": "SEC requires a contact identity; STEMMA_SEC_IDENTITY is not set"
-   }
+   "hits": 100,
+   "earliest": "2021-06-24",
+   "latest": "2026-09-28",
+   "forms": [
+    "10-K",
+    "10-Q",
+    "144",
+    "424B2",
+    "424B3",
+    "425",
+    "8-K",
+    "8-K/A",
+    "DEFM14A",
+    "DFAN14A",
+    "NPORT-P",
+    "PREC14A",
+    "S-1",
+    "S-1/A",
+    "S-4",
+    "S-4/A",
+    "SCHEDULE 13D"
+   ],
+   "sample": [
+    {
+     "accession": "0001213900-21-033998",
+     "form": "8-K/A",
+     "filing_date": "2021-06-24",
+     "filers": [
+      "Sysorex, Inc.  (SYSX)  (CIK 0001737372)"
+     ],
+     "ciks": [
+      "0001737372"
+     ],
+     "document": "ea143111ex10-1_sysorex.htm"
+    },
+    {
+     "accession": "0001193125-25-044231",
+     "form": "S-1",
+     "filing_date": "2025-03-03",
+     "filers": [
+      "CoreWeave, Inc.  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "d899798dex1023.htm"
+    },
+    {
+     "accession": "0000950103-25-008523",
+     "form": "425",
+     "filing_date": "2025-07-07",
+     "filers": [
+      "Core Scientific, Inc./tx  (CORZ, CORZR, CORZW, CORZZ)  (CIK 0001839341)",
+      "CoreWeave, Inc.  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001839341",
+      "0001769628"
+     ],
+     "document": "dp231290_425.htm"
+    },
+    {
+     "accession": "0001140361-25-037969",
+     "form": "8-K",
+     "filing_date": "2025-10-14",
+     "filers": [
+      "Core Scientific, Inc./tx  (CORZ, CORZR, CORZW, CORZZ)  (CIK 0001839341)"
+     ],
+     "ciks": [
+      "0001839341"
+     ],
+     "document": "ef20056907_ex99-1.htm"
+    },
+    {
+     "accession": "0001140361-25-036118",
+     "form": "S-4/A",
+     "filing_date": "2025-09-25",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "ny20053122x6_s4a.htm"
+    },
+    {
+     "accession": "0001140361-25-038209",
+     "form": "425",
+     "filing_date": "2025-10-15",
+     "filers": [
+      "Core Scientific, Inc./tx  (CORZ, CORZR, CORZW, CORZZ)  (CIK 0001839341)"
+     ],
+     "ciks": [
+      "0001839341"
+     ],
+     "document": "ef20057150_ex99-1.htm"
+    },
+    {
+     "accession": "0000902664-25-004376",
+     "form": "DFAN14A",
+     "filing_date": "2025-10-10",
+     "filers": [
+      "Core Scientific, Inc./tx  (CORZ, CORZR, CORZW, CORZZ)  (CIK 0001839341)",
+      "Two Seas Capital LP  (CIK 0001823138)"
+     ],
+     "ciks": [
+      "0001839341",
+      "0001823138"
+     ],
+     "document": "p25-2168exhibit1.htm"
+    },
+    {
+     "accession": "0001769628-25-000050",
+     "form": "8-K",
+     "filing_date": "2025-09-30",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "redactedmetamsa929finald.htm"
+    }
+   ],
+   "warnings": [
+    "filer names are EDGAR's names today, which may differ from the names on the filing date"
+   ]
   },
   {
    "args": [
@@ -280,10 +403,118 @@
     null,
     1
    ],
-   "error": {
-    "error": "sec_identity_not_configured",
-    "message": "SEC requires a contact identity; STEMMA_SEC_IDENTITY is not set"
-   }
+   "hits": 100,
+   "earliest": "2021-06-24",
+   "latest": "2026-09-25",
+   "forms": [
+    "10-Q",
+    "10-Q/A",
+    "8-K",
+    "8-K/A",
+    "S-1",
+    "S-1/A"
+   ],
+   "sample": [
+    {
+     "accession": "0001213900-21-033998",
+     "form": "8-K/A",
+     "filing_date": "2021-06-24",
+     "filers": [
+      "Sysorex, Inc.  (SYSX)  (CIK 0001737372)"
+     ],
+     "ciks": [
+      "0001737372"
+     ],
+     "document": "ea143111ex10-1_sysorex.htm"
+    },
+    {
+     "accession": "0001193125-25-044231",
+     "form": "S-1",
+     "filing_date": "2025-03-03",
+     "filers": [
+      "CoreWeave, Inc.  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "d899798dex1023.htm"
+    },
+    {
+     "accession": "0001140361-25-037969",
+     "form": "8-K",
+     "filing_date": "2025-10-14",
+     "filers": [
+      "Core Scientific, Inc./tx  (CORZ, CORZR, CORZW, CORZZ)  (CIK 0001839341)"
+     ],
+     "ciks": [
+      "0001839341"
+     ],
+     "document": "ef20056907_ex99-1.htm"
+    },
+    {
+     "accession": "0001769628-25-000050",
+     "form": "8-K",
+     "filing_date": "2025-09-30",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "redactedmetamsa929finald.htm"
+    },
+    {
+     "accession": "0001769628-25-000062",
+     "form": "10-Q",
+     "filing_date": "2025-11-13",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "exhibit105.htm"
+    },
+    {
+     "accession": "0001769628-26-000183",
+     "form": "8-K",
+     "filing_date": "2026-04-21",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "crwv-20260416.htm"
+    },
+    {
+     "accession": "0001193125-25-155925",
+     "form": "8-K",
+     "filing_date": "2025-07-07",
+     "filers": [
+      "Core Scientific, Inc./tx  (CORZ, CORZR, CORZW, CORZZ)  (CIK 0001839341)"
+     ],
+     "ciks": [
+      "0001839341"
+     ],
+     "document": "d52423dex991.htm"
+    },
+    {
+     "accession": "0001769628-25-000105",
+     "form": "8-K",
+     "filing_date": "2025-12-11",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "exhibit991pressrelease.htm"
+    }
+   ],
+   "warnings": [
+    "filer names are EDGAR's names today, which may differ from the names on the filing date"
+   ]
   },
   {
    "args": [
@@ -292,10 +523,131 @@
     "1769628",
     1
    ],
-   "error": {
-    "error": "sec_identity_not_configured",
-    "message": "SEC requires a contact identity; STEMMA_SEC_IDENTITY is not set"
-   }
+   "hits": 100,
+   "earliest": "2022-03-01",
+   "latest": "2026-09-22",
+   "forms": [
+    "10-K",
+    "10-Q",
+    "144",
+    "424B3",
+    "425",
+    "8-K",
+    "CORRESP",
+    "S-1",
+    "S-1/A",
+    "S-4",
+    "S-4/A",
+    "S-8",
+    "SC 13D/A"
+   ],
+   "sample": [
+    {
+     "accession": "0001193125-25-044231",
+     "form": "S-1",
+     "filing_date": "2025-03-03",
+     "filers": [
+      "CoreWeave, Inc.  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "d899798dex1023.htm"
+    },
+    {
+     "accession": "0000950103-25-008523",
+     "form": "425",
+     "filing_date": "2025-07-07",
+     "filers": [
+      "Core Scientific, Inc./tx  (CORZ, CORZR, CORZW, CORZZ)  (CIK 0001839341)",
+      "CoreWeave, Inc.  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001839341",
+      "0001769628"
+     ],
+     "document": "dp231290_425.htm"
+    },
+    {
+     "accession": "0001140361-25-036118",
+     "form": "S-4/A",
+     "filing_date": "2025-09-25",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "ny20053122x6_s4a.htm"
+    },
+    {
+     "accession": "0001769628-25-000050",
+     "form": "8-K",
+     "filing_date": "2025-09-30",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "redactedmetamsa929finald.htm"
+    },
+    {
+     "accession": "0000950103-25-008540",
+     "form": "425",
+     "filing_date": "2025-07-08",
+     "filers": [
+      "Core Scientific, Inc./tx  (CORZ, CORZR, CORZW, CORZZ)  (CIK 0001839341)",
+      "CoreWeave, Inc.  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001839341",
+      "0001769628"
+     ],
+     "document": "dp231328_425-transcriptceo.htm"
+    },
+    {
+     "accession": "0001769628-25-000062",
+     "form": "10-Q",
+     "filing_date": "2025-11-13",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "exhibit105.htm"
+    },
+    {
+     "accession": "0001769628-26-000183",
+     "form": "8-K",
+     "filing_date": "2026-04-21",
+     "filers": [
+      "CoreWeave, Inc.  (CRWV)  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001769628"
+     ],
+     "document": "crwv-20260416.htm"
+    },
+    {
+     "accession": "0000950103-25-012940",
+     "form": "425",
+     "filing_date": "2025-10-07",
+     "filers": [
+      "Core Scientific, Inc./tx  (CORZ, CORZR, CORZW, CORZZ)  (CIK 0001839341)",
+      "CoreWeave, Inc.  (CIK 0001769628)"
+     ],
+     "ciks": [
+      "0001839341",
+      "0001769628"
+     ],
+     "document": "dp235625_425-bloomberg.htm"
+    }
+   ],
+   "warnings": [
+    "filer names are EDGAR's names today, which may differ from the names on the filing date"
+   ]
   }
  ],
  "series": [
@@ -303,7 +655,7 @@
    "source": "stooq",
    "symbol": "crwv.us",
    "status": "series_unreadable",
-   "detail": "unreadable: the first column is not a date",
+   "detail": "unreadable: the source answered with a web page, not CSV (a browser check or an error page)",
    "rows": null,
    "first_date": null,
    "last_date": null,
@@ -314,7 +666,7 @@
    "source": "stooq",
    "symbol": "nvda.us",
    "status": "series_unreadable",
-   "detail": "unreadable: the first column is not a date",
+   "detail": "unreadable: the source answered with a web page, not CSV (a browser check or an error page)",
    "rows": null,
    "first_date": null,
    "last_date": null,

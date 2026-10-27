@@ -1,7 +1,7 @@
 # Live probe of as-of discovery, 27 October 2026
 
-**Result: nothing dated on or after the cutoff came back through browsing or the
-FRED series.** The probe ran at as_of 2026-10-01, the CoreWeave demo's date, so
+**Result: nothing dated on or after the cutoff came back through browsing, the
+FRED series or EDGAR full-text search.** The probe ran at as_of 2026-10-01, the CoreWeave demo's date, so
 everything had to be dated strictly before 1 October 2026 (00:00 UTC). It called the
 broker's tools directly; it started no session and no research run. The raw record is
 `asof-probe-2026-10-27.json` beside this note; the script was
@@ -34,10 +34,15 @@ broker's tools directly; it started no session and no research run. The raw reco
   quote pages and dated reporting, captured through the archive before the cutoff, and
   say so where a price matters.
 
-## EDGAR full-text search (not run)
-`sec_search` needs the SEC contact identity, `STEMMA_SEC_IDENTITY`, which is not set in
-this checkout; the orchestrator supplies it at run time. This half of the probe waits on
-it.
+## EDGAR full-text search (works)
+Run with the SEC contact identity in the environment only (owner ruling 33; it is in no
+file or record, and the receipts record only that the header was sent). The host set
+the end date to 30 September.
+- "CoreWeave", any form: 100 hits on the first page, filed 2021-06-24 to 2026-09-28
+  (10-K, 10-Q, 8-K, S-1 and S-1/A, S-4, 424B prospectuses, 13D and others).
+- "CoreWeave", forms S-1, 424B4, 10-Q and 8-K: 100 hits, filed up to 2026-09-25.
+- "CoreWeave", CoreWeave's own CIK (1769628): 100 hits, filed 2022-03-01 to 2026-09-22.
+- No hit was filed on or after the cutoff.
 
 ## A fix the probe's review found
 While confirming that XBRL facts are filtered by filing date (they are), the review
