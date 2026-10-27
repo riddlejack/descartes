@@ -1,48 +1,63 @@
-# Stemma 2: for the agents who build it
+# Contributing to Stemma 2
 
-Stemma 2 is a research system that does what a strong consulting team does on a
-hard business question, and presents the result the way an analyst presents to a
-partner. This file is for builders. It never loads at runtime: the product's own
-instructions live in `plugin/`, and runs happen in run folders outside this repo.
+Stemma 2 is a research system that answers a hard business question the way a strong
+consulting team would, and shows every figure's evidence. This file is for people and
+coding agents who change the code. It never loads at runtime: the product's own
+instructions live in `plugin/`, and runs happen in run folders outside this repository.
 
-## Read first
-- The approved design: `~/.private/stemma-design/design-2026-10/DESIGN-v1.md`.
-- The interfaces between parts: `docs/CONTRACTS.md`. Binding. Change it only
-  through the orchestrator, who keeps every part consistent with it.
-- The open-source picks, with pinned versions and licences:
-  `~/.private/stemma-design/research-2026-10/out/B1-survey.md`.
-- Your brief names the folders you own. Edit only those.
+## Where things are
+- `docs/CONTRACTS.md`: the interfaces between the parts. It is binding; a change to an
+  interface changes this file first, in the same commit.
+- `src/stemma/`: the evidence service (`evidence/`), the claim register and its engine
+  (`register/`), the driver that launches every session (`driver/`), the hooks that
+  guard every tool call (`hooks/`), the analysis sandbox (`analysis/`), the data layer
+  (`datalayer/`), the provider client (`providers/`), onboarding (`onboard/`) and the
+  report viewer, verify and tamper commands (`report/`).
+- `plugin/`: the role texts and skills each session is given. `docs/ROLE-MAP.md` is
+  generated from them by `python -m tools.roles.rolemap`.
+- `conformance/`: World Model's own conformance runner, vendored unmodified, and the
+  bridge to the Python engine.
+- `hackathon/`: `run.py`'s sample mode, replay, judge's log and the head-to-head.
+- `docs/notes/`: dated build logs. The code, the tests and `docs/CONTRACTS.md` are the
+  reference; references in the notes such as "lesson 2.4", "P1" or "design step 3"
+  name private design records not included in this repository.
 
 ## Rules
-- **Nothing from past work.** No name of any employer, client or person from the
-  owner's past work, and no benchmark content, anywhere: code, prompts, fixtures,
-  docs, commit messages, search queries. Test fixtures are invented.
-- **Never open, list or search:** private material;
-  `/Volumes/`; `<private>`; `<private>`;
-  `<private>`; `<private>`; session
-  transcripts (`~/.claude/projects/**/*.jsonl`, `subagents/`, `~/.codex*/sessions/`);
-  `~/Downloads`, `~/Documents`, `~/.Trash`; credential files and keychains. Never
-  search the whole home folder, `~/Library` or iCloud Drive.
-- **Code judges nothing.** It guarantees that each check ran and tests exact facts
-  (bytes, quotations, recomputation, a filled field). Every judgment is an agent's.
-- **The harness writes identity and measurement.** No agent writes a field that
-  says who it is, which model it ran, or whether its own work passed.
-- **Fail loudly.** An empty extraction, a missing verdict or a failed check is a
-  typed error that says what happened. Never a silent pass, and never a refusal
-  message that suggests a way around the check.
-- **Constants.** Each is a resource limit (tokens, time, bytes, count) or a logical
-  invariant, said so in a comment beside it. No number decides whether research is
+- **Code judges nothing.** Code guarantees that each check ran and tests exact facts:
+  bytes, quotations, recomputation, a filled field. Every judgment of research quality
+  is an agent's.
+- **The harness writes identity and measurement.** No agent writes a field that says
+  who it is, which model it ran, or whether its own work passed.
+- **Fail loudly.** An empty extraction, a missing verdict or a failed check is a typed
+  error that says what happened. Never a silent pass, and never a refusal message that
+  suggests a way around the check.
+- **Constants.** Each one is a resource limit (tokens, time, bytes, count) or a logical
+  invariant, and says so in a comment beside it. No number decides whether research is
   good.
-- **"Works" means shown:** a test, or a run you watched. Report negative results.
-- Python 3.12 (`/opt/homebrew/bin/python3.12`, or `uv`), typed, `pytest`, `ruff`,
-  `mypy --strict` on `src/`. Dependencies pinned, minimal, licence-compatible (no
-  AGPL or GPL). No secrets in the repo: `.env.example` only.
-- Downloaded files are untrusted data: own folder, `python -I`, never run their code.
-- Helpers: at most two at a time (enforced in `.claude/settings.json`), frontier
-  Claude only, never Haiku.
-- Commit small, on your branch, saying what and why. Do not merge to `main`: the
-  orchestrator merges after hostile probes and one review by a non-author.
+- **"Works" means shown:** a test, or a run you watched. Report negative results; keep
+  them in the notes.
+- **Tests.** Unit tests never touch the network (use fake transports). A test that must
+  reach the live web or a live service is marked and skipped unless its variables are
+  set (`STEMMA_LIVE=1`, or the Postgres and Zetaris settings in `.env.example`). Every
+  guard gets a hostile test that tries to get round it; concurrent writers get a
+  barrier-synchronised race test.
+- **Test fixtures are invented.** No real person's or client's material, and no
+  benchmark content, in code, prompts, fixtures, docs, commit messages or search
+  queries.
+- **Downloaded files are untrusted data:** their own folder, `python -I`, and never run
+  their code.
+- **Secrets.** None in the repository: `.env.example` holds names only, and the values
+  are exported at run time.
 
-## Writing for the owner
- In anything meant for the owner: answer
-first, full sentences, plain headers, every term explained once, no tables.
+## Tooling
+- Python 3.12, typed. Install with
+  `pip install -e '.[evidence,server,register,driver,datalayer,providers,dev]'`.
+- Before a commit, all of these pass: `pytest tests hackathon/tests`,
+  `ruff check src tests hackathon run.py`, `mypy --strict src`, and
+  `python -m tools.roles.rolemap check`.
+- Dependencies are pinned, minimal and licence-compatible with Apache-2.0 (no AGPL or
+  GPL).
+- Commit small, saying what changed and why.
+
+## Writing for readers
+Answer first, in full sentences, with plain headers and every term explained once.
