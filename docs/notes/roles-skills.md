@@ -457,7 +457,8 @@ Nine findings; the orchestrator's instructions per item:
 1. Integration (host on old interfaces, map wording on effort and parked switches):
    true once part B is merged; nothing changed here.
 2. Document-free estimates: the claim checker now takes `derivations:v<n>` (part B
-   is adding it; `checks/derivations-v<n>.json`) as well as `doc:` and `claim:`, and
+   is adding it; `checks/derivations-v<n>.json`) and `doc:` only (orchestrator: no
+   `claim:` route; an `assumed` cited claim's check route is part B's to state), and
    judges for each estimate whether its script computes what the claim states from
    the right input claims.
 3. Lint bypass: `WebSearch(*)` and `WebSearch(domain:...)` passed the lead check.

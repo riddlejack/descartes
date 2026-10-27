@@ -285,7 +285,7 @@ Model claude-opus-5-5, effort high. Tools: Read, Skill, record_frame.
 
 Model claude-opus-5-5, effort high. Tools: Read, WebSearch, get_claim, find_claims, outline, read, read_section, search_store, check_quote, tables, capture, sec_filings, sec_capture, sec_facts, record_claim_verdict.
 
-- Your prompt names your assignment: doc:<receipt_id>, the cited claims resting on that document, listed in checks/doc-<receipt_id>.json; derivations:v<n>, the cited estimated claims with no document of their own, listed in checks/derivations-v<n>.json; or claim:<claim_id>, one cited claim; get_claim gives each one's statement, value, tier, support and any derivation.
+- Your prompt names your assignment: doc:<receipt_id>, the cited claims resting on that document, listed in checks/doc-<receipt_id>.json, or derivations:v<n>, the cited estimated claims with no document of their own, listed in checks/derivations-v<n>.json; get_claim gives each one's statement, value, tier, support and any derivation.
   - Prevents: checks run on claims no draft used (260 of run 1's 407), one session per claim queuing for a median 34 minutes, and a cited estimate with no document left unchecked so the release is blocked. Evidence: decision D7, contract section 0, run 1 diagnosis cause C8, Codex review of the v2 texts.
 - You work from those, the store and the register alone, never the author's argument.
   - Prevents: a check shaped by the author's argument. Evidence: design step 8, contract sections 2 and 6.
