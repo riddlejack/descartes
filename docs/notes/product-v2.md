@@ -264,10 +264,24 @@ Two modules, in `hackathon/headtohead/`:
     same way that launcher does.
   - It launches one session through `clean_launch`, with the canary checked: Opus 5.5 at
     high effort, no plugin, no MCP server, no slash commands.
-  - Its tools are WebSearch and WebFetch only. Read, Write or Bash in an unattended
-    session could read the owner's files, run 3's folder included.
-  - Its prompt asks it to cite a source for every figure; the exact prompt is saved
-    with its answer.
+  - Its tools are WebSearch and WebFetch, and Bash, Read and Write confined to its own
+    folder, so that it can calculate. Bash runs in the workers' sandbox: no network,
+    reads denied from the filesystem root and re-opened only for its folder and what
+    the shell and the system Python need (nothing of this repository), and writes only
+    in its folder. The Read and Write tools are allowed only inside the folder. Run 3's
+    Stemma folder, the Claude and Codex configurations and SSH keys are denied by name
+    besides.
+  - A scope canary runs before the real session, in the same folder with the same
+    settings. It is told to read a marker file outside the folder with the Read tool
+    and with `cat`, and to reach the network with `curl`. Code requires that it tried
+    all three, and that neither the marker's random token nor the reached page's text
+    appears in its stream. Otherwise the arm is refused and the real session never
+    starts.
+  - The scope canary is the only proof that headless Read is denied outside the folder;
+    it is checked at launch, never in a unit test.
+  - **Stated deviation from a plain user:** the prompt asks the bare arm to cite a
+    source for every figure, which a plain user may not ask. Without it, the citation
+    counts would measure nothing. The exact prompt is saved with its answer.
   - It writes prompt.txt, launch.json, stream.jsonl, answer.md, usage.json and
     outcome.json into a new folder under `~/.private/runs/stemma2-run3/bare/`.
   - `--dry-run` creates nothing.

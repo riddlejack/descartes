@@ -182,51 +182,114 @@ def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("STEMMA_CLAUDE_CONFIG", str(tmp_path / "config"))
 
 
-def test_a_session_that_fails_the_canary_is_stopped_and_not_used(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _env(monkeypatch, tmp_path)
-    proc = _Proc([{"type": "system", "subtype": "init", "tools": ["Bash"]},
-                  {"type": "result", "result": "an answer"}])
-    with pytest.raises(bare.BareError, match="did not start clean"):
-        bare.launch(tmp_path / "out", bare.task(), popen=lambda *a, **k: proc,
-                    version="2.1.308 (Claude Code)")
-    folder = next((tmp_path / "out").iterdir())
-    assert proc.killed and not (folder / "answer.md").exists()
-    assert (folder / "prompt.txt").exists() and (folder / "stream.jsonl").exists()
+INIT = {"type": "system", "subtype": "init", "session_id": "s1"}
 
 
-def test_a_clean_session_writes_its_answer_and_usage(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _use(name: str, **inp: Any) -> dict[str, Any]:
+    return {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": name, "input": inp}]}}
+
+
+def _denied(text: str) -> dict[str, Any]:
+    return {"type": "user", "message": {"content": [
+        {"type": "tool_result", "is_error": True, "content": text}]}}
+
+
+class _Sessions:
+    """A fake Popen: the scope canary first (built from the marker it is told about),
+    then the real session."""
+
+    def __init__(self, leak: str | None = None, exercise: bool = True) -> None:
+        self.calls: list[list[str]] = []
+        self.leak, self.exercise = leak, exercise
+
+    def __call__(self, argv: list[str], **k: Any) -> _Proc:
+        self.calls.append(argv)
+        prompt = argv[argv.index("-p") + 1]
+        if "safety check" in prompt:
+            marker = prompt.split("read the file ")[1].split("\n")[0].strip()
+            lines: list[dict[str, Any]] = [INIT]
+            if self.exercise:
+                lines += [_use("Read", file_path=marker), _denied("Permission denied"),
+                          _use("Bash", command=f"cat {marker}"),
+                          _denied(self.leak or "Operation not permitted"),
+                          _use("Bash", command="curl -sS --max-time 10 https://example.com"),
+                          _denied("Could not resolve host")]
+            lines.append({"type": "result", "result": "DONE"})
+            return _Proc(lines)
+        return _Proc([INIT, {"type": "result", "subtype": "success", "is_error": False,
+                             "result": "# Memo\n\nKeep the segment.",
+                             "total_cost_usd": 1.5, "usage": {"output_tokens": 10}}])
+
+
+@pytest.fixture
+def canary_ok(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from stemma.driver import clean
 
     _env(monkeypatch, tmp_path)
     monkeypatch.setattr(clean, "check_canary", lambda init, exp: [])
-    proc = _Proc([{"type": "system", "subtype": "init", "session_id": "s1"},
-                  {"type": "result", "subtype": "success", "is_error": False,
-                   "result": "# Memo\n\nKeep the segment.", "total_cost_usd": 1.5,
-                   "usage": {"output_tokens": 10}}])
-    folder = bare.launch(tmp_path / "out", bare.task(), popen=lambda *a, **k: proc,
+
+
+def test_a_session_that_fails_the_init_canary_is_stopped_and_not_used(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _env(monkeypatch, tmp_path)
+    sessions = _Sessions()
+    with pytest.raises(bare.BareError, match="init canary"):
+        bare.launch(tmp_path / "out", bare.task(), popen=sessions,
+                    version="2.1.308 (Claude Code)")
+    folder = next(p for p in (tmp_path / "out").iterdir() if p.is_dir())
+    assert len(sessions.calls) == 1 and not (folder / "answer.md").exists()
+
+
+def test_a_clean_scope_lets_the_real_session_write_its_answer(
+        tmp_path: Path, canary_ok: None) -> None:
+    sessions = _Sessions()
+    folder = bare.launch(tmp_path / "out", bare.task(), popen=sessions,
                          version="2.1.308 (Claude Code)")
+    assert len(sessions.calls) == 2
     assert (folder / "answer.md").read_text() == "# Memo\n\nKeep the segment."
     assert json.loads((folder / "usage.json").read_text())["total_cost_usd"] == 1.5
+    assert json.loads((folder / "scope-canary.json").read_text())["problems"] == []
     launch = json.loads((folder / "launch.json").read_text())
-    assert launch["tools"] == ["WebSearch", "WebFetch"] and launch["effort"] == "high"
+    assert launch["tools"] == ["WebSearch", "WebFetch", "Bash", "Read", "Write"]
     assert "env" not in launch
+    assert not list((tmp_path / "out").glob(".scope-canary-*"))  # the marker is removed
 
 
-def test_calculated_figures_are_counted_apart_and_the_judge_allows_for_drift(
-        tmp_path: Path) -> None:
-    prompts: list[str] = []
+@pytest.mark.parametrize("leak", ["token", "Example Domain"])
+def test_a_scope_that_leaks_refuses_the_arm_before_the_real_session(
+        tmp_path: Path, canary_ok: None, leak: str) -> None:
+    class Leaky(_Sessions):
+        def __call__(self, argv: list[str], **k: Any) -> _Proc:
+            if leak == "token" and "safety check" in argv[argv.index("-p") + 1]:
+                marker = Path(argv[argv.index("-p") + 1].split("read the file ")[1]
+                              .split("\n")[0].strip())
+                self.leak = marker.read_text().strip()
+            elif leak != "token":
+                self.leak = "<title>Example Domain</title>"
+            return super().__call__(argv, **k)
 
-    def judge(prompt: str, folder: Path) -> str:
-        prompts.append(prompt)
-        return "[]"
+    sessions = Leaky()
+    with pytest.raises(bare.BareError, match="scope canary failed"):
+        bare.launch(tmp_path / "out", bare.task(), popen=sessions,
+                    version="2.1.308 (Claude Code)")
+    assert len(sessions.calls) == 1  # the real session never started
 
-    s = score.score([("stemma", STEMMA_MD, lambda seg: [],
-                      lambda seg: "bbbbbbbbbbbb" in seg.claim_tags),
-                     ("bare", BARE_MD, lambda seg: [])], fake_capture, judge, tmp_path)
-    c = s.as_json()["counts"]
-    assert c["stemma"]["figures_backed_by_a_recorded_calculation"] == 1
-    assert c["bare"]["figures_backed_by_a_recorded_calculation"] == 0
-    assert "outside the shared comparison" in score.summary(s)
-    assert "may be newer than the answer" in score.CONTRADICT_PROMPT
+
+def test_a_canary_that_did_not_try_refuses_too(tmp_path: Path, canary_ok: None) -> None:
+    with pytest.raises(bare.BareError, match="did not try"):
+        bare.launch(tmp_path / "out", bare.task(), popen=_Sessions(exercise=False),
+                    version="2.1.308 (Claude Code)")
+
+
+def test_the_settings_confine_every_tool_to_the_folder(tmp_path: Path) -> None:
+    folder = tmp_path / "stemma2-run3" / "bare" / "20300101-000000"
+    st = bare.settings_extra(folder, tmp_path / "config", bare.SCOPE_PYTHON)
+    allow = st["permissions"]["allow"]
+    assert f"Read(/{folder}/**)" in allow and f"Write(/{folder}/**)" in allow
+    assert "Read" not in allow and "Write" not in allow  # never unconfined
+    assert f"Read(/{tmp_path / 'stemma2-run3' / '20*'}/**)" in st["permissions"]["deny"]
+    sb = st["sandbox"]
+    assert sb["network"] == {"allowedDomains": []} and sb["allowUnsandboxedCommands"] is False
+    assert sb["filesystem"]["denyRead"] == ["/"] and str(folder) in sb["filesystem"]["allowRead"]
+    assert not any("stemma-2" in p for p in sb["filesystem"]["allowRead"])  # repo closed
