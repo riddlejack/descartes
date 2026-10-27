@@ -111,54 +111,12 @@ def fresh_copy(base: Path, dest: Path) -> dict[str, str]:
     return ids
 
 
-# The operational files a release manifest leaves out (as proposed to W2 for finish_run).
-EXCLUDED = ["register/checks.jsonl", "events.jsonl", "status.json", "status.html", "usage.jsonl", "usage.md",
-            ".stemma/**", "**/*.lock", "store/index.sqlite*", "register/index.sqlite*",
-            "register/calls/**", "release/**"]
-
-
 def seal(run_dir: Path) -> str:
-    """Write release/manifest.json as finish_run does (stemma-release-manifest/1) and
-    return its SHA-256: with the register's own `manifest.seal` once merged, else a
-    test-only stand-in for it."""
-    import fnmatch
-    import hashlib
+    """Seal the run with the register's own `manifest.seal`, as finish_run does, and
+    return the manifest's SHA-256."""
+    from stemma.register import manifest
 
-    from stemma.report.compat import w2
-
-    w2_seal = w2("stemma.register.manifest", "seal")
-    if w2_seal is not None:
-        return str(w2_seal(run_dir, 1, "20300101-000000-abcdef")["manifest_sha256"])
-
-    def excluded(rel: str) -> bool:
-        return any(fnmatch.fnmatchcase(rel, p) or (p.startswith("**/") and
-                                                   fnmatch.fnmatchcase(rel, p[3:]))
-                   for p in EXCLUDED)
-
-    files = []
-    for p in sorted(run_dir.rglob("*")):
-        rel = p.relative_to(run_dir).as_posix()
-        if p.is_file() and not p.is_symlink() and not excluded(rel) \
-                and rel != "register/log.jsonl":
-            data = p.read_bytes()
-            files.append({"path": rel, "size": len(data),
-                          "sha256": hashlib.sha256(data).hexdigest()})
-    log = (run_dir / "register/log.jsonl").read_bytes()
-    checks_path = run_dir / "register/checks.jsonl"
-    checks = checks_path.read_bytes() if checks_path.exists() else b""
-    man = {"format": "stemma-release-manifest/1", "run_id": "20300101-000000-abcdef",
-           "version": 1, "released_at": "2030-01-02T00:00:00Z", "files": files,
-           "excluded": EXCLUDED,
-           "log": {"path": "register/log.jsonl", "bytes": len(log),
-                   "sha256": hashlib.sha256(log).hexdigest(),
-                   "transactions": log.count(b"\n")},
-           "checks": {"path": "register/checks.jsonl", "bytes": len(checks),
-                      "sha256": hashlib.sha256(checks).hexdigest(),
-                      "records": checks.count(b"\n")}}
-    raw = json.dumps(man, sort_keys=True, separators=(",", ":")).encode()
-    (run_dir / "release").mkdir(exist_ok=True)
-    (run_dir / "release/manifest.json").write_bytes(raw)
-    return hashlib.sha256(raw).hexdigest()
+    return str(manifest.seal(run_dir, 1, "20300101-000000-abcdef")["manifest_sha256"])
 
 
 def release(run_dir: Path) -> None:

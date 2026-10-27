@@ -16,10 +16,12 @@ manifest without that field leaves the file unauthenticated, and the snapshot sa
 Both side files the register reads (`checks.jsonl`, `refused_corrections.jsonl`) go
 through `safefs` and a strict parser here, never the register's unbounded reader.
 
-STOP-GAP: `_memory_world` and `_read_only_register` reach private attributes of the
-register's classes (`WorldModel._log`, `Register.__init__` bypassed, three read methods
-replaced on the instance). Replace them with W2's public read-only constructor once it
-exists, so that the viewer and verify read the register through the register's own code.
+STOP-GAP: the snapshot starts from W2's public `Register.read_only(run_dir)`, which
+refuses every write, but `read_only` folds the whole log file and reads checks.jsonl and
+refused_corrections.jsonl with the register's unbounded reader, while a release must be
+read from its sealed bytes only. So `_memory_world` folds the sealed bytes in memory
+(through `WorldModel._log`) and `_read_only_register` puts that world and three side-file
+reads on the instance. Replace both once `read_only` can take the sealed bytes.
 """
 
 from __future__ import annotations
@@ -34,8 +36,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from stemma.register.manifest import LogError, parse_log
 from stemma.report import safefs
-from stemma.report.compat import w2
 from stemma.report.errors import RunReadError
 
 LOG: Final = "register/log.jsonl"
@@ -68,12 +70,10 @@ def _check_terminated(data: bytes, rel: str) -> None:
 
 def read_log(run_dir: Path) -> Log:
     data = safefs.read_bytes(run_dir, LOG, LOG_MAX_BYTES)
-    parse_log = w2("stemma.register.manifest", "parse_log")
-    if parse_log is not None:  # the register's own parser: a torn or corrupt line refused
-        try:
-            parse_log(data)
-        except w2("stemma.register.manifest", "LogError") as exc:
-            raise RunReadError(str(exc)) from exc
+    try:  # the register's own parser: a torn or corrupt line refused
+        parse_log(data)
+    except LogError as exc:
+        raise RunReadError(str(exc)) from exc
     _check_terminated(data, LOG)
     return Log(data, data.splitlines(keepends=True))
 
@@ -186,18 +186,14 @@ def _memory_world(lines: list[bytes]) -> Any:
 
 def _read_only_register(run_dir: Path, wm: Any, checks: Checks,
                         refused: list[dict[str, Any]]) -> Any:
-    """STOP-GAP (see the module's note): a Register over an in-memory world whose reads
-    of the side files come from records already read through safefs."""
+    """W2's `Register.read_only` (no lock, no write; every write method refused), with
+    its world and its three side-file reads replaced by what was read here from the
+    sealed bytes (STOP-GAP, see the module's note). The log was checked to be a plain,
+    bounded file through safefs before `read_only` opens it."""
     from stemma.register.store import Register
 
-    reg = Register.__new__(Register)
-    reg.run_dir = run_dir
-    reg.dir = run_dir / "register"
+    reg = Register.read_only(run_dir)
     reg.wm = wm
-    reg._evidence = None
-    reg._rerun = None  # type: ignore[assignment]
-    reg._relied = []
-    reg._lock = reg.dir / "register"
     revoked, verified = checks.revoked, checks.verified
 
     def refused_by(cid: str) -> frozenset[str]:

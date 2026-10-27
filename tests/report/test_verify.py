@@ -62,18 +62,15 @@ def test_a_sealed_run_passes_and_a_pinned_digest_is_checked(
     release(run_dir)
     digest = seal(run_dir)
     result = verify.verify(run_dir)
-    # A manifest that does not seal checks.jsonl leaves revocations unauthenticated: the
-    # result is then INCOMPLETE, never PASS.
-    ok = "PASS" if checks_sealed(run_dir) else "INCOMPLETE"
-    assert result.outcome == ok and result.seal.state == "sealed", verify.render(result)
-    if ok == "PASS":
-        assert "against the run's own manifest (not pinned)" in verify.render(result)
+    assert checks_sealed(run_dir)
+    assert result.outcome == "PASS" and result.seal.state == "sealed", verify.render(result)
+    assert "against the run's own manifest (not pinned)" in verify.render(result)
     pinned = verify.verify(run_dir, expect=digest)
-    assert pinned.outcome == ok and pinned.seal.state == "pinned"
+    assert pinned.outcome == "PASS" and pinned.seal.state == "pinned"
     assert result.release_state == "released"
     wrong = verify.verify(run_dir, expect="0" * 64)
     assert wrong.outcome == "FAIL" and "not to the pinned" in section(wrong, "seal").failures[0]
-    assert verify.main([str(run_dir), "--expect", digest]) == (0 if ok == "PASS" else 3)
+    assert verify.main([str(run_dir), "--expect", digest]) == 0
     assert verify.main([str(run_dir), "--expect", "nothex"]) == 2
 
 
@@ -330,20 +327,17 @@ def filed_bundle(run_dir: Path, cid: str) -> str | None:
 
 
 @needs_sandbox
-def test_an_edited_script_no_longer_reproduces(run: tuple[Path, dict[str, str]]) -> None:
-    """Before stored bundles, the working script is re-run, so an edit changes the
-    number. With a stored bundle (v0.4), the filed copy is re-run, the claim still
-    reproduces, and the edit of the working copy is reported."""
+def test_an_edited_working_script_is_reported_and_the_filed_copy_reruns(
+        run: tuple[Path, dict[str, str]]) -> None:
+    """With a stored bundle (v0.4), the filed copy is re-run, so the claim still
+    reproduces, and the edit of the working copy in analysis/ is reported."""
     run_dir, ids = run
     (run_dir / "analysis/helper.py").write_text("def years_left():\n    return 5\n")
     result = verify.verify(run_dir)
     calc = section(result, "calculations")
-    if filed_bundle(run_dir, ids["proj"]) is None:
-        assert len(calc.failures) == 1 and ids["proj"][:12] in calc.failures[0]
-        assert "now reports 412.0; the claim says 372" in calc.failures[0]
-    else:
-        assert calc.failures == []
-        assert "1 re-run from the copy filed with the claim" in calc.extra
+    assert filed_bundle(run_dir, ids["proj"]) is not None
+    assert calc.failures == []
+    assert "1 re-run from the copy filed with the claim" in calc.extra
 
 
 @needs_sandbox
@@ -429,10 +423,8 @@ def test_a_memo_never_hides_a_changed_script(run: tuple[Path, dict[str, str]]) -
     memo: verify.Memo = {}
     assert not verify.verify(run_dir, memo=memo).failures and len(memo) == 1
     sha = filed_bundle(run_dir, ids["proj"])
-    if sha is None:  # the working copy is what re-runs
-        target = run_dir / "analysis/helper.py"
-    else:  # the filed copy is what re-runs
-        target = next(p for p in (run_dir / "store").rglob("helper.py") if sha in str(p))
+    assert sha is not None  # the filed copy is what re-runs
+    target = next(p for p in (run_dir / "store").rglob("helper.py") if sha in str(p))
     os.chmod(target, 0o644)
     target.write_text("def years_left():\n    return 5\n")
     fails = section(verify.verify(run_dir, memo=memo), "calculations").failures
@@ -487,8 +479,7 @@ def test_a_forged_revocation_after_the_seal_is_never_read(
     run_dir, _ids = run
     release(run_dir)
     seal(run_dir)
-    if not checks_sealed(run_dir):
-        pytest.skip("this manifest does not seal checks.jsonl yet (verify says INCOMPLETE)")
+    assert checks_sealed(run_dir)
     checks = run_dir / "register/checks.jsonl"
     checks.write_bytes(checks.read_bytes() + json.dumps(
         {"kind": "release_blocked", "request_id": "", "at": "2030-01-03T00:00:00Z",

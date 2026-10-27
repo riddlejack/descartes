@@ -225,16 +225,19 @@ def test_live_one_clean_call_drafts_a_valid_onboarding() -> None:
 
 def test_the_drivers_own_loader_decides_before_anything_is_written(tmp_path: Path) -> None:
     """Codex recheck M2: a task the driver rejects was written and reported as success."""
+    code, task, _out = run_new(tmp_path, [], scripted(*[""] * 9),
+                               validate=new.validate_with_driver)
+    assert code == 0 and task is not None
+
+
+def test_a_driver_that_predates_v04_refuses_rather_than_skips(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from stemma.driver import task as driver_task
 
-    v04 = "scope" in getattr(driver_task, "_TASK_KEYS", frozenset())
+    monkeypatch.setattr(driver_task, "_TASK_KEYS", frozenset({"question", "intake"}))
     code, task, out = run_new(tmp_path, [], scripted(*[""] * 9),
                               validate=new.validate_with_driver)
-    if v04:
-        assert code == 0 and task is not None
-    else:
-        assert code == 2 and task is None and "predates task.json v0.4" in out[-1]
-    assert not (tmp_path / "task.json").exists() or v04
+    assert code == 2 and task is None and "predates task.json v0.4" in out[-1]
 
 
 def test_a_task_the_driver_refuses_is_never_written(tmp_path: Path) -> None:

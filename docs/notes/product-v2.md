@@ -230,3 +230,15 @@ as on this branch, and `stemma verify|report|new` reach these entry points.
   v0.4: on this branch alone it now refuses, and after the merge it writes.
 - Folder and file names may now start with a dot (`.claude`), but `.` and `..` are
   still refused.
+
+## On v2-integration: W2's code imported directly
+
+The branch is rebased onto `v2-integration`. `report/compat.py` and every fallback are
+gone: verify imports `manifest.check`, `manifest.after_seal`, `manifest.parse_log`,
+`derivation.build_bundle` and `filing.rerun_filed` directly. A function that is missing
+now fails loudly at import, so verify can never quietly run other code. The test fixture
+seals with `manifest.seal` (format `stemma-release-manifest/2`).
+
+One stop-gap is left, and it is marked: `report/ledger.py` folds the sealed bytes in
+memory. W2's `Register.read_only` reads the whole log file, and a release must be read
+from its sealed bytes only.

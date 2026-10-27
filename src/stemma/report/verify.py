@@ -34,8 +34,6 @@ that could not run (no sandbox on this machine) makes the result INCOMPLETE.
 from __future__ import annotations
 
 import argparse
-import ast
-import fnmatch
 import functools
 import hashlib
 import json
@@ -51,9 +49,10 @@ from typing import Any, Final
 
 from stemma.evidence.errors import EvidenceError
 from stemma.evidence.quotes import find_quote
-from stemma.register.derivation import DerivationError
+from stemma.register import manifest as reg_manifest
+from stemma.register.derivation import DerivationError, build_bundle
+from stemma.register.filing import rerun_filed
 from stemma.report import ledger, runread, safefs
-from stemma.report.compat import w2
 from stemma.report.errors import RunReadError
 from stemma.report.runread import FINAL_REVIEW_FILES, RUN_ENTITY, Run
 
@@ -68,8 +67,7 @@ MANIFEST_MAX_BYTES: Final = 64 * 1024 * 1024
 # Resource limit: bytes of one receipt read.
 RECEIPT_MAX_BYTES: Final = 16 * 1024 * 1024
 SOURCED_TIERS: Final = frozenset({"observed", "interested_party", "secondary"})
-MANIFEST: Final = "release/manifest.json"
-MANIFEST_FORMAT: Final = "stemma-release-manifest/1"
+MANIFEST: Final = reg_manifest.MANIFEST
 _SHA = re.compile(r"[0-9a-f]{64}")
 # Exceptions a malformed record can raise inside a check; each becomes a named failure.
 MALFORMED: Final = (KeyError, TypeError, ValueError, AttributeError, IndexError,
@@ -170,16 +168,11 @@ def guarded(key: str, label: str, fn: Callable[..., Section], *args: Any) -> Sec
 
 
 # ----------------------------------------------------------------------- seal
-def _matches(path: str, patterns: list[str]) -> bool:
-    for p in patterns:
-        if fnmatch.fnmatchcase(path, p) or (p.startswith("**/")
-                                            and fnmatch.fnmatchcase(path, p[3:])):
-            return True
-    return False
-
-
 def check_seal(run_dir: Path, log: ledger.Log | None, expect: str | None,
                seal: Seal) -> Section:
+    """The run against its release manifest, by the register's own `manifest.check` (the
+    code `finish_run` sealed it with); the manifest against a pinned digest when one is
+    given. Lines the check records gained after the seal are reported, never read."""
     sec = Section("seal", "Seal")
     raw = safefs.maybe(safefs.read_bytes, run_dir, MANIFEST, MANIFEST_MAX_BYTES)
     if raw is None:
@@ -190,95 +183,26 @@ def check_seal(run_dir: Path, log: ledger.Log | None, expect: str | None,
         return sec
     digest = hashlib.sha256(raw).hexdigest()
     seal.digest = digest
-    if expect is not None:
-        if expect.lower() != digest:
-            sec.failures.append(f"{MANIFEST} hashes to {digest}, not to the pinned "
-                                f"{expect.lower()}.")
-            sec.extra = "the manifest does not match the pinned digest"
-            return sec
-        seal.state = "pinned"
-    else:
-        seal.state = "sealed"
-    try:
-        man = json.loads(raw)
-    except (ValueError, RecursionError):
-        sec.failures.append(f"{MANIFEST} is not JSON.")
+    if expect is not None and expect.lower() != digest:
+        sec.failures.append(f"{MANIFEST} hashes to {digest}, not to the pinned "
+                            f"{expect.lower()}.")
+        sec.extra = "the manifest does not match the pinned digest"
         return sec
+    seal.state = "pinned" if expect is not None else "sealed"
+    sec.failures += [f"{line}." for line in reg_manifest.check(run_dir, expect)]
+    try:
+        files = json.loads(raw).get("files")
+    except (ValueError, RecursionError, AttributeError):
+        files = None
+    sec.done = len(files) if isinstance(files, list) else 0
+    later = reg_manifest.after_seal(run_dir)
     pin = "pinned outside the run" if seal.state == "pinned" else (
         "the run's own manifest, not pinned: pass --expect <sha256> with a digest kept "
         "outside the run folder")
-    w2_check = w2("stemma.register.manifest", "check")
-    if w2_check is not None:  # the register's own check, as finish_run sealed it
-        sec.failures += [f"{line}." for line in w2_check(run_dir, expect)
-                         if "not the pinned" not in line]
-        files = man.get("files") if isinstance(man, dict) else None
-        sec.done = len(files) if isinstance(files, list) else 0
-        sec.extra = f"{_n(sec.done)} sealed files, the log among them, re-hashed against {pin}"
-        return sec
-    if not isinstance(man, dict) or man.get("format") != MANIFEST_FORMAT:
-        sec.failures.append(f"{MANIFEST} is not a {MANIFEST_FORMAT} manifest.")
-        return sec
-    files, excluded, logrec = man.get("files"), man.get("excluded", []), man.get("log")
-    if (not isinstance(files, list) or not isinstance(excluded, list)
-            or not all(isinstance(p, str) for p in excluded)):
-        sec.failures.append(f"{MANIFEST}: files or excluded is not a list.")
-        return sec
-    excluded = [*excluded, MANIFEST]
-    log_path = logrec.get("path") if isinstance(logrec, dict) else None
-    sealed: dict[str, tuple[int, str]] = {}
-    for i, f in enumerate(files, start=1):
-        if (not isinstance(f, dict) or not isinstance(f.get("path"), str)
-                or not isinstance(f.get("size"), int) or isinstance(f.get("size"), bool)
-                or not isinstance(f.get("sha256"), str) or not _SHA.fullmatch(f["sha256"])):
-            sec.failures.append(f"{MANIFEST}: entry {i} is not {{path, size, sha256}}.")
-            continue
-        try:
-            safefs.parts(f["path"])
-        except RunReadError as exc:
-            sec.failures.append(f"{MANIFEST}: entry {i}: {exc}.")
-            continue
-        sealed[f["path"]] = (f["size"], f["sha256"])
-    present, problems = safefs.walk(run_dir)
-    for prob in problems:
-        name = prob.split(":", 1)[0].strip("'\"")
-        if not _matches(name, excluded):
-            sec.failures.append(f"{prob}.")
-    for rel, (size, sha) in sorted(sealed.items()):
-        if rel == log_path:
-            continue  # the log is sealed by its prefix, below
-        sec.done += 1
-        if rel not in present:
-            sec.failures.append(f"{rel} was removed after the release.")
-            continue
-        try:
-            got, got_size = safefs.sha256(run_dir, rel)
-        except RunReadError as exc:
-            sec.failures.append(f"{rel}: {exc}.")
-            continue
-        if got != sha or got_size != size:
-            sec.failures.append(f"{rel} changed after the release.")
-    for rel in sorted(present):
-        if rel not in sealed and rel != log_path and not _matches(rel, excluded):
-            sec.failures.append(f"{rel} was added after the release.")
-    appended = 0
-    if isinstance(logrec, dict) and log is not None:
-        log_size, log_sha = logrec.get("bytes"), logrec.get("sha256")
-        if (not isinstance(log_size, int) or isinstance(log_size, bool)
-                or not isinstance(log_sha, str)):
-            sec.failures.append(f"{MANIFEST}: log is not {{path, bytes, sha256}}.")
-        elif (len(log.data) < log_size
-              or hashlib.sha256(log.data[:log_size]).hexdigest() != log_sha):
-            sec.failures.append("register/log.jsonl: the sealed part of the log changed or "
-                                "is shorter than at release.")
-        elif len(log.data) > log_size:
-            appended = log.data[log_size:].count(b"\n")
-            sec.failures.append(f"register/log.jsonl: {len(log.data) - log_size:,} bytes "
-                                f"({appended} transaction(s)) appended after the seal; they "
-                                f"are never read.")
-        sec.done += 1
-    elif log_path is None:
-        sec.failures.append(f"{MANIFEST} does not seal the register's log.")
-    sec.extra = f"{_n(sec.done)} sealed files and the log re-hashed against {pin}"
+    sec.extra = (f"{_n(sec.done)} sealed files, the log and the check records re-hashed "
+                 f"against {pin}"
+                 + (f"; {len(later)} check record(s) added after the seal, never read"
+                    if later else ""))
     return sec
 
 
@@ -441,75 +365,14 @@ def _check_quotations(run: Run, receipts: dict[str, dict[str, Any]]) -> Section:
 Rerunner = Callable[..., Any]
 
 
-def _imported_names(source: bytes) -> set[str]:
-    """Top-level module names a script imports statically (read with `ast`, never run)."""
-    names: set[str] = set()
-    for node in ast.walk(ast.parse(source)):
-        if isinstance(node, ast.Import):
-            names.update(a.name.split(".")[0] for a in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            names.add(node.module.split(".")[0])
-    return names
-
-
 def bundle_for(run_dir: Path, script: str) -> Any:
-    """The re-run bundle of an `analysis/` script: W2's `build_bundle` (the code
-    `file_claim` runs) once merged, else this module's stop-gap `code_bundle`."""
-    build = w2("stemma.register.derivation", "build_bundle")
-    if build is None:
-        return code_bundle(run_dir, script)
+    """The re-run bundle of an `analysis/` script, by the register's own `build_bundle`
+    (the code `file_claim` ran), the path checked first."""
     try:
         safefs.parts(script)
     except RunReadError as exc:
         raise DerivationError(f"script {script!r} is not a .py file in analysis/") from exc
-    return build(run_dir, script)
-
-
-def code_bundle(run_dir: Path, script: str) -> Any:
-    """STOP-GAP, to be replaced by W2's public bundle builder in
-    `stemma.register.derivation` once both branches are merged, so that verify and
-    `file_claim` re-run exactly the same code.
-
-    The script and the sibling modules it imports, transitively, as the register's
-    `Code`. Every file is read confined and bounded (no link followed, regular files
-    only). A script that imports a sibling dynamically fails loudly on re-run (no
-    result), never passes silently."""
-    code_cls = w2("stemma.register.derivation", "Code")  # absent once W2 is merged
-    if code_cls is None:
-        raise DerivationError("the register has no Code class; use bundle_for")
-    try:
-        segs = safefs.parts(script)
-    except RunReadError as exc:
-        raise DerivationError(f"script {script!r} is not a .py file in analysis/") from exc
-    if len(segs) < 2 or segs[0] != "analysis" or not segs[-1].endswith(".py"):
-        raise DerivationError(f"script {script!r} is not a .py file in analysis/")
-    folder = "/".join(segs[:-1])
-    siblings = set(safefs.listdir(run_dir, folder))
-    files: dict[str, bytes] = {}
-    todo = [segs[-1]]
-    while todo:
-        name = todo.pop()
-        if name in files:
-            continue
-        try:
-            data = safefs.read_bytes(run_dir, f"{folder}/{name}", CODE_MAX_BYTES)
-        except safefs.Missing as exc:
-            raise DerivationError(f"{folder}/{name} does not exist") from exc
-        except RunReadError as exc:
-            raise DerivationError(str(exc)) from exc
-        files[name] = data
-        if len(files) > CODE_MAX_FILES or sum(map(len, files.values())) > CODE_MAX_BYTES:
-            raise DerivationError(f"{script} imports more than {CODE_MAX_FILES} files or "
-                                  f"{CODE_MAX_BYTES} bytes of code (a resource limit)")
-        try:
-            imported = _imported_names(data)
-        except (SyntaxError, ValueError, RecursionError) as exc:
-            raise DerivationError(f"{folder}/{name} is not valid Python") from exc
-        # A sibling named by an import is read (and refused if it is a link); a module
-        # that is not a sibling is the interpreter's own.
-        todo.extend(f"{m}.py" for m in sorted(imported)
-                    if f"{m}.py" in siblings and f"{m}.py" not in files)
-    return code_cls(segs[-1], files)
+    return build_bundle(run_dir, script)
 
 
 def experiment_key(code: Any, values: dict[str, float], documents: dict[str, str]) -> str:
@@ -544,8 +407,9 @@ def memoized(fn: Rerunner, memo: Memo | None) -> Rerunner:
 
 
 class _Evidence:
-    """The stored text of a receipt, read confined and bounded, in the shape the
-    register's re-run asks for (`read_text`; QuoteCheckFailed when there is none)."""
+    """The register's Evidence port over stored texts read confined and bounded:
+    `read_text` for a re-run's documents, `check_quote` with part A's `find_quote`.
+    QuoteCheckFailed when a receipt has no stored text."""
 
     def __init__(self, run: Run) -> None:
         self.run = run
@@ -558,6 +422,16 @@ class _Evidence:
         if text is None:
             raise QuoteCheckFailed(f"receipt {receipt_id} has no stored text")
         return text
+
+    def check_quote(self, run_dir: Path, receipt_id: str, quote: str) -> bool:
+        from stemma.register.evidence_port import QuoteCheckFailed
+
+        text = self.read_text(run_dir, receipt_id)
+        rec = runread.receipt(self.run.dir, receipt_id) or {}
+        try:
+            return bool(find_quote(text, quote, runread.flagged_ranges(rec))["found"])
+        except (EvidenceError, RunReadError) as exc:
+            raise QuoteCheckFailed(str(exc)) from exc
 
 
 def _rerun_one(run: Run, c: dict[str, Any], rerun_fn: Rerunner,
@@ -602,10 +476,9 @@ def _rerun_checked(run: Run, c: dict[str, Any], fn: Rerunner
     if not isinstance(script, str):
         return f"{_cid(c)}: an estimated claim with no recorded script.", None, None
     filed = deriv.get("bundle_sha256")
-    rerun_filed = w2("stemma.register.filing", "rerun_filed")
     note = None
     try:
-        if isinstance(filed, str) and rerun_filed is not None:
+        if isinstance(filed, str):
             # v0.4: the bundle filed with the claim, from the store, as file_claim ran it
             rr = rerun_filed(run.dir, c, _lookup(run), _Evidence(run), fn)
             try:
@@ -873,7 +746,7 @@ def main(argv: list[str] | None = None) -> int:
     return result.exit_code
 
 
-__all__ = ["MANIFEST", "RUN_ENTITY", "Result", "Section", "check_seal", "code_bundle", "main",
+__all__ = ["MANIFEST", "RUN_ENTITY", "Result", "Section", "bundle_for", "check_seal", "main",
            "render", "verify"]
 
 
