@@ -145,7 +145,8 @@ def test_frame_only_ends_when_the_frame_is_done(cfg: DriverConfig, tmp: Path, fa
     lead_settings = json.loads((run / ".stemma/settings/lead.json").read_text())
     assert "Agent" in lead_settings["permissions"]["deny"]
     log = [json.loads(x) for x in (run / ".stemma/arrivals.jsonl").read_text().splitlines()]
-    assert log[0]["kind"] == "notice" and "stops after the frame" in log[0]["text"]
+    frame = [r for r in log if r["kind"] == "notice" and r["name"] == "frame_only"]
+    assert frame and "stops after the frame" in frame[0]["text"]
     # No draft review or claim check was ever asked for.
     assert {s.request.role for s in checks_api.states(run).values()} == {"blind-framer"}
 
@@ -378,3 +379,50 @@ def test_an_interrupted_wait_stops_the_driver(cfg: DriverConfig, tmp: Path, fake
                       sleep=interrupted) == OUTCOME_CODES["driver_stopped"]
 
 
+
+
+# --- The lead is told which task files exist -------------------------------------------
+
+def _notices(run: Path) -> list[dict[str, Any]]:
+    return [json.loads(x) for x in (run / ".stemma/arrivals.jsonl").read_text().splitlines()
+            if json.loads(x)["kind"] == "notice"]
+
+
+def test_the_leads_first_call_names_the_task_files(cfg: DriverConfig, tmp: Path,
+                                                   limits: Limits) -> None:
+    att = tmp / "brief.txt"
+    att.write_text("a user's file")
+    run = create_run(cfg, write_task(tmp, intake={"Who decides?": "The board."},
+                                     options=["a", "b"], attachments=[str(att)]),
+                     limits=limits)
+    text = next(n for n in _notices(run) if n["name"] == "task_files")["text"]
+    assert ("task/question.md, task/intake.md, task/options.md, task/task.json." in text)
+    assert "task/attachments/brief.txt" in text
+    for rel in ("task/question.md", "task/intake.md", "task/options.md", "task/task.json"):
+        assert (run / rel).is_file()
+
+
+def test_a_question_alone_names_two_files(cfg: DriverConfig, tmp: Path,
+                                          limits: Limits) -> None:
+    run = create_run(cfg, write_task(tmp), limits=limits)
+    text = next(n for n in _notices(run) if n["name"] == "task_files")["text"]
+    assert text == "Stemma: this run's task files are task/question.md, task/task.json."
+    assert not (run / "task/intake.md").exists() and not (run / "task/options.md").exists()
+
+
+def test_the_notice_reaches_the_leads_first_tool_call(cfg: DriverConfig, tmp: Path,
+                                                      limits: Limits) -> None:
+    import subprocess
+    import sys
+
+    run = create_run(cfg, write_task(tmp, stop_after="frame"), limits=limits)
+    hook = {"hook_event_name": "PreToolUse", "tool_name": "Read",
+            "tool_input": {"file_path": str(run / "task/question.md")},
+            "agent_type": "stemma:lead", "session_id": "s-1", "tool_use_id": "t1",
+            "cwd": str(run)}
+    r = subprocess.run([sys.executable, "-I", "-m", "stemma.hooks", "pre"],
+                       input=json.dumps(hook), capture_output=True, text=True, check=False,
+                       env={"PATH": "/usr/bin:/bin", "STEMMA_RUN_DIR": str(run)}, timeout=60)
+    assert r.returncode == 0, r.stderr
+    ctx = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+    assert "task/question.md, task/task.json" in ctx and "stops after the frame" in ctx

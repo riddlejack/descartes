@@ -54,6 +54,24 @@ def _write_task(run_dir: Path, task: Task) -> dict[str, Any]:
     return record
 
 
+def task_files_notice(record: dict[str, Any]) -> str:
+    """The notice naming every task file this run holds, in reading order."""
+    files = ["task/question.md"]
+    if record.get("intake") is not None:
+        files.append("task/intake.md")
+    if record.get("options") is not None:
+        files.append("task/options.md")
+    files.append("task/task.json")
+    lines = ["Stemma: this run's task files are " + ", ".join(files) + "."]
+    if record.get("criteria"):
+        lines.append("The user's criteria are in criteria.md (written by the driver).")
+    atts = list(record.get("attachments") or [])
+    if atts:
+        lines.append("The user attached " + ", ".join(atts) + "; a worker captures each with "
+                     "capture_file (the lead reads no sources).")
+    return " ".join(lines)
+
+
 CRITERIA_FILE = "criteria.md"
 # The notice the lead's first tool call carries in a frame-only run (CONTRACTS v0.4,
 # section 9). The hook delivers it; the driver ends the run when the frame is done.
@@ -108,6 +126,11 @@ def create_run(cfg: DriverConfig, task_path: Path, limits: Limits | None = None,
         "limits": lim.to_json(),
     }
     hostio.write_json(run_dir, RUN_JSON, run)
+    from stemma.hooks.arrivals import queue_notice
+
+    # The lead has no folder listing (no Glob, no LS, no reading task/ as a folder): its
+    # first tool call is told which task files this run holds, so it never guesses.
+    queue_notice(run_dir, "task_files", task_files_notice(task_record))
     if task.stop_after == "frame":
         from stemma.hooks.arrivals import queue_notice
 

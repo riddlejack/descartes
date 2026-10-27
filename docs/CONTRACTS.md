@@ -172,6 +172,11 @@ D1 to D10); where an older line below disagrees, section 0 wins.
 - **CLI**: `stemma report|verify|new` call builder W3's entry points
   (`stemma.report.site`, `stemma.report.verify`, `stemma.onboard.new`), or refuse with
   exit code 2 when they are not installed.
+- **Task files notice**: every run's lead receives, with its first tool call, a notice
+  naming the task files this run holds (`task/question.md`, then `task/intake.md` and
+  `task/options.md` when present, `task/task.json`, the driver's `criteria.md` when the
+  task gave criteria, and each attachment path for a worker to capture), since the lead
+  has no folder listing.
 - **Frame-only runs** (section 9): `stop_after: "frame"` in task.json, or `stemma start
   --frame-only`. The lead's first tool call carries a notice saying so, and the lead may
   start no worker (Agent is denied). The driver ends the run once intake.md, criteria.md
