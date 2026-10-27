@@ -101,6 +101,8 @@ AWAIT_MAX_S = 300
 AWAIT_POLL_S = 2.0
 
 _SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+# A run of the characters an id is made of, in free text (orders naming a node).
+_ID_RUN = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 def closure(nodes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -199,6 +201,18 @@ def now() -> str:
 
 def claim_entity(cid: str) -> str:
     return f"claim:{SYSTEM}:{cid}"
+
+
+def _names(value: Any, text: str) -> bool:
+    """True when `value` (a fact's value: text, numbers, lists, objects) holds `text` as
+    a whole string anywhere in it."""
+    if isinstance(value, str):
+        return value == text
+    if isinstance(value, dict):
+        return any(_names(v, text) for v in value.values())
+    if isinstance(value, list):
+        return any(_names(v, text) for v in value)
+    return False
 
 
 def node_entity(node_id: str) -> str:
@@ -1228,10 +1242,12 @@ class Register:
         return rec
 
     def _holders(self, n: dict[str, Any], existing: dict[str, dict[str, Any]]) -> list[str]:
-        """What holds a node in the tree (exact facts): its children, a branch or work on
-        it, a branch verdict recorded on it, a review point naming it, a branch order or
-        revision order naming its id. Claims name branches, not nodes, so a node with no
-        branch has no claims."""
+        """What holds a node in the tree (exact facts). Only a node framing left unused
+        is removed: one with no children, never assigned a branch, with no status but
+        open or set aside, that no fact in the register's whole history names (revoked
+        sessions' included) and no branch order or revision order names. Its own
+        set-aside mark does not hold it. A child moved away earlier does not either:
+        moving it is how a duplicate's children join the node it merges into."""
         nid = str(n["id"])
         out = []
         kids = sorted(str(c["id"]) for c in existing.values() if c.get("parent") == nid)
@@ -1241,24 +1257,48 @@ class Register:
             out.append(f"branch {n['branch_id']} is assigned to it")
         if n.get("status") not in ("open", "set_aside"):
             out.append(f"its status is {n.get('status')}")
-        if self._live_facts(node_entity(nid), "branch_verdict"):
-            out.append("a branch verdict was recorded on it")
-        for pred in ("review_recorded", "branch_verdict_recorded"):
-            for rec in self._run_facts(pred):
-                out += [f"review point {pt.get('id')} names it"
-                        for pt in rec.get("points", []) if pt.get("node") == nid]
+        out += self._history_naming(nid, n.get("branch_id"))
         out += [f"{rel} names it" for rel in self._orders_naming(nid)]
+        return out
+
+    def _history_naming(self, nid: str, current_branch: Any) -> list[str]:
+        """Every write in the log that names node `nid` (Codex review of the removal,
+        27 Oct): a branch it was ever assigned, a fact about it, a fact whose value holds
+        its id (a review point, say). Read from the whole log, revoked sessions'
+        writes included: a revoked review no longer counts toward release, but it was
+        recorded and names the node."""
+        entity = node_entity(nid)
+        out: list[str] = []
+        for ev in self.wm.events():
+            pay = ev["payload"]
+            if ev["kind"] == "upsertEntity" and pay.get("id") == entity:
+                branch = (pay.get("attrs") or {}).get("branch_id")
+                said = f"it was assigned branch {branch}"
+                if branch and branch != current_branch and said not in out:
+                    out.append(said)
+            elif ev["kind"] == "assertFact":
+                pred, value = pay.get("predicate"), pay.get("value")
+                if pay.get("about") == entity:
+                    out.append(f"a {str(pred).replace('_', ' ')} was recorded on it")
+                elif pred == "node_set_aside" and isinstance(value, dict) and (
+                        value.get("node") == nid):
+                    continue  # its own set-aside mark
+                elif pred in ("review_recorded", "branch_verdict_recorded") and isinstance(
+                        value, dict) and isinstance(value.get("points"), list):
+                    out += [f"review point {pt.get('id')} names it" for pt in value["points"]
+                            if isinstance(pt, dict) and pt.get("node") == nid]
+                elif _names(value, nid):
+                    out.append(f"a {pred} record names it")
         return out
 
     def _orders_naming(self, nid: str) -> list[str]:
         """Branch orders (`order.md`) and revision orders (`revision-<n>.md`) anywhere
-        under branches/ whose text holds the id as a whole id (a trailing full stop is
-        punctuation, not part of it). Links are not followed."""
+        under branches/ whose text holds the id as a whole id: each run of id characters
+        is one id, less any trailing full stops (punctuation), so q9._child and q9-x are
+        other ids. Links are not followed."""
         root = self.run_dir / "branches"
         if not root.is_dir() or root.is_symlink():
             return []
-        pat = re.compile(rf"(?<![A-Za-z0-9_.-]){re.escape(nid)}(?![A-Za-z0-9_-])"
-                         rf"(?!\.[A-Za-z0-9])")
         hits = []
         for dirpath, _dirs, files in os.walk(root, followlinks=False):
             for name in sorted(files):
@@ -1267,7 +1307,8 @@ class Register:
                 path = Path(dirpath) / name
                 if path.is_symlink() or not path.is_file():
                     continue
-                if pat.search(path.read_text(encoding="utf-8", errors="replace")):
+                text = path.read_text(encoding="utf-8", errors="replace")
+                if any(tok.rstrip(".") == nid for tok in _ID_RUN.findall(text)):
                     hits.append(path.relative_to(self.run_dir).as_posix())
         return sorted(hits)
 
@@ -1441,6 +1482,7 @@ class Register:
             self.wm.refresh()
             # Authorization and write under one lock: no new round can start in between.
             self._session_prompt_is(caller, "branch-reviewer", f"branch:{branch_id}")
+            self._points_still_on_the_tree(checked)
             if self._apply_verdicts():
                 self._write_tree()
             state = checks_api.state_for_session(self.run_dir, caller.session_id, records=self._ck_records)
@@ -1554,6 +1596,18 @@ class Register:
             self._freeze_criteria(caller, f"revised: {reason.strip()}", text)
             frozen = self.frozen_criteria()
         return {"criteria": self.criteria(), **(frozen or {})}
+
+    def _points_still_on_the_tree(self, checked: list[dict[str, Any]]) -> None:
+        """Under the writers' lock: each node a point names is still in the tree. The
+        points were checked before the lock; a removal may have landed since (Codex
+        review of the removal #1)."""
+        if not any(pt["node"] for pt in checked):
+            return
+        live = {str(n["id"]) for n in self.tree()}
+        for i, pt in enumerate(checked, start=1):
+            if pt["node"] is not None and pt["node"] not in live:
+                raise Refused(f"Refused: point {i} names node {pt['node']!r}, which is not "
+                              f"in the tree.")
 
     def _check_points(self, points: Any) -> list[dict[str, Any]]:
         """Each point is {point, material, node, criterion}: node a tree node id or null,
@@ -1956,6 +2010,7 @@ class Register:
             self._session_prompt_is(caller, roles.short(caller.agent_type), f"draft:{version}")
             if caller.agent_type in self._recorded_reviews(version):
                 raise Refused("Refused: this review is already recorded.")
+            self._points_still_on_the_tree(checked)
             self._write(rel, text)
             abbr = REVIEW_ABBR[caller.agent_type]
             asked = next((d for d in self._run_facts("draft_submitted")

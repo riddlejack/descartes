@@ -8,14 +8,25 @@ from __future__ import annotations
 
 import json
 import multiprocessing as mp
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 import pytest
-from test_store import LEAD, WORKER, FakeEvidence, reviewer_for, write_record
+from test_store import (
+    LEAD,
+    WORKER,
+    FakeEvidence,
+    checker_for,
+    launched,
+    ready_run,
+    reviewer_for,
+    write_record,
+)
 
 from stemma.register.filing import Refused
-from stemma.register.store import Caller, Register
+from stemma.register.store import SET_ASIDE_MAX_CHARS, Caller, Register
 
 MERGED = "Merged into q2: now asked of every unit alike"
 
@@ -94,6 +105,58 @@ def test_a_node_an_order_names_is_not_removed(reg: Register) -> None:
     _refused(reg, "q32", "branches/b2/sub/b21/revision-1.md names it")
 
 
+def test_a_longer_id_in_an_order_is_not_the_node(reg: Register) -> None:
+    # Codex review #5: q9._child and q9.-child are other ids, not q9 and punctuation.
+    (reg.run_dir / "branches/b1").mkdir(parents=True)
+    (reg.run_dir / "branches/b1/order.md").write_text("Answer q9._child, then q9.-child.\n")
+    reg.tree_upsert(LEAD, node("q9"))
+    reg.tree_upsert(LEAD, {"id": "q9", "remove": MERGED})
+    (reg.run_dir / "branches/b1/order.md").write_text("Answer q8.\n")
+    reg.tree_upsert(LEAD, node("q8"))
+    _refused(reg, "q8", "branches/b1/order.md names it")
+
+
+def test_a_node_that_ever_had_a_branch_is_not_removed(reg: Register) -> None:
+    # Codex review #2: a node detached from its branch (branch cleared, status reset)
+    # may still be named by the branch's record and claims; it stays.
+    reg.tree_upsert(LEAD, node("q9", branch_id="b9"))
+    reg.tree_upsert(LEAD, {"id": "q9", "branch_id": None, "status": "open"})
+    _refused(reg, "q9", "it was assigned branch b9")
+
+
+def test_a_node_its_own_branch_verdict_names_is_not_removed(reg: Register) -> None:
+    # Codex review #4: reviewed, detached and set aside, the node still has its verdict.
+    reg.tree_upsert(LEAD, node("q9", branch_id="b9"))
+    write_record(reg, "b9")
+    reg.propose_branch_done(WORKER, "b9")
+    reg.record_branch_verdict(reviewer_for(reg, "b9"), "b9", "answered", "done")
+    reg.tree_upsert(LEAD, {"id": "q9", "branch_id": None, "set_aside": MERGED})
+    _refused(reg, "q9", "a branch verdict was recorded on it")
+
+
+def test_a_node_a_revoked_reviewers_point_names_is_not_removed(reg: Register) -> None:
+    # Codex review #3: a revoked session's verdict does not count toward release, but
+    # its review is still recorded and still names the node.
+    ready_run(reg)
+    reg.tree_upsert(LEAD, node("q9"))
+    (reg.run_dir / "draft/answer.v2.md").write_text("# v2\n")
+    reg.submit_draft(LEAD, 2)
+    who = launched(reg, "deciders-eye-reviewer", "draft:2", "s-p")
+    reg.record_review(who, 2, "text", [{"point": "p", "material": True, "node": "q9"}])
+    reg.revoke_session("s-p", "wrong model")
+    _refused(reg, "q9", "review point v2.de.1 names it")
+
+
+def test_a_final_review_point_names_the_node(reg: Register) -> None:
+    ready_run(reg)
+    reg.tree_upsert(LEAD, node("q9"))
+    (reg.run_dir / "draft/answer.v2.md").write_text("# v2\n")
+    reg.submit_draft(LEAD, 2)
+    who = launched(reg, "deciders-eye-reviewer", "draft:2", "s-p")
+    reg.record_review(who, 2, "text", [{"point": "p", "material": True, "node": "q9"}])
+    _refused(reg, "q9", "review point v2.de.1 names it")
+
+
 def test_a_node_a_review_point_names_is_not_removed(reg: Register) -> None:
     reg.tree_upsert(LEAD, node("n1", branch_id="b1"))
     reg.tree_upsert(LEAD, node("q9"))
@@ -113,6 +176,8 @@ def test_only_the_lead_removes_and_only_with_a_reason(reg: Register) -> None:
     for bad in ("", "   ", None, 3):
         with pytest.raises(Refused, match="remove is the reason"):
             reg.tree_upsert(LEAD, {"id": "q1", "remove": bad})
+    with pytest.raises(Refused, match="longer than"):
+        reg.tree_upsert(LEAD, {"id": "q1", "remove": "x" * (SET_ASIDE_MAX_CHARS + 1)})
     with pytest.raises(Refused, match="nothing but the node's id"):
         reg.tree_upsert(LEAD, {"id": "q1", "remove": MERGED, "statement": "x"})
     with pytest.raises(Refused, match="not a node"):
@@ -133,36 +198,107 @@ def test_a_removed_id_stays_removed(reg: Register) -> None:
     assert ids(reg) == ["q1"]
 
 
+def test_a_run_releases_after_a_removal(reg: Register) -> None:
+    cid = ready_run(reg)
+    reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
+    reg.tree_upsert(LEAD, node("q9", set_aside=MERGED))
+    reg.tree_upsert(LEAD, {"id": "q9", "remove": MERGED})
+    assert reg.finish_run(LEAD, 1)["finished"]
+    rec = json.loads((reg.run_dir / "deliverable/record.json").read_text())
+    assert rec["set_aside"] == []
+    assert [n["id"] for n in json.loads((reg.run_dir / "tree.json").read_text())["removed"]] == [
+        "q9"]
+
+
+# --- A review racing a removal (Codex review #1) -------------------------------------
+# The points are checked before the lock; the removal lands between that check and the
+# write. Driven in that order here, through the reviewer's own lock entry.
+
+def _removal_lands_first(reviewer_reg: Register, lead_reg: Register, nid: str) -> None:
+    original = reviewer_reg._exclusive
+
+    @contextmanager
+    def lead_first() -> Iterator[None]:
+        reviewer_reg._exclusive = original  # type: ignore[method-assign]  # once
+        lead_reg.tree_upsert(LEAD, {"id": nid, "remove": MERGED})
+        with original():
+            yield
+
+    reviewer_reg._exclusive = lead_first  # type: ignore[method-assign]
+
+
+def test_a_branch_review_point_on_a_node_removed_meanwhile_is_refused(reg: Register) -> None:
+    reg.tree_upsert(LEAD, node("n1", branch_id="b1"))
+    reg.tree_upsert(LEAD, node("q9"))
+    write_record(reg, "b1")
+    reg.propose_branch_done(WORKER, "b1")
+    who = reviewer_for(reg, "b1")
+    _removal_lands_first(reg, Register(reg.run_dir, evidence=FakeEvidence()), "q9")
+    with pytest.raises(Refused, match="point 1 names node 'q9', which is not in the tree"):
+        reg.record_branch_verdict(who, "b1", "bound", "unbounded",
+                                  points=[{"point": "no range", "material": True,
+                                           "node": "q9"}])
+    assert reg.run_facts("branch_verdict_recorded") == []
+    assert "q9" not in ids(reg)
+
+
+def test_a_final_review_point_on_a_node_removed_meanwhile_is_refused(reg: Register) -> None:
+    ready_run(reg)
+    reg.tree_upsert(LEAD, node("q9"))
+    (reg.run_dir / "draft/answer.v2.md").write_text("# v2\n")
+    reg.submit_draft(LEAD, 2)
+    who = launched(reg, "deciders-eye-reviewer", "draft:2", "s-p")
+    _removal_lands_first(reg, Register(reg.run_dir, evidence=FakeEvidence()), "q9")
+    with pytest.raises(Refused, match="point 1 names node 'q9', which is not in the tree"):
+        reg.record_review(who, 2, "text", [{"point": "p", "material": True, "node": "q9"}])
+    assert [r["version"] for r in reg.run_facts("review_recorded")] == [1, 1, 1]
+    assert not (reg.run_dir / "reviews/v2").exists()
+
+
 # --- A removal racing a branch assignment (separate processes, as MCP servers are) -----
 
 # Resource limit: race rounds, each a fresh run with one removal and one assignment.
 _ROUNDS = 12
 
 
+_RIVALS: dict[str, dict[str, Any]] = {
+    "assign": {"id": "q3", "branch_id": "b3"},
+    "child": node("q31", parent="q3"),
+}
+
+
 def _race(run: str, barrier: Any, which: str, out: Any) -> None:
     reg = Register(Path(run), evidence=FakeEvidence())
-    barrier.wait()
     try:
+        barrier.wait()
         if which == "remove":
             reg.tree_upsert(LEAD, {"id": "q3", "remove": MERGED})
         else:
-            reg.tree_upsert(LEAD, {"id": "q3", "branch_id": "b3"})
+            reg.tree_upsert(LEAD, _RIVALS[which])
         out.put((which, "ok"))
     except Refused as exc:
         out.put((which, str(exc)))
+    except BaseException:
+        barrier.abort()  # release the other racer: no hang
+        raise
 
 
-def test_a_removal_racing_a_branch_assignment_leaves_one_consistent_outcome(
-        tmp_path: Path) -> None:
+@pytest.mark.parametrize("rival,held_by,refused_after_removal", [
+    ("assign", "branch b3 is assigned to it", "q3 was removed"),
+    ("child", "child nodes q31", "parent q3 is not a node"),
+])
+def test_a_removal_racing_a_change_leaves_one_consistent_outcome(
+        tmp_path: Path, rival: str, held_by: str, refused_after_removal: str) -> None:
+    # Each round ends in exactly one of two consistent states; which one is the
+    # scheduler's (the review-race tests above drive one order deterministically).
     ctx = mp.get_context("spawn")
-    outcomes: set[str] = set()
     for i in range(_ROUNDS):
         run = tmp_path / f"run{i}"
         run.mkdir()
         Register(run, evidence=FakeEvidence()).tree_upsert(LEAD, node("q3"))
         barrier, out = ctx.Barrier(2), ctx.Queue()
         procs = [ctx.Process(target=_race, args=(str(run), barrier, w, out))
-                 for w in ("remove", "assign")]
+                 for w in ("remove", rival)]
         for p in procs:
             p.start()
         for p in procs:
@@ -171,14 +307,10 @@ def test_a_removal_racing_a_branch_assignment_leaves_one_consistent_outcome(
         got = dict(out.get(timeout=5) for _ in procs)
         reg = Register(run, evidence=FakeEvidence())
         if got["remove"] == "ok":
-            # Removal first: the assignment is refused and no node carries the branch.
-            assert "q3 was removed" in got["assign"]
+            # Removal first: the change is refused and the tree is empty.
+            assert refused_after_removal in got[rival]
             assert ids(reg) == [] and reg.run_facts("node_removed")
-            outcomes.add("removed")
         else:
-            # Assignment first: the removal is refused, naming the branch.
-            assert got["assign"] == "ok" and "branch b3 is assigned to it" in got["remove"]
-            assert [n.get("branch_id") for n in reg.tree()] == ["b3"]
-            assert not reg.run_facts("node_removed")
-            outcomes.add("assigned")
-    assert outcomes  # each round ended in exactly one of the two consistent states
+            # The change first: the removal is refused, naming what now holds the node.
+            assert got[rival] == "ok" and held_by in got["remove"]
+            assert "q3" in ids(reg) and not reg.run_facts("node_removed")
