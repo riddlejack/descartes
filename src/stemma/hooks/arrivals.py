@@ -81,6 +81,9 @@ def attach(run_dir: Path, src: Path) -> dict[str, Any]:
     """Copy `src` into task/arrivals/<n>/ and queue its notice; return the record."""
     if not (run_dir / "run.json").is_file():
         raise AttachError(f"{run_dir} is not a run folder (no run.json)")
+    if os.path.lexists(run_dir / "release" / "manifest.json"):
+        # A released run is sealed: a file added now would change what was released.
+        raise AttachError(f"{run_dir} is released and sealed; it takes no more attachments")
     name = _plain_name(src.name)
     data = _read_source(src)
     digest = hashlib.sha256(data).hexdigest()

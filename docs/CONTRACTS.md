@@ -628,7 +628,10 @@ Each guard has a producer in the live path, or it would block every run.
   queues a notice; the lead's next tool call receives the notice through a hook
   (`additionalContext`, *B verifies*), never through a file the lead must remember to
   check. The lead maps the arrival against its frame and tree at once and records
-  what it changed in `intake.md`. A task may deliver later attachments this way.
+  what it changed in `intake.md`. A task may deliver later attachments this way. v0.4:
+  `stemma attach` takes no run lock, so it works while the driver runs or waits for a
+  usage reset (the notice reaches the resumed lead's next tool call); a worker captures
+  the file (the lead reads no sources); a released, sealed run refuses attachments.
 - It launches the lead and every checking session, verifies the resolved model and
   effort of each (for the lead's subagents, from their transcripts, which land in
   the clean config's `projects/<cwd-slug>/`; a copied config folder is not signed
