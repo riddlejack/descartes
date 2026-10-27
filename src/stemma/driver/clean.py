@@ -1,7 +1,7 @@
 """The one clean launch of the pinned harness, for the driver and every other runner.
 
 `clean_launch` is the only way to build a session's argv, environment and settings, so no
-runner (the driver, a baseline, a sealed run) can be clean in name only. It always:
+runner (the driver or any other) can be clean in name only. It always:
 - builds the environment from nothing: HOME, USER, PATH, LANG and CLAUDE_CONFIG_DIR, plus
   only `env_extra`, which may not set CLAUDE_CODE_EFFORT_LEVEL, a CLAUDE_* key the probes
   did not prove, an ANTHROPIC_* key (they redirect the harness's login, endpoint or

@@ -43,9 +43,14 @@ def test_bad_switches_refused(given: dict[str, object]) -> None:
         fill_switches(given)
 
 
-def test_single_loop_makes_s3_not_applicable() -> None:
-    assert fill_switches({"s2_shape": "single_loop"})["s3_hypothesis_in_briefs"] == \
-        "not_applicable"
+@pytest.mark.parametrize("given", [{"s2_shape": "single_loop"},
+                                   {"s3_hypothesis_in_briefs": True},
+                                   {"s2_shape": "single_loop", "s3_hypothesis_in_briefs": False}])
+def test_parked_switch_values_are_refused(given: dict[str, object]) -> None:
+    from stemma.driver.errors import SwitchParked
+
+    with pytest.raises(SwitchParked, match="parked in contract v0.4"):
+        fill_switches(given)
     assert fill_switches({"s2_shape": "team"})["s3_hypothesis_in_briefs"] is False
 
 
@@ -89,10 +94,9 @@ def _asm(src: Path, tmp: Path, **sw: object) -> assemble.Assembly:
 
 def test_lead_text_is_base_plus_fragments_in_order(plugin_src: Path, tmp: Path) -> None:
     a = _asm(plugin_src, tmp, s1_method="none", s4_orientation="basic_facts",
-             s3_hypothesis_in_briefs=True, s6_cross_family="final")
+             s3_hypothesis_in_briefs=False, s6_cross_family="final")
     text = (a.plugin_dir / "agents" / "lead.md").read_text()
     order = ["LEAD-FRAGMENT s1_method=none", "LEAD-FRAGMENT s2_shape=team",
-             "LEAD-FRAGMENT s3_hypothesis_in_briefs=true",
              "LEAD-FRAGMENT s4_orientation=basic_facts", "LEAD-FRAGMENT s6_cross_family=final"]
     pos = [text.index(o) for o in order]
     assert pos == sorted(pos)
@@ -157,7 +161,9 @@ def test_missing_fragment_is_typed(plugin_src: Path, tmp: Path) -> None:
 
 
 def test_single_loop_has_no_worker(plugin_src: Path, tmp: Path) -> None:
-    a = _asm(plugin_src, tmp, s2_shape="single_loop")
+    # Parked in v0.4 (fill_switches refuses it); the assembler's rule still holds.
+    sw = {**fill_switches({}), "s2_shape": "single_loop", "s3_hypothesis_in_briefs": "not_applicable"}
+    a = assemble.assemble(plugin_src, tmp / "out-single", sw)
     assert "worker" not in a.agents and not (a.plugin_dir / "agents" / "worker.md").exists()
 
 

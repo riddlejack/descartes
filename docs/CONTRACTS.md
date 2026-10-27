@@ -48,12 +48,21 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   `conditional` (the record snapshot must name the point id); or `disputed` (a revision
   order of the branch must name it, the lead having decided). `ask_user` is not a
   send-back. The gate re-checks that every sent-back point of a closed branch has a
-  resolution.
+  resolution. A closing verdict may carry new material points: they cannot go back,
+  so they stay as the branch's open limits, listed by `gate_status` (`branch_limits`)
+  and in `deliverable/record.json`.
 - **Revision orders** (D6): `branches/<branch_id>/revision-<n>.md`, headings Finding;
   Raised by; Is it right?; Fix. The lead writes the finding, the worker says whether it
   is right (with evidence) and then fixes it, the lead decides disputes. After a
-  send-back, `propose_branch_done` refuses until a revision order with all four headings
-  names each point sent back.
+  send-back, `propose_branch_done` refuses, naming the ids, until each point sent back
+  is named in `record.md` (resolved, bounded or conditional) or in a revision order with
+  all four headings (disputed, for the lead's ruling).
+- **Order heading** (D1): an order's third heading is "What would change the answer"
+  (was "What would change the decision").
+- **Parked switch values** (section 7): `s2_shape: single_loop` (the single author would
+  need the workers' source tools, which the lead no longer has, D6) and
+  `s3_hypothesis_in_briefs: true` (its hypothesis-blind control was a tree node, D2)
+  are refused with `SwitchParked`; `s3_hypothesis_in_briefs` is `false` for v0.4 runs.
 - **The lead reads no sources** (D6; section 6): its own thread may not call capture,
   capture_file, sec_filings, sec_capture, sec_facts, outline, read, read_section,
   search_store, tables, check_quote, query_data, WebSearch, WebFetch or Bash, nor Read
@@ -62,24 +71,35 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   them. Bash is refused outright because a guard cannot parse every way a shell command
   reads a file. Arrival notices tell the lead to have a worker capture the file.
 - **Claim checks** (D7; sections 2 and 6): filing a claim requests no check. After
-  `submit_draft(v)`, the register requests one claim checker per source document, prompt
-  `doc:<receipt_id>`, and writes `checks/doc-<receipt_id>.json` (tool-only) listing every
-  claim the frozen draft cites (by `[[c:…]]` tag) whose home document is that receipt,
-  which has no verdict yet and which no unfinished check already lists. A claim's home
-  document is its first support item's receipt; for an estimate, the first document its
-  derivation names, else the home document of its first input that has one. A cited
-  claim with no home document (an assumption) keeps one checker of its own, prompt
-  `claim:<claim_id>`. Observed figures are still checked. A `doc:` checker records
-  verdicts only on the claims its own round's list names. The host still starts every
-  checker. (Replayed on run 1's eleven drafts: 81 checker sessions where run 1 started
-  407.)
+  `submit_draft(v)` the register puts every claim the frozen draft cites (by `[[c:…]]`
+  tag), and every input of a cited estimate (through estimates of estimates, cited or
+  not), into exactly one checker list, skipping claims with a verdict and claims an
+  unfinished check already lists:
+  - a claim with a home document (its first support item's receipt; for an estimate,
+    the first document its derivation names) goes to that document's checker, prompt
+    `doc:<receipt_id>`, list `checks/doc-<receipt_id>.json` (tool-only);
+  - a claim resting on no document (an estimate whose derivation names none, an
+    assumption) goes to the draft's one derivations checker, prompt
+    `derivations:v<v>`, list `checks/derivations-v<v>.json` (tool-only), each entry
+    with its tier, statement, value, derivation and the sentences of draft v that cite
+    it (the checker reads nothing else of the draft). It judges whether each script
+    computes what the claim states from the right inputs, and whether each assumption
+    is stated as one; the exact re-run is code's.
+  `claim:<claim_id>` is no longer a route. A checker records verdicts only on the
+  claims its own round's list names. Observed figures are still checked; the host
+  still starts every checker. (Replayed on run 1's eleven drafts: 81 checker sessions
+  where run 1 started 407.)
 - **Reviewer memory** (D8): the branch reviewer of a branch is resumed (`--resume` of
   its previous session) for each re-review of that branch; a resumed session's earlier
   verification no longer counts until the driver verifies it again. The final reviewers
   are fresh each round; `submit_draft(v)` for v > 1 writes
   `register/drafts/previous.v<v>.md` (the previous round's points with their ids, and the
-  lead's `draft/response.v<v>.md`), which each final reviewer may read; it refuses when
-  the previous round raised points and `draft/response.v<v>.md` does not name each id.
+  lead's `draft/response.v<v>.md`); it refuses when the previous round raised material
+  points and `draft/response.v<v>.md` does not name each id. On round v > 1 every final
+  reviewer, the decider's-eye reviewer included, may read `criteria.md`,
+  `reviews/v<v-1>/`, `draft/response.v<v>.md` and `register/drafts/previous.v<v>.md`
+  (on round 1, `criteria.md` only, beside its usual reads); the Read guard and the
+  settings allow exactly these, and nothing of the current round's other reviews.
 - **Stopping** (D9): the answer is releasable when the latest round's final reviews
   raise no material point (and the rest of the gate holds); at `max_review_rounds` (a
   resource limit) the open points are listed in `deliverable/completion.md`, as before.
@@ -148,8 +168,8 @@ ran" (commitment 3) made structural.
 2. The driver watches the register and the tree, and launches each checking session
    with `--agent stemma:<role>` and a prompt holding only an id:
    - `submit_draft` → one claim checker per source document the draft's cited claims
-     rest on, prompt `doc:<receipt_id>` (v0.4, D7), and one per cited claim with no
-     source document, prompt `claim:<claim_id>`;
+     rest on, prompt `doc:<receipt_id>`, and one for the cited claims resting on no
+     document, prompt `derivations:v<version>` (v0.4, D7);
    - `propose_branch_done` → a branch reviewer, prompt `branch:<branch_id>`, resumed
      from its previous session on each later round (v0.4, D8);
    - run start → the blind framer, prompt `frame:own`; the lead's
@@ -188,7 +208,7 @@ marked *tool-only* are written by an MCP tool or the driver, never by an agent
   `framer/lead-response.md` (lead).
 - `branches/<branch_id>/`:
   - `order.md` (lead or branch lead), with exactly these headings: Intent; Place in
-    the tree; What would change the decision; End product; Out of scope; Known facts
+    the tree; What would change the answer; End product; Out of scope; Known facts
     (each a claim id, or marked unverified); Where to look; What to return.
   - `restatement.md` (worker): intent and plan in its own words, written first.
   - `record.md` (worker), with exactly these headings: Conclusion and confidence;
@@ -461,8 +481,9 @@ Each guard has a producer in the live path, or it would block every run.
   in body, so the lead selects and loads them in identical words in both arms; the
   `decomposition` and `placebo` lead fragments are identical.
 - `s2_shape`: `team` | `single_loop` (one author, no workers; checks unchanged). In
-  `single_loop` the run settings deny `Agent` to the lead.
-- `s3_hypothesis_in_briefs`: true | false; it needs workers, so with `single_loop`
+  `single_loop` the run settings deny `Agent` to the lead. *v0.4: `single_loop` is
+  parked and refused (section 0).*
+- `s3_hypothesis_in_briefs`: true | false (*v0.4: `true` is parked and refused*); it needs workers, so with `single_loop`
   the driver records it `not_applicable` and loads no S3 fragment.
 - `s4_orientation`: `frame_first` | `basic_facts` | `primary_record`.
 - `s5_models`: model and effort per role (defaults, v0.4 D10: Opus 5.5 at high effort
@@ -496,21 +517,19 @@ Each guard has a producer in the live path, or it would block every run.
 - It drives the pinned Claude Code CLI headless, not the Agent SDK: the SDK passed the
   parent's environment through to the session, which broke the sign-in (B's probe
   runs, 26 Oct). Launch flags live in one function, `stemma.driver.clean.clean_launch`,
-  with `check_canary`, used by the driver and by every other runner (baselines,
-  sealed runs). `--strict-mcp-config` drops the plugin's own server and
+  with `check_canary`, used by the driver and by every other runner. `--strict-mcp-config` drops the plugin's own server and
   `--disable-slash-commands` drops the method skills, so Stemma runs use neither.
 - Input: `task.json` with `question`, optional `intake` answers, `attachments`,
   optional `as_of`, optional `switches`, and (v0.4) optional `scope`, `criteria`,
-  `options`, `roles` and `stop_after` (section 0). The sealed side adapts its task package to
-  this; the driver never reads benchmark material itself.
+  `options`, `roles` and `stop_after` (section 0). Any other runner adapts its tasks
+  to this shape.
 - **Attachments mid-run** (design step 1: an attachment slot open at every stage; a
   client's question list arriving mid-run is mapped at once). `stemma attach <run_id>
   <file>` copies the file into `task/arrivals/<n>/` (tool-only), records an event, and
   queues a notice; the lead's next tool call receives the notice through a hook
   (`additionalContext`, *B verifies*), never through a file the lead must remember to
   check. The lead maps the arrival against its frame and tree at once and records
-  what it changed in `intake.md`. The sealed side uses this to deliver a test task's
-  second wave when its own rule says the wave arrives.
+  what it changed in `intake.md`. A task may deliver later attachments this way.
 - It launches the lead and every checking session, verifies the resolved model and
   effort of each (for the lead's subagents, from their transcripts, which land in
   the clean config's `projects/<cwd-slug>/`; a copied config folder is not signed

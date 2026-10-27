@@ -49,20 +49,23 @@ FRAMER_OWN_DENY: Final = (
     "frame.md", "history/", "tree.json", "tree.md", "branches/", "draft/", "deliverable/",
     "reviews/", "analysis/", "register/",
 )
-# The decider's-eye reviewer reads only task/, intake.md and the draft under review: every
-# other name the run folder holds or will hold (section 3) is denied.
+# The decider's-eye reviewer reads only task/, intake.md, criteria.md and the draft under
+# review, and from round 2 on the previous round (D8): reviews/v<n-1>/, the lead's
+# draft/response.v<n>.md and register/drafts/previous.v<n>.md. Every other name the run
+# folder holds or will hold (section 3) is denied; draft/ and reviews/ are enumerated
+# entry by entry, because a Read deny rule cannot be reopened by an allow.
 DECIDERS_EYE_KNOWN: Final = (
     "frame.md", "history/", "tree.json", "tree.md", "framer/", "branches/", "store/",
     "analysis/", "deliverable/", "events.jsonl", "status.json", "status.html",
-    "usage.jsonl", "usage.jsonl.lock", "usage.md",
-    "retro.md", "run.json", "draft/",
+    "usage.jsonl", "usage.jsonl.lock", "usage.md", "checks/",
+    "retro.md", "run.json", "draft/answer.*", "draft/notes.md",
     # register/ holds the frozen draft the reviewer reads; everything else in it is denied.
     "register/log.jsonl", "register/log.jsonl.lock", "register/checks.jsonl",
     "register/checks.jsonl.lock", "register/index.sqlite", "register/register.lock",
     "register/calls/", "register/frames/", "register/tmp/",
 )
-DECIDERS_EYE_KEEP: Final = frozenset({"task", "intake.md", "CLAUDE.md", "register",
-                                      ".stemma", ".claude"})
+DECIDERS_EYE_KEEP: Final = frozenset({"task", "intake.md", "criteria.md", "CLAUDE.md",
+                                      "register", "draft", "reviews", ".stemma", ".claude"})
 
 
 @dataclass(frozen=True)
@@ -142,13 +145,17 @@ def _draft_version(prompt: str) -> str:
 
 def _deciders_eye_reads(prompt: str) -> list[str]:
     """The only run-folder paths the decider's-eye reviewer reads (section 6)."""
-    v = _draft_version(prompt)
-    return ["task", "intake.md", f"register/drafts/answer.v{v}.md",
-            f"register/drafts/previous.v{v}.md"]
+    v = int(_draft_version(prompt))
+    out = ["task", "intake.md", "criteria.md", f"register/drafts/answer.v{v}.md"]
+    if v > 1:
+        out += [f"register/drafts/previous.v{v}.md", f"reviews/v{v - 1}",
+                f"draft/response.v{v}.md"]
+    return out
 
 
 def _deciders_eye_denials(run_dir: Path, prompt: str) -> list[str]:
     v = _draft_version(prompt)
+    keep = set(_deciders_eye_reads(prompt))
     out: list[str] = list(DECIDERS_EYE_KNOWN)
     if run_dir.is_dir():
         for p in sorted(run_dir.iterdir()):
@@ -162,9 +169,17 @@ def _deciders_eye_denials(run_dir: Path, prompt: str) -> list[str]:
     drafts = register / "drafts"
     if drafts.is_dir():
         for p in sorted(drafts.iterdir()):
-            if p.name not in (f"answer.v{v}.md", f"previous.v{v}.md"):
+            if f"register/drafts/{p.name}" not in keep:
                 out.append(f"register/drafts/{p.name}" + ("/" if p.is_dir() else ""))
-    out.append("reviews/")  # reviews are tool-written; the reviewer records through a tool
+    for folder in ("draft", "reviews"):
+        d = run_dir / folder
+        if d.is_dir():
+            for p in sorted(d.iterdir()):
+                rel = f"{folder}/{p.name}"
+                if rel not in keep:
+                    out.append(rel + ("/" if p.is_dir() else ""))
+    # This round's reviews (the other two reviewers') are never read: written later.
+    out.append(f"reviews/v{v}/")
     return list(dict.fromkeys(out))
 
 

@@ -260,58 +260,81 @@ class Register:
             raise Refused(f"Refused: this session was started for an earlier round of {prompt}.")
 
     def _checker_may_judge(self, caller: Caller, cid: str) -> None:
-        """The caller is the main thread of the claim checker the driver launched either
-        for `claim:<cid>` (latest round) or for `doc:<receipt_id>` with `cid` in that
-        round's list (D7). Anything else is refused."""
+        """The caller is the main thread of a claim checker the driver launched for a
+        check whose list (its own round's) names `cid`: `doc:<receipt_id>` or
+        `derivations:v<n>` (D7). Anything else is refused."""
+        refusal = f"Refused: this session was not started for claim:{cid}."
         if caller.agent_id:
-            raise Refused(f"Refused: this session was not started for claim:{cid}.")
+            raise Refused(refusal)
         state = checks_api.state_for_session(self.run_dir, caller.session_id)
         if state is None or state.request.role != "claim-checker":
-            raise Refused(f"Refused: this session was not started for claim:{cid}.")
-        prompt = state.request.prompt
-        if prompt.startswith("doc:"):
-            listed = self._doc_lists().get((prompt[4:], state.request.round), [])
-            if cid not in listed:
-                raise Refused(f"Refused: this session was not started for claim:{cid}.")
-            return
-        self._session_prompt_is(caller, "claim-checker", f"claim:{cid}")
+            raise Refused(refusal)
+        if cid not in self._check_lists().get((state.request.prompt, state.request.round), []):
+            raise Refused(refusal)
 
-    def _doc_lists(self) -> dict[tuple[str, int], list[str]]:
-        """The claims each document check lists, by (receipt id, round)."""
-        return {(str(r["receipt_id"]), int(r["round"])): list(r["claims"])
-                for r in self._run_facts("doc_check_listed")}
+    def _check_lists(self) -> dict[tuple[str, int], list[str]]:
+        """The claims each claim check lists, by (prompt, round)."""
+        out: dict[tuple[str, int], list[str]] = {}
+        for r in self._run_facts("doc_check_listed"):
+            out[(f"doc:{r['receipt_id']}", int(r["round"]))] = list(r["claims"])
+        for r in self._run_facts("derivation_check_listed"):
+            out[(str(r["prompt"]), int(r["round"]))] = list(r["claims"])
+        return out
 
-    def request_claim_checks(self, claim_ids: list[str], event: str,
-                             version: int | None = None) -> list[str]:
-        """Ask for the checks of `claim_ids` (D7): one claim checker per source document
-        (each claim's home document, `_home_document`), prompt `doc:<receipt_id>`, its
-        list written to `checks/doc-<receipt_id>.json`; a claim with no source document
-        gets `claim:<claim_id>`. Skipped: superseded claims, claims with a verdict, and
-        claims a check that has not ended already lists. Call under the lock. Returns the
-        request ids."""
+    def _due_for_checking(self, cited: list[str]) -> list[str]:
+        """The cited claims and, for each cited estimate, its input claims (through
+        estimates of estimates), cited or not: each is checked once (D7)."""
+        out: list[str] = []
+        todo = list(cited)
+        while todo:
+            cid = todo.pop(0)
+            if cid in out:
+                continue
+            out.append(cid)
+            try:
+                rec = self._claim_record(cid)
+            except Refused:
+                continue
+            if rec.get("tier") == "estimated":
+                for given in (rec.get("derivation") or {}).get("inputs") or []:
+                    try:
+                        todo.append(self.resolve_claim_id(str(given)))
+                    except Refused:
+                        continue
+        return out
+
+    def request_claim_checks(self, claim_ids: list[str], event: str, version: int,
+                             text: str = "") -> list[str]:
+        """Ask for the checks of the cited `claim_ids` (D7), each claim in exactly one
+        list: a claim with a source document (`home_document`) goes to that document's
+        checker, prompt `doc:<receipt_id>`, list `checks/doc-<receipt_id>.json`; a claim
+        resting on no document (an estimate with no documents, an assumption) goes to
+        the draft's one derivations checker, prompt `derivations:v<version>`, list
+        `checks/derivations-v<version>.json`, with the sentences of the draft (`text`)
+        that cite it. Each cited estimate's inputs are checked too, cited or not.
+        Skipped: superseded claims, claims with a verdict, and claims a check that has
+        not ended already lists. Call under the lock. Returns the request ids."""
         states = checks_api.states(self.run_dir)
         busy: set[str] = set()
-        for (rid, rnd), ids in self._doc_lists().items():
-            for st in states.values():
-                if (st.request.prompt == f"doc:{rid}" and st.request.round == rnd
-                        and st.status != "ended"):
-                    busy.update(ids)
-        for st in states.values():
-            if st.request.prompt.startswith("claim:") and st.status != "ended":
-                busy.add(st.request.prompt[6:])
+        for (prompt, rnd), ids in self._check_lists().items():
+            if any(st.request.prompt == prompt and st.request.round == rnd
+                   and st.status != "ended" for st in states.values()):
+                busy.update(ids)
         by_doc: dict[str, list[str]] = {}
-        alone: list[str] = []
-        for cid in dict.fromkeys(claim_ids):
+        no_doc: list[str] = []
+        for cid in self._due_for_checking(claim_ids):
             rec = self._claim_record(cid)
             if rec["superseded_by"] or rec["verdict"] is not None or cid in busy:
                 continue
-            doc = self._home_document(cid)
+            doc = self.home_document(rec)
             if doc is not None:
                 by_doc.setdefault(doc, []).append(cid)
             else:
-                alone.append(cid)
+                no_doc.append(cid)
         out: list[str] = []
         source = {"kind": "register", "at": now(), "by": "stemma:register"}
+        if by_doc or no_doc:
+            self._ensure_entity(RUN_ENTITY, "run", "run", source)
         for rid, ids in sorted(by_doc.items()):
             prompt = f"doc:{rid}"
             rnd = len(checks_api.for_prompt(self.run_dir, "claim-checker", prompt)) + 1
@@ -319,49 +342,47 @@ class Register:
                        "claims": sorted(ids),
                        "statements": {c: self._claim_record(c)["statement"] for c in ids}}
             self._write(f"checks/doc-{rid}.json", json.dumps(listing, indent=2))
-            self._ensure_entity(RUN_ENTITY, "run", "run", source)
             self.wm.assertFact({"about": RUN_ENTITY, "predicate": "doc_check_listed",
                                 "value": {"receipt_id": rid, "round": rnd,
                                           "claims": sorted(ids), "version": version},
                                 "source": source})
             out.append(checks_api.request_check(self.run_dir, roles.CLAIM_CHECKER, prompt,
                                                 event, round_no=rnd).request_id)
-        for cid in alone:
-            prompt = f"claim:{cid}"
+        if no_doc:
+            prompt = f"derivations:v{version}"
             rnd = len(checks_api.for_prompt(self.run_dir, "claim-checker", prompt)) + 1
+            segs = tags.segments(text) if text else []
+            entries = []
+            for cid in no_doc:
+                rec = self._claim_record(cid)
+                tag = f"[[c:{cid[:12]}]]"
+                entries.append({
+                    "claim_id": cid, "tier": rec["tier"], "statement": rec["statement"],
+                    "value": rec.get("value"), "derivation": rec.get("derivation"),
+                    "sentences": [sg.text for sg in segs if tag in sg.text]})
+            listing2 = {"draft_version": version, "round": rnd, "claims": entries}
+            self._write(f"checks/derivations-v{version}.json",
+                        json.dumps(listing2, indent=2, ensure_ascii=False))
+            self.wm.assertFact({"about": RUN_ENTITY, "predicate": "derivation_check_listed",
+                                "value": {"prompt": prompt, "round": rnd, "version": version,
+                                          "claims": no_doc},
+                                "source": source})
             out.append(checks_api.request_check(self.run_dir, roles.CLAIM_CHECKER, prompt,
                                                 event, round_no=rnd).request_id)
         return out
 
-    def _home_document(self, cid: str) -> str | None:
-        """The source document a claim rests on, for grouping its check (D7): its first
-        support item's receipt; for an estimate, the first document its derivation names,
-        else the home document of its first input that has one (followed through
-        estimates of estimates). None for an assumption or an estimate resting on none."""
-        seen: set[str] = set()
-        todo = [cid]
-        while todo:
-            cur = todo.pop(0)
-            if cur in seen:
-                continue
-            seen.add(cur)
-            try:
-                rec = self._claim_record(cur)
-            except Refused:
-                continue
-            for s in rec.get("support") or []:
-                rid = s.get("receipt_id") if isinstance(s, dict) else None
-                if isinstance(rid, str) and _SAFE_ID.fullmatch(rid):
-                    return rid
-            deriv = rec.get("derivation") or {}
-            for rid in deriv.get("documents") or []:
-                if isinstance(rid, str) and _SAFE_ID.fullmatch(rid):
-                    return rid
-            for given in deriv.get("inputs") or []:
-                try:
-                    todo.append(self.resolve_claim_id(str(given)))
-                except Refused:
-                    continue
+    @staticmethod
+    def home_document(rec: dict[str, Any]) -> str | None:
+        """The source document a claim's check goes with (D7): its first support item's
+        receipt; for an estimate, the first document its derivation names; None for a
+        claim resting on no document (an assumption, an estimate from claims alone)."""
+        for s in rec.get("support") or []:
+            rid = s.get("receipt_id") if isinstance(s, dict) else None
+            if isinstance(rid, str) and _SAFE_ID.fullmatch(rid):
+                return rid
+        for rid in (rec.get("derivation") or {}).get("documents") or []:
+            if isinstance(rid, str) and _SAFE_ID.fullmatch(rid):
+                return rid
         return None
 
     def _revoked(self) -> frozenset[str]:
@@ -879,12 +900,18 @@ class Register:
             self.wm.refresh()
             self._sync_records()
             nodes = self._branch_nodes(branch_id)
+            # Each point sent back is addressed before the branch returns to its reviewer:
+            # named in the record (resolved, bounded or conditional) or in a revision
+            # order (disputed, for the lead's ruling). Exact facts: the id appears.
             orders = "\n".join(t for _n, t in self.revision_orders(branch_id))
-            for pt in self.sent_back(branch_id):
-                if pt["id"] not in orders:
-                    raise Refused(f"Refused: point {pt['id']} was sent back; no revision "
-                                  f"order of the branch (revision-<n>.md with the headings "
-                                  f"{'; '.join(REVISION_HEADINGS)}) names it.")
+            record_text = record_bytes.decode("utf-8", "replace")
+            unaddressed = [pt["id"] for pt in self.sent_back(branch_id)
+                           if pt["id"] not in record_text and pt["id"] not in orders]
+            if unaddressed:
+                raise Refused(f"Refused: points {', '.join(unaddressed)} were sent back; "
+                              f"neither record.md nor a revision order of the branch "
+                              f"(revision-<n>.md with the headings "
+                              f"{'; '.join(REVISION_HEADINGS)}) names them.")
             source = self._src(caller)
             prior = checks_api.for_prompt(self.run_dir, "branch-reviewer", f"branch:{branch_id}")
             rnd = len(prior) + 1
@@ -1298,7 +1325,8 @@ class Register:
                 except Refused:
                     continue  # the gate names a tag that names no claim
             # Before the submission is recorded: a refusal here leaves nothing submitted.
-            claim_reqs = self.request_claim_checks(cited, "submit_draft", version)
+            claim_reqs = self.request_claim_checks(cited, "submit_draft", version,
+                                                   data.decode("utf-8", "replace"))
             self._run_fact(caller, "draft_submitted",
                            {"version": version, "sha256": sha256_bytes(data)})
             reqs = [checks_api.request_check(self.run_dir, role, f"draft:{version}",
@@ -1524,7 +1552,8 @@ class Register:
             aside = self.set_aside_nodes()
         return {"version": version, "releasable": not unmet, "unmet_count": len(unmet),
                 "unmet": "\n".join(f"{i}. {f}" for i, f in enumerate(unmet, start=1)),
-                "open_material_points": points, "set_aside": aside}
+                "open_material_points": points, "set_aside": aside,
+                "branch_limits": self.branch_limits()}
 
     def open_material_points(self, version: int) -> dict[str, Any]:
         """The material points the final reviews of `version` raise, grouped by the
@@ -1544,6 +1573,23 @@ class Register:
                 if pt.get("node"):
                     by_node.setdefault(str(pt["node"]), []).append(item)
         return {"count": count, "by_criterion": by_criterion, "by_node": by_node}
+
+    def branch_limits(self) -> list[dict[str, Any]]:
+        """Material points a branch reviewer recorded on the verdict that closed a branch
+        (D9): after the one send-back they cannot go back to the worker, so they stay as
+        open limits of the branch and reach the deliverable. Latest closing verdict of
+        each branch, by sessions not revoked."""
+        latest: dict[str, dict[str, Any]] = {}
+        for v in self._run_facts("branch_verdict_recorded"):
+            latest[v["branch_id"]] = v
+        out = []
+        for b, v in sorted(latest.items()):
+            if v["verdict"] not in CLOSING:
+                continue
+            out += [{"branch_id": b, "id": pt["id"], "point": pt["point"],
+                     "node": pt.get("node"), "criterion": pt.get("criterion")}
+                    for pt in v.get("points", []) if pt["material"]]
+        return out
 
     def set_aside_nodes(self) -> list[dict[str, Any]]:
         """Every node the lead set aside (D5), with its reason; nodes under one are listed
@@ -1565,6 +1611,7 @@ class Register:
         left open (only possible at the review-round limit)."""
         return {"version": version, "criteria": self.criteria(),
                 "set_aside": self.set_aside_nodes(), "assumptions": self.assumptions(),
+                "branch_limits": self.branch_limits(),
                 "open_material_points": self.open_material_points(version),
                 "review_rounds": {"used": len(self.submitted_versions()),
                                   "limit": self.max_review_rounds(),
@@ -1723,16 +1770,15 @@ class Register:
             landed: dict[str, Any] = {}
             waiting: list[dict[str, Any]] = []
             all_states = list(checks_api.states(self.run_dir).values())
-            lists = self._doc_lists()
+            lists = self._check_lists()
             for t in targets:
                 got = self._landed(t)
                 if got is not None:
                     landed[t] = got
                     continue
                 mine = [s for s in all_states if s.request.prompt == t
-                        or (t.startswith("claim:") and s.request.prompt.startswith("doc:")
-                            and t[6:] in lists.get((s.request.prompt[4:], s.request.round),
-                                                   []))]
+                        or (t.startswith("claim:") and t[6:] in lists.get(
+                            (s.request.prompt, s.request.round), []))]
                 if not mine:
                     waiting.append({"id": t, "status": "not_requested"})
                 for s in mine:

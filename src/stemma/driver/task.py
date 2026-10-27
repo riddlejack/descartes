@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from stemma.driver.config import AVAILABLE_MODELS, EFFORTS
-from stemma.driver.errors import SwitchInvalid, TaskInvalid
+from stemma.driver.errors import SwitchInvalid, SwitchParked, TaskInvalid
 from stemma.register import roles
 
 # Switches whose value selects a text fragment, in assembly order (invariant: section 7's
@@ -42,6 +42,14 @@ DEFAULT_EFFORT: Final = "high"
 ALL_ROLE_NAMES: Final = tuple(sorted(roles.short(r) for r in roles.ALL_ROLES))
 
 NOT_APPLICABLE: Final = "not_applicable"  # a switch that the run's shape makes moot
+# Switch values v0.4 parks, with why (invariant: the orchestrator's rulings on the owner's
+# decisions). A parked value is refused, never silently replaced.
+PARKED: Final[dict[tuple[str, str], str]] = {
+    ("s2_shape", "single_loop"): "the single author would need the workers' source tools, "
+                                 "which the lead does not have (D6)",
+    ("s3_hypothesis_in_briefs", "true"): "its hypothesis-blind control was a tree node, "
+                                         "which the tree no longer holds (D2)",
+}
 _TASK_KEYS: Final = frozenset({"question", "intake", "attachments", "as_of", "switches",
                                "scope", "criteria", "options", "roles", "stop_after"})
 # What the research covers (D1): the question asked, or also the broader decision it
@@ -126,6 +134,9 @@ def fill_switches(given: Any, role_models: Any = None) -> dict[str, Any]:
     for name in FRAGMENT_SWITCHES:
         if name in given:
             v = _switch_value(name, given[name])
+            why = PARKED.get((name, v))
+            if why is not None:
+                raise SwitchParked(f"{name} = {v} is parked in contract v0.4: {why}")
         else:
             v = SWITCH_DEFAULTS[name]
         out[name] = v == "true" if name == "s3_hypothesis_in_briefs" else v

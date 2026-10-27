@@ -68,17 +68,19 @@ def claims_replay(reg: Register) -> dict[str, Any]:
             if len(hit) == 1:
                 cited.append(hit[0])
         cited_any.update(cited)
-        due = [c for c in cited if c not in verdicted and not claims[c]["superseded_by"]]
+        due = [c for c in reg._due_for_checking(cited)
+               if c not in verdicted and not claims[c]["superseded_by"]]
         docs = Counter()
         alone = 0
         for c in due:
-            home = reg._home_document(c)  # the rule submit_draft applies
+            home = reg.home_document(claims[c])  # the rule submit_draft applies
             if home is not None:
                 docs[home] += 1
             else:
                 alone += 1
         per_version.append({"version": v, "cited": len(cited), "due": len(due),
-                            "doc_sessions": len(docs), "claim_sessions": alone})
+                            "doc_sessions": len(docs), "derivation_claims": alone,
+                            "derivation_sessions": 1 if alone else 0})
         verdicted.update(due)  # as if every check landed before the next draft
     return {
         "claims_filed": len(claims),
@@ -87,7 +89,7 @@ def claims_replay(reg: Register) -> dict[str, Any]:
         "checks_on_claims_no_draft_cited": sum(
             1 for s in started if s.request.prompt.removeprefix("claim:") not in cited_any),
         "per_version": per_version,
-        "sessions_v04": sum(p["doc_sessions"] + p["claim_sessions"] for p in per_version),
+        "sessions_v04": sum(p["doc_sessions"] + p["derivation_sessions"] for p in per_version),
     }
 
 

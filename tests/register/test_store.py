@@ -51,9 +51,7 @@ def reg(tmp_path: Path) -> Register:
 
 
 def _lists(reg: Register, cid: str, prompt: str, rnd: int) -> bool:
-    if prompt == f"claim:{cid}":
-        return True
-    return prompt.startswith("doc:") and cid in reg._doc_lists().get((prompt[4:], rnd), [])
+    return cid in reg._check_lists().get((prompt, rnd), [])
 
 
 def checker_for(reg: Register, cid: str, session: str = "s-check") -> Caller:
@@ -64,7 +62,7 @@ def checker_for(reg: Register, cid: str, session: str = "s-check") -> Caller:
         from stemma.register import jsonl as _j
 
         with _j.exclusive(reg._lock):
-            reg.request_claim_checks([cid], "test")
+            reg.request_claim_checks([cid], "test", 0)
     req = next(r for r in checks_api.pending_checks(reg.run_dir)
                if _lists(reg, cid, r.prompt, r.round))
     checks_api.mark_launched(reg.run_dir, req.request_id, session, "claude-opus-5-5", "high")
@@ -230,7 +228,7 @@ def test_branch_reaches_answered_only_by_a_verdict(reg: Register) -> None:
                               points=[{"point": "thin", "material": True, "criterion": "C1"}])
     assert reg.tree()[0]["status"] == "in_progress"
     # Second round: a new check request, and the old reviewer session cannot answer it.
-    with pytest.raises(Refused, match="no revision order"):
+    with pytest.raises(Refused, match="neither record.md nor a revision order"):
         reg.propose_branch_done(WORKER, "b1")
     (reg.run_dir / "branches/b1/revision-1.md").write_text(
         "# Finding\nb1.r1.1 thin\n# Raised by\nbranch reviewer\n# Is it right?\nyes\n# Fix\nmore filings\n")

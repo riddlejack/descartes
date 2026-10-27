@@ -112,3 +112,40 @@ def test_checks_folder_is_tool_only(run_dir: Path) -> None:
     r = call(run_dir, "pre", pre(run_dir, "Write", {"file_path": "checks/doc-r1.json",
                                                     "content": "{}"}))
     assert r.returncode == 2 and "written only by Stemma's tools" in r.stderr
+
+
+# --- D8: what the decider's-eye reviewer reads of the previous round ----------------
+
+@pytest.mark.parametrize(("version", "path", "allowed"), [
+    ("2", "criteria.md", True), ("1", "criteria.md", True),
+    ("2", "reviews/v1/deciders-eye.md", True), ("2", "reviews/v1/evidence-audit.md", True),
+    ("2", "draft/response.v2.md", True), ("2", "register/drafts/previous.v2.md", True),
+    ("2", "reviews/v2/mechanical.md", False), ("3", "reviews/v1/deciders-eye.md", False),
+    ("2", "draft/response.v3.md", False), ("2", "draft/answer.v2.md", False),
+    ("2", "register/drafts/previous.v3.md", False), ("1", "reviews/v0/x.md", False),
+    ("1", "draft/response.v1.md", False), ("2", "frame.md", False),
+    ("2", "reviews/v1/../v2/mechanical.md", False), ("2", "REVIEWS/V2/mechanical.md", False),
+])
+def test_deciders_eye_reads_the_previous_round_only(tmp_path: Path, version: str, path: str,
+                                                    allowed: bool) -> None:
+    from stemma.hooks import guards
+
+    rd = tmp_path / "run"
+    rd.mkdir()
+    hook = {"tool_name": "Read", "tool_input": {"file_path": str(rd / path)},
+            "agent_type": "stemma:deciders-eye-reviewer", "session_id": "s",
+            "tool_use_id": "t", "cwd": str(rd)}
+    assert guards.guard_read(hook, rd, version).allow is allowed
+
+
+@pytest.mark.parametrize("role", ["stemma:evidence-auditor", "stemma:mechanical-reader"])
+def test_the_other_final_reviewers_read_the_previous_round(tmp_path: Path, role: str) -> None:
+    from stemma.hooks import guards
+
+    rd = tmp_path / "run"
+    rd.mkdir()
+    for rel in ("criteria.md", "reviews/v1/deciders-eye.md", "draft/response.v2.md",
+                "register/drafts/previous.v2.md"):
+        hook = {"tool_name": "Read", "tool_input": {"file_path": str(rd / rel)},
+                "agent_type": role, "session_id": "s", "tool_use_id": "t", "cwd": str(rd)}
+        assert guards.guard_read(hook, rd, None).allow, rel

@@ -179,13 +179,20 @@ _FRAMER_HIDDEN_TOP = frozenset(
 
 
 def _deciders_eye_allowed(rel: PurePosixPath, draft_version: str | None) -> bool:
-    if paths.under(rel, "task") or rel == PurePosixPath("intake.md"):
+    if paths.under(rel, "task") or rel in (PurePosixPath("intake.md"),
+                                          PurePosixPath("criteria.md")):
         return True
+    if draft_version is None or not draft_version.isdigit():
+        return False
+    v = int(draft_version)
     # The frozen copy submit_draft made: what was submitted, whatever draft/ holds now.
-    # And what it is shown of the previous round (D8), written with that freeze.
-    return draft_version is not None and rel in (
-        PurePosixPath(f"register/drafts/answer.v{draft_version}.md"),
-        PurePosixPath(f"register/drafts/previous.v{draft_version}.md"))
+    if rel == PurePosixPath(f"register/drafts/answer.v{v}.md"):
+        return True
+    # From round 2 on, the previous round (D8): its reviews, the lead's response to them,
+    # and the host's summary of both written with this freeze.
+    previous = (PurePosixPath(f"register/drafts/previous.v{v}.md"),
+                PurePosixPath(f"draft/response.v{v}.md"))
+    return v > 1 and (rel in previous or rel.parts[:2] == ("reviews", f"v{v - 1}"))
 
 
 def blind_read_refusal(role: str, rel: PurePosixPath, run_dir: Path,

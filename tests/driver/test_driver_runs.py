@@ -310,23 +310,12 @@ def test_status_and_cli(cfg: DriverConfig, tmp: Path, fake: Fake, limits: Limits
     assert "STEMMA_CLAUDE_BIN is not set" in capsys.readouterr().err
 
 
-def test_single_loop_lead_may_start_no_agent(cfg: DriverConfig, tmp: Path, fake: Fake,
-                                            limits: Limits) -> None:
-    fake.configure({})
-    run = new_run(cfg, tmp, limits, switches={"s2_shape": "single_loop",
-                                              "s3_hypothesis_in_briefs": True})
-    rj = json.loads((run / "run.json").read_text())
-    assert rj["switches"]["s3_hypothesis_in_briefs"] == "not_applicable"
-    lead_text = (run / PLUGIN_DIR / "agents" / "lead.md").read_text()
-    assert "s3_hypothesis_in_briefs" not in lead_text
-    assert "LEAD-FRAGMENT s2_shape=single_loop" in lead_text
-    assert all("s3_" not in f for f in rj["plugin"]["assembled"]["agents/lead.md"]["from"])
-    assert start(cfg, run, checks_api, limits, released=released) == 0
-    lead = json.loads((run / ".stemma/settings/lead.json").read_text())
-    assert "Agent" in lead["permissions"]["deny"]
-    framer = next(run.glob(".stemma/settings/check-*.json"))
-    assert "Agent" not in json.loads(framer.read_text())["permissions"]["deny"]
+def test_single_loop_is_parked(cfg: DriverConfig, tmp: Path, limits: Limits) -> None:
+    from stemma.driver.errors import SwitchParked
 
+    with pytest.raises(SwitchParked, match="s2_shape = single_loop is parked"):
+        new_run(cfg, tmp, limits, switches={"s2_shape": "single_loop"})
+    assert not list((tmp / "runs").glob("*")) if (tmp / "runs").exists() else True
 
 def test_second_driver_on_same_run_refused(cfg: DriverConfig, tmp: Path, fake: Fake,
                                            limits: Limits) -> None:

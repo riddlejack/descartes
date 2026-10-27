@@ -192,12 +192,12 @@ def test_a_branch_is_sent_back_once_then_closes_with_every_point_resolved(
                               points=[mat("no range given", node="n1"),
                                       {"point": "style", "material": False, "node": "n1"}])
     assert [p["id"] for p in reg.sent_back("b1")] == ["b1.r1.1"]
-    # Re-proposing needs a revision order naming the point.
+    # Re-proposing needs the point named in the record or in a revision order.
     write_record(reg, "b1")
-    with pytest.raises(Refused, match="point b1.r1.1 was sent back; no revision order"):
+    with pytest.raises(Refused, match="points b1.r1.1 were sent back; neither record.md"):
         reg.propose_branch_done(WORKER, "b1")
     (reg.run_dir / "branches/b1/revision-1.md").write_text("# Finding\nb1.r1.1\n")  # headings
-    with pytest.raises(Refused, match="no revision order"):
+    with pytest.raises(Refused, match="neither record.md nor a revision order"):
         reg.propose_branch_done(WORKER, "b1")
     revision(reg, "b1", 1, "b1.r1.1 no range given")
     reg.propose_branch_done(WORKER, "b1")
@@ -302,7 +302,7 @@ def test_submit_starts_one_checker_per_cited_document(reg: Register) -> None:
     _cite(reg, 1, a, b, assumed)
     prompts = sorted(r.prompt for r in checks_api.pending_checks(reg.run_dir)
                      if r.role == "claim-checker")
-    assert prompts == sorted(["doc:r1", "doc:r2", f"claim:{assumed}"])
+    assert prompts == ["derivations:v1", "doc:r1", "doc:r2"]  # no claim: route (v0.4)
     listing = json.loads((reg.run_dir / "checks/doc-r1.json").read_text())
     assert listing["claims"] == [a] and listing["round"] == 1 and listing["draft_version"] == 1
     assert unused not in json.dumps(listing)
@@ -457,23 +457,103 @@ def test_the_release_writes_the_runs_record(reg: Register) -> None:
     assert rec["review_rounds"]["used"] == 1
 
 
-def test_an_estimate_is_checked_with_the_document_its_inputs_rest_on(
-        reg: Register) -> None:
-    from test_store import claim
-
-    base = reg.file_claim(WORKER, claim())["claim_id"]
+def _estimate(reg: Register, base: str, documents: list[str] | None = None) -> str:
     from stemma.register.derivation import RerunResult
 
-    reg._rerun = lambda _p, _i: RerunResult(2.4e9, 0, "", 60)
-    (reg.run_dir / "analysis").mkdir()
+    reg._rerun = lambda _p, _i, *_a: RerunResult(2.4e9, 0, "", 60)
+    (reg.run_dir / "analysis").mkdir(exist_ok=True)
     (reg.run_dir / "analysis/double.py").write_text("x = 1\n")
+    deriv: dict[str, Any] = {"script": "analysis/double.py", "inputs": [base]}
+    if documents is not None:
+        deriv["documents"] = documents
     est = {"statement": "Twice fiscal 2025 revenue is 2.4bn.", "tier": "estimated",
            "value": {"number": 2.4e9, "unit": "USD", "period": "FY2025", "kind": "level",
                      "as_written": "2.4bn"},
-           "derivation": {"script": "analysis/double.py", "inputs": [base]},
-           "support": [], "branch_id": "b1", "entities": []}
-    e = reg.file_claim(WORKER, est)["claim_id"]
-    assert reg._home_document(e) == "r1"
-    _cite(reg, 1, e)
-    listing = json.loads((reg.run_dir / "checks/doc-r1.json").read_text())
-    assert listing["claims"] == [e]
+           "derivation": deriv, "support": [], "branch_id": "b1", "entities": []}
+    return str(reg.file_claim(WORKER, est)["claim_id"])
+
+
+def test_an_estimate_on_no_document_goes_to_the_derivations_check(reg: Register) -> None:
+    from test_store import claim
+
+    base = reg.file_claim(WORKER, claim())["claim_id"]  # never cited itself
+    e = _estimate(reg, base)
+    assumed = reg.file_claim(WORKER, {"statement": "We assume 3 more years.",
+                                      "tier": "assumed", "support": [], "branch_id": "b1",
+                                      "entities": []})["claim_id"]
+    (reg.run_dir / "draft").mkdir()
+    (reg.run_dir / "draft/answer.v1.md").write_text(
+        f"# Answer\n\nThe doubled figure is 2.4bn [[c:{e[:12]}]].\n\n"
+        f"- Over 3 years [[c:{assumed[:12]}]] it holds.\n\n"
+        f"Again, 3 years [[c:{assumed[:12]}]] is assumed.\n")
+    reg.submit_draft(LEAD, 1)
+    der = json.loads((reg.run_dir / "checks/derivations-v1.json").read_text())
+    by = {c["claim_id"]: c for c in der["claims"]}
+    assert set(by) == {e, assumed}
+    assert by[e]["tier"] == "estimated" and by[assumed]["tier"] == "assumed"
+    assert by[e]["sentences"] == [f"The doubled figure is 2.4bn [[c:{e[:12]}]]."]
+    assert len(by[assumed]["sentences"]) == 2  # cited twice, both sentences listed
+    assert "doubled" not in json.dumps(by[assumed])  # blind to the rest of the draft
+    # The estimate's input is checked through its own document, though no draft cites it.
+    assert json.loads((reg.run_dir / "checks/doc-r1.json").read_text())["claims"] == [base]
+    chk = launched(reg, "claim-checker", "derivations:v1", "s-der")
+    with pytest.raises(Refused, match="not started for"):
+        reg.record_claim_verdict(chk, base, "holds", "x")
+    reg.record_claim_verdict(chk, e, "holds", "the script doubles the input")
+
+
+def test_every_cited_claim_lands_in_exactly_one_checker_list(reg: Register) -> None:
+    from test_store import claim
+
+    a = reg.file_claim(WORKER, claim())["claim_id"]
+    b = reg.file_claim(WORKER, claim(statement="Up from 1.0bn.", value={
+        "number": 1.0e9, "unit": "USD", "period": "FY2024", "kind": "level",
+        "as_written": "1.0bn"}, support=[{"receipt_id": "r2", "quote": "up from 1.0bn"}]))["claim_id"]
+    e = _estimate(reg, a)
+    assumed = reg.file_claim(WORKER, {"statement": "Assume 3 years.", "tier": "assumed",
+                                      "support": [], "branch_id": "b1",
+                                      "entities": []})["claim_id"]
+    cited = [a, b, e, assumed]
+    _cite(reg, 1, *cited)
+    lists = reg._check_lists()
+    for cid in cited:
+        holders = [k for k, ids in lists.items() if cid in ids]
+        assert len(holders) == 1, (cid, holders)
+    assert not [r for r in checks_api.states(reg.run_dir).values()
+                if r.request.prompt.startswith("claim:")]
+
+
+def test_a_point_named_in_the_record_allows_re_proposal(reg: Register) -> None:
+    _proposed(reg)
+    reg.record_branch_verdict(reviewer_for(reg, "b1", "s-r1"), "b1", "bound", "x",
+                              points=[mat(), mat("second", node="n1")])
+    rec = reg.run_dir / "branches/b1/record.md"
+    rec.write_text(rec.read_text() + "\nb1.r1.1 resolved: the range is 1.1bn to 1.3bn.\n")
+    with pytest.raises(Refused, match="points b1.r1.2 were sent back"):
+        reg.propose_branch_done(WORKER, "b1")
+    revision(reg, "b1", 1, "b1.r1.2 disputed: the worker holds the series is right")
+    reg.propose_branch_done(WORKER, "b1")
+
+
+def test_new_material_points_on_a_closing_verdict_stay_as_open_limits(reg: Register) -> None:
+    cid = ready_run(reg)
+    reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
+    reg.tree_upsert(LEAD, {"id": "q2", "kind": "question", "statement": "y", "branch_id": "b2"})
+    write_record(reg, "b2")
+    reg.propose_branch_done(WORKER, "b2")
+    reg.record_branch_verdict(reviewer_for(reg, "b2", "s-r1"), "b2", "analyse", "x",
+                              points=[mat(node="q2")])
+    rec = reg.run_dir / "branches/b2/record.md"
+    rec.write_text(rec.read_text() + "\nb2.r1.1 bounded: 1.1bn to 1.3bn.\n")
+    reg.propose_branch_done(WORKER, "b2")
+    reg.record_branch_verdict(
+        reviewer_for(reg, "b2", "s-r2"), "b2", "answered", "bounded now",
+        points=[mat("the revision double-counts depot ports", node="q2")],
+        resolutions=[{"point_id": "b2.r1.1", "status": "bounded"}])
+    limits = reg.gate_status(LEAD, 1)["branch_limits"]
+    assert limits == [{"branch_id": "b2", "id": "b2.r2.1",
+                       "point": "the revision double-counts depot ports", "node": "q2",
+                       "criterion": None}]
+    reg.finish_run(LEAD, 1)
+    rec_json = json.loads((reg.run_dir / "deliverable/record.json").read_text())
+    assert rec_json["branch_limits"] == limits
