@@ -284,7 +284,7 @@ class Register:
     def request_claim_checks(self, claim_ids: list[str], event: str,
                              version: int | None = None) -> list[str]:
         """Ask for the checks of `claim_ids` (D7): one claim checker per source document
-        (the receipt of each claim's first support item), prompt `doc:<receipt_id>`, its
+        (each claim's home document, `_home_document`), prompt `doc:<receipt_id>`, its
         list written to `checks/doc-<receipt_id>.json`; a claim with no source document
         gets `claim:<claim_id>`. Skipped: superseded claims, claims with a verdict, and
         claims a check that has not ended already lists. Call under the lock. Returns the
@@ -305,9 +305,8 @@ class Register:
             rec = self._claim_record(cid)
             if rec["superseded_by"] or rec["verdict"] is not None or cid in busy:
                 continue
-            support = rec.get("support") or []
-            doc = support[0].get("receipt_id") if support else None
-            if isinstance(doc, str) and _SAFE_ID.fullmatch(doc):
+            doc = self._home_document(cid)
+            if doc is not None:
                 by_doc.setdefault(doc, []).append(cid)
             else:
                 alone.append(cid)
@@ -333,6 +332,37 @@ class Register:
             out.append(checks_api.request_check(self.run_dir, roles.CLAIM_CHECKER, prompt,
                                                 event, round_no=rnd).request_id)
         return out
+
+    def _home_document(self, cid: str) -> str | None:
+        """The source document a claim rests on, for grouping its check (D7): its first
+        support item's receipt; for an estimate, the first document its derivation names,
+        else the home document of its first input that has one (followed through
+        estimates of estimates). None for an assumption or an estimate resting on none."""
+        seen: set[str] = set()
+        todo = [cid]
+        while todo:
+            cur = todo.pop(0)
+            if cur in seen:
+                continue
+            seen.add(cur)
+            try:
+                rec = self._claim_record(cur)
+            except Refused:
+                continue
+            for s in rec.get("support") or []:
+                rid = s.get("receipt_id") if isinstance(s, dict) else None
+                if isinstance(rid, str) and _SAFE_ID.fullmatch(rid):
+                    return rid
+            deriv = rec.get("derivation") or {}
+            for rid in deriv.get("documents") or []:
+                if isinstance(rid, str) and _SAFE_ID.fullmatch(rid):
+                    return rid
+            for given in deriv.get("inputs") or []:
+                try:
+                    todo.append(self.resolve_claim_id(str(given)))
+                except Refused:
+                    continue
+        return None
 
     def _revoked(self) -> frozenset[str]:
         return checks_api.revoked_sessions(self.run_dir)

@@ -64,11 +64,15 @@ D1 to D10); where an older line below disagrees, section 0 wins.
 - **Claim checks** (D7; sections 2 and 6): filing a claim requests no check. After
   `submit_draft(v)`, the register requests one claim checker per source document, prompt
   `doc:<receipt_id>`, and writes `checks/doc-<receipt_id>.json` (tool-only) listing every
-  claim the frozen draft cites (by `[[c:…]]` tag) whose first support item is that
-  receipt and which has no verdict yet. A cited claim with no support document
-  (`estimated` without documents, `assumed`) keeps one checker of its own, prompt
+  claim the frozen draft cites (by `[[c:…]]` tag) whose home document is that receipt,
+  which has no verdict yet and which no unfinished check already lists. A claim's home
+  document is its first support item's receipt; for an estimate, the first document its
+  derivation names, else the home document of its first input that has one. A cited
+  claim with no home document (an assumption) keeps one checker of its own, prompt
   `claim:<claim_id>`. Observed figures are still checked. A `doc:` checker records
-  verdicts only on the claims its list names. The host still starts every checker.
+  verdicts only on the claims its own round's list names. The host still starts every
+  checker. (Replayed on run 1's eleven drafts: 81 checker sessions where run 1 started
+  407.)
 - **Reviewer memory** (D8): the branch reviewer of a branch is resumed (`--resume` of
   its previous session) for each re-review of that branch; a resumed session's earlier
   verification no longer counts until the driver verifies it again. The final reviewers

@@ -455,3 +455,25 @@ def test_the_release_writes_the_runs_record(reg: Register) -> None:
                                  "reason": "the target counts ports"}]
     assert rec["open_material_points"]["count"] == 0
     assert rec["review_rounds"]["used"] == 1
+
+
+def test_an_estimate_is_checked_with_the_document_its_inputs_rest_on(
+        reg: Register) -> None:
+    from test_store import claim
+
+    base = reg.file_claim(WORKER, claim())["claim_id"]
+    from stemma.register.derivation import RerunResult
+
+    reg._rerun = lambda _p, _i: RerunResult(2.4e9, 0, "", 60)
+    (reg.run_dir / "analysis").mkdir()
+    (reg.run_dir / "analysis/double.py").write_text("x = 1\n")
+    est = {"statement": "Twice fiscal 2025 revenue is 2.4bn.", "tier": "estimated",
+           "value": {"number": 2.4e9, "unit": "USD", "period": "FY2025", "kind": "level",
+                     "as_written": "2.4bn"},
+           "derivation": {"script": "analysis/double.py", "inputs": [base]},
+           "support": [], "branch_id": "b1", "entities": []}
+    e = reg.file_claim(WORKER, est)["claim_id"]
+    assert reg._home_document(e) == "r1"
+    _cite(reg, 1, e)
+    listing = json.loads((reg.run_dir / "checks/doc-r1.json").read_text())
+    assert listing["claims"] == [e]
