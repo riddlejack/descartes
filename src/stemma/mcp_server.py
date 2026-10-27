@@ -209,6 +209,7 @@ def entity_review(ctx: Context[Any], action: str = "list", proposal_id: str = ""
 def tree_upsert(ctx: Context[Any], node: dict[str, Any]) -> dict[str, Any]:
     """Create or change one tree node: {id, parent, kind (question|open_lane), statement,
     doubt, settles_by, flip_point, crux, branch_id, status (open|in_progress), set_aside}.
+    statement is one short question; doubt, settles_by and flip_point are for leaves.
     Nodes are sub-questions of the question asked; options and rivals are never nodes.
     Lead only: set_aside is the reason a node is set aside (neither possible answer could
     change the headline), or null to bring it back; a set-aside node and everything under

@@ -524,3 +524,26 @@ moved into the D3 line and the arithmetic line lost its derivation detail (the
 tools' own schemas carry it); longest runnable lead 850/850. Placebo method
 lengthened to match. Shown: lint and map check pass; whole suite 1,607 pass, 19
 skipped.
+
+## Tree-skill fix (Orchestrator 3, 27 October)
+
+Evidence: `~/.private/stemma-design/build-2026-10/tree-skill/DIAGNOSIS.md`. The method
+body is the orchestrator's text verbatim; the role lint forced no wording change. The
+sentence splitter takes rule 4's bold head ("Go deeper where a node still has parts") as
+its own sentence, so `skill-evidence.md` lists it and its continuation separately.
+The placebo was cut to the new length (2,318 characters, within 5%).
+
+Lead line 45 and line 47 are the orchestrator's wording trimmed by 21 words to keep the
+longest lead (`primary_record` orientation) at 850: "parts as children, the how in
+settles_by, never the statement", "a list question's candidates first", "a decision's
+parts asked of every option", "same-source leaves share a branch_id; one to three
+cruxes", and "making accepted changes by ..., never adding words".
+
+Not carried over and not covered elsewhere in the method arm: the old rule that a "why"
+question separates the normal level from the causes of shortfall (evidence: run 1
+diagnosis D-11, remedies proposed before the cause was known). The lead's frame line
+keeps only "the question type (fact, cause or decision)". Reported, not restored.
+
+`src/stemma/mcp_server.py`: tree_upsert's docstring gains one line (statement is one
+short question; doubt, settles_by and flip_point are for leaves). Nothing in
+`register/store.py` requires those fields on any node; they default to null.
