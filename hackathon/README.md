@@ -35,6 +35,22 @@ exists); `python run.py replay PACK` replays any other pack.
   reader needs is recorded; the driver's own state, the assembled plugin and raw fetched
   bytes are left out and listed. Anything shaped like a credential stops the recording.
 
+## Check a run yourself
+
+- `python run.py verify RUN_DIR`: re-checks a recorded run offline, with no keys. It
+  re-hashes every captured source, finds every quotation again in the stored text,
+  re-runs every calculation in a sandbox, and checks the register's log and every file
+  the register fingerprinted. It prints plain counts and names each failure.
+- `python run.py tamper RUN_DIR`: copies the run, changes one byte of a stored source
+  behind a cited figure, runs verify again and shows the release refused. The original
+  is never touched.
+- `python run.py report RUN_DIR OUT_DIR`: writes a static page of the run (`index.html`)
+  that GitHub Pages can serve as it is. The answer comes first, and every figure opens
+  the exact stored passage it rests on.
+- `python run.py new "QUESTION"`: onboarding before a run. It drafts the scope question,
+  the readings of ambiguous terms and three to five criteria, lets you edit each, and
+  writes `task.json`.
+
 ## Docker
 
 ```bash
