@@ -51,10 +51,6 @@ def test_the_task_is_the_stemma_arms_own_file(tmp_path: Path) -> None:
         assert f"- {k} {v}" in prompt
     assert "Use only information published before 2026-10-01 00:00 UTC" in prompt
     assert "- C1: Give a call on each event." in prompt
-    attached = tmp_path / "a.pdf"
-    attached.write_bytes(b"%PDF")
-    with pytest.raises(bare.BareError, match="attachments are not given"):
-        bare.task_from_file(_task_file(tmp_path, attachments=[str(attached)]))
     with pytest.raises(bare.BareError, match="unknown keys"):
         bare.task_from_file(_task_file(tmp_path, notes="x"))
 
@@ -203,3 +199,44 @@ def test_a_permission_notice_with_a_text_message_does_not_break_the_scope_check(
 def test_the_broker_control_is_an_archived_copy_dated_before_the_cutoff(
         receipt: dict[str, Any], ok: bool) -> None:
     assert bare._archived(json.dumps(receipt), AS_OF) is ok
+
+
+def test_an_attachment_is_copied_read_only_named_and_recorded(
+        tmp_path: Path, ready: None) -> None:
+    import hashlib
+    import stat
+
+    brief = tmp_path / "brief.md"
+    brief.write_bytes(b"# Brief\n\nE1: an invented event.\n")
+    t = bare.task_from_file(_task_file(tmp_path, attachments=[str(brief)]))
+    assert t["attachments"] == [str(brief.resolve())]
+    assert ("The user attached task/attachments/brief.md, in your working folder."
+            in bare.prompt_for(t))
+    sessions = _Sessions()
+    folder = bare.launch(tmp_path / "out", t, popen=sessions,
+                         version="2.1.308 (Claude Code)")
+    copy = folder / "task" / "attachments" / "brief.md"
+    assert copy.read_bytes() == brief.read_bytes()
+    assert not copy.stat().st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH)
+    digest = hashlib.sha256(brief.read_bytes()).hexdigest()
+    for record in ("run.json", "launch.json"):
+        got = json.loads((folder / record).read_text())["attachments"]
+        assert got == [{"path": "task/attachments/brief.md", "source": str(brief.resolve()),
+                        "sha256": digest, "bytes": str(len(brief.read_bytes()))}]
+    real = sessions.calls[-1][sessions.calls[-1].index("-p") + 1]
+    assert "task/attachments/brief.md" in real  # the real session is told of it
+    st = json.loads((folder / "launch.json").read_text())["settings_extra"]
+    assert f"Write(/{folder / 'task'}/**)" in st["permissions"]["deny"]
+
+
+def test_the_launcher_gives_its_preregistered_task(tmp_path: Path) -> None:
+    brief = tmp_path / "brief.md"
+    brief.write_text("E1\n")
+    launcher = tmp_path / "runX_demo.py"
+    launcher.write_text(
+        "TASK = " + repr({**TASK, "attachments": [str(brief)]}) + "\n"
+        "def task_with(question_file):\n    return dict(TASK)\n")
+    t = bare.task_from_launcher(launcher)
+    assert t["question"] == TASK["question"] and t["as_of"] == AS_OF
+    assert t["attachments"] == [str(brief.resolve())]
+    assert bare.main(["--launcher", str(launcher), "--task", "t.json"]) == 2

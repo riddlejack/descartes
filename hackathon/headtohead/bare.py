@@ -57,9 +57,13 @@ Stated deviation from a plain user: the prompt asks the bare arm to cite a sourc
 every figure (a plain user may not ask); without it the citation counts would measure
 nothing.
 
-**Run 4** (`--task`): the task is read from the same `task.json` the Stemma arm is
-given, through the driver's own loader, so both arms get the same question, onboarding
-answers, information cutoff, options and criteria. `--max-s` is the real session's
+**Run 4** (`--launcher tests/e2e/run4_demo.py`, or `--task`): the task is the one the
+Stemma arm is given (the launcher's `task_with(None)`, or a `task.json`), read through
+the driver's own loader, so both arms get the same question, onboarding answers,
+information cutoff, options and criteria. Each attachment is copied byte for byte,
+read-only, to `task/attachments/<name>` in the session's folder (where a Stemma run
+folder holds it), its sha256 recorded in `run.json` and `launch.json`, and the prompt
+names it, as the Stemma lead is told of its attachments. `--max-s` is the real session's
 wall-time limit (run 4: 9000 s, the Stemma lead's limit); like the Stemma lead, the
 session is not told it, and a session stopped by it gives no scorable answer.
 `--canary-only` starts everything and runs the scope canary, then stops: the task is
@@ -104,7 +108,10 @@ BROKER: Final = "stemma"  # the MCP server's name in the as_of arm's configurati
 # date to the broker and the guard; the rest is the broker's store, the guard's log and
 # the launch files. Invariant: what the date and the record rest on.
 PROTECTED: Final = ("run.json", "store", "events.jsonl", "events.jsonl.lock", ".mcp.json",
-                    ".settings.json", ".stemma", "transcripts")
+                    ".settings.json", ".stemma", "transcripts", "task")
+# Where the task's attachments are copied, read-only (invariant: the Stemma run folder's
+# own place for them, `stemma.driver.runfolder._write_task`).
+ATTACHMENTS: Final = "task/attachments"
 # Where the record the leakage audit reads is kept (invariant: a Stemma run folder's
 # layout, `stemma.driver.config.SESSIONS_DIR` and `stemma.driver.settings.SESSION_TMP`).
 SESSIONS: Final = ".stemma/sessions"
@@ -149,7 +156,7 @@ The question, exactly as asked:
 
 {options}What you were told:
 {intake}
-
+{attached}
 Scope: answer only this question. Research nothing outside it; say briefly, at the end,
 what you did not research that a reader might want.
 
@@ -191,12 +198,53 @@ def task_from_file(path: Path) -> dict[str, Any]:
         t = load_task(path)
     except TaskInvalid as exc:
         raise BareError(f"{path}: {exc}") from exc
-    if t.attachments:
-        raise BareError(f"{path}: attachments are not given to the bare arm; refusing "
-                        "rather than giving it less than the Stemma arm")
     return {"question": t.question, "intake": t.intake, "as_of": t.as_of,
             "options": list(t.options) if t.options is not None else None,
-            "criteria": list(t.criteria), "scope": t.scope}
+            "criteria": list(t.criteria), "scope": t.scope,
+            "attachments": [str(a) for a in t.attachments]}
+
+
+def task_from_launcher(path: Path) -> dict[str, Any]:
+    """The pre-registered task a run's launcher builds (its `task_with(None)`, as for the
+    Stemma arm), validated by the driver's own loader."""
+    import tempfile
+
+    spec = importlib.util.spec_from_file_location(f"stemma_launcher_{path.stem}", path)
+    if spec is None or spec.loader is None:
+        raise BareError(f"cannot read the launcher at {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    t = mod.task_with(None)
+    if not isinstance(t, dict):
+        raise BareError(f"{path}: task_with gave no task")
+    with tempfile.TemporaryDirectory(prefix="bare-task-") as work:
+        task_path = Path(work) / "task.json"
+        task_path.write_text(json.dumps(t, ensure_ascii=False), encoding="utf-8")
+        return task_from_file(task_path)
+
+
+def copy_attachments(folder: Path, sources: list[str]) -> list[dict[str, str]]:
+    """Copy each attachment, byte for byte, read-only, to `task/attachments/<name>`, as
+    the Stemma run folder holds it; each with its sha256, checked after the copy."""
+    import hashlib
+    import stat
+
+    out = []
+    dest_dir = folder / ATTACHMENTS
+    for src in sources:
+        data = Path(src).read_bytes()
+        dest = dest_dir / Path(src).name
+        if dest.exists():
+            raise BareError(f"two attachments share the name {dest.name!r}")
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        dest.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+        digest = hashlib.sha256(data).hexdigest()
+        if hashlib.sha256(dest.read_bytes()).hexdigest() != digest:
+            raise BareError(f"the copy of {src} differs from it")
+        out.append({"path": str(dest.relative_to(folder)), "source": str(src),
+                    "sha256": digest, "bytes": str(len(data))})
+    return out
 
 
 def prompt_for(t: dict[str, Any]) -> str:
@@ -210,13 +258,17 @@ def prompt_for(t: dict[str, Any]) -> str:
         opts += ("What done means:\n"
                  + "".join(f"- C{i}: {c}\n" for i, c in enumerate(criteria, 1)) + "\n")
     lines = "".join(f"- {k} {v}\n" for k, v in intake.items())
+    names = [f"{ATTACHMENTS}/{Path(a).name}" for a in t.get("attachments") or []]
+    attached = (f"\nThe user attached {', '.join(names)}, in your working folder.\n"
+                if names else "")
     as_of = t.get("as_of")
     cutoff = (f"Use only information published before {as_of} 00:00 UTC; treat that "
               "moment as now." if as_of else
               "Use only information published on or before {d}; treat {d} as today.".format(
                   d=datetime.now(UTC).date().isoformat()))
     return PROMPT.format(who=who, question=t["question"], options=opts,
-                         intake=lines.rstrip("\n") or "- nothing else", cutoff=cutoff)
+                         intake=lines.rstrip("\n") or "- nothing else", cutoff=cutoff,
+                         attached=attached)
 
 
 def tools_for(t: dict[str, Any]) -> tuple[str, ...]:
@@ -619,6 +671,7 @@ def launch(root: Path, t: dict[str, Any], popen: Any = subprocess.Popen,
     folder = folder.resolve()
     prompt = prompt_for(t)
     _write(folder / "prompt.txt", prompt)
+    attachments = copy_attachments(folder, list(t.get("attachments") or []))
     python = SCOPE_PYTHON if SCOPE_PYTHON.exists() else Path(sys.executable)
     if version is None:
         version = harness_version(DriverConfig(folder, binary, config, python,
@@ -629,7 +682,7 @@ def launch(root: Path, t: dict[str, Any], popen: Any = subprocess.Popen,
     mcp_config: Path | None = None
     if as_of:
         _write(folder / "run.json", json.dumps({
-            "run_id": stamp, "as_of": as_of, "arm": "bare",
+            "run_id": stamp, "as_of": as_of, "arm": "bare", "attachments": attachments,
             "harness": {"binary": str(binary), "version": version,
                         "config_dir": str(config)}}))
         mcp_config = folder / ".mcp.json"
@@ -638,7 +691,7 @@ def launch(root: Path, t: dict[str, Any], popen: Any = subprocess.Popen,
         "model": MODEL, "effort": EFFORT, "tools": list(tools), "harness": version,
         "as_of": as_of, "broker_tools": list(broker_tools()) if as_of else [],
         "settings_extra": settings, "task": t, "started_at": stamp, "max_s": max_s,
-        "canary_only": canary_only}, indent=1))
+        "canary_only": canary_only, "attachments": attachments}, indent=1))
 
     token, control_token = secrets.token_hex(16), secrets.token_hex(16)
     marker = folder.parent / f".scope-canary-{stamp}-{secrets.token_hex(4)}.txt"
@@ -701,6 +754,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--question-file", type=Path, default=None)
     ap.add_argument("--task", type=Path, default=None,
                     help="the task.json the Stemma arm is given (run 4); replaces run 3's")
+    ap.add_argument("--launcher", type=Path, default=None,
+                    help="a run's launcher (tests/e2e/run4_demo.py): its pre-registered task")
     ap.add_argument("--max-s", type=float, default=SESSION_MAX_S,
                     help="the real session's wall-time limit in seconds (run 4: 9000)")
     ap.add_argument("--canary-only", action="store_true",
@@ -710,9 +765,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="print the prompt and the launch; create nothing")
     args = ap.parse_args(argv)
     try:
-        if args.task is not None and args.question_file is not None:
-            raise BareError("give --task or --question-file, not both")
-        t = task_from_file(args.task) if args.task is not None else task(args.question_file)
+        given = [a for a in (args.task, args.launcher, args.question_file) if a is not None]
+        if len(given) > 1:
+            raise BareError("give one of --task, --launcher or --question-file")
+        t = (task_from_file(args.task) if args.task is not None else
+             task_from_launcher(args.launcher) if args.launcher is not None else
+             task(args.question_file))
         if args.dry_run:
             print(prompt_for(t))
             folder = Path(args.out).expanduser() / "<new run folder>"
