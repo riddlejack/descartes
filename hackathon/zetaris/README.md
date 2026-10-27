@@ -99,7 +99,7 @@ receipt in the capture manifest.
 ## Tear down
 
 ```bash
-cd "$STEMMA_ZETARIS_HOME/zetaris-platform" && docker compose down
+cd "${STEMMA_ZETARIS_HOME:?set STEMMA_ZETARIS_HOME}/zetaris-platform" && docker compose down
 ```
 
 ```bash

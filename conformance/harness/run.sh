@@ -7,8 +7,9 @@
 #      default ./runs-local), PROBE_PREP (shell run in the session's cwd first),
 #      PROBE_ENV (extra VAR=value words), PROBE_PLUGIN (plugin folder, default ./plugin).
 # Settings files here record the original probes' absolute paths as placeholders:
-# <PROBE_RUNS> (the probe output folder), <REPO> (this repository), <HOME> and <TOOLS>
-# (the folder holding the pinned binary and clean config). Replace each with an absolute
+# <PROBE_RUNS> (the probe output folder), <REPO> (this repository), <HOME>, <TOOLS>
+# (the folder holding the pinned binary and clean config) and <TMP> (the harness's own
+# temporary folder, /private/tmp/claude-<uid> on macOS). Replace each with an absolute
 # path before reusing a settings file.
 S=${0:A:h}
 name=$1; prompt=$2; shift 2

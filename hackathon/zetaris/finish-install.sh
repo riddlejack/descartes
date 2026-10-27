@@ -14,6 +14,13 @@
 set -euo pipefail
 
 Z="${STEMMA_ZETARIS_HOME:?set STEMMA_ZETARIS_HOME to the folder that holds zetaris-platform/}"
+if [ ! -d "$Z" ]; then
+    echo "STEMMA_ZETARIS_HOME is not a folder: $Z" >&2
+    exit 2
+fi
+# Absolute from here on: the script changes directory below, and a relative path would
+# then point somewhere else.
+Z="$(cd "$Z" && pwd -P)"
 if [ ! -d "$Z/zetaris-platform" ]; then
     echo "No Zetaris bundle at $Z/zetaris-platform (STEMMA_ZETARIS_HOME=$Z)." >&2
     exit 2

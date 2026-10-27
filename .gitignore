@@ -20,3 +20,8 @@ node_modules/
 .DS_Store
 runs-local/
 .claude/.cc-writes/
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+*-journal

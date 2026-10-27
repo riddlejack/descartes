@@ -1,6 +1,6 @@
 # The Postgres that holds the evidence-derived tables and that Zetaris registers as a
 # JDBC datasource (Zetaris cannot read a file on the laptop). PostgreSQL licence.
-# Start:  docker compose --env-file "$STEMMA_ZETARIS_HOME/stemma.env" -f hackathon/zetaris/compose.yaml up -d
+# Start:  docker compose --env-file "${STEMMA_ZETARIS_HOME:?set STEMMA_ZETARIS_HOME}/stemma.env" -f hackathon/zetaris/compose.yaml up -d
 # The env file lives outside the repo and holds STEMMA_PG_PASSWORD only.
 name: stemma-evidence
 services:
