@@ -104,6 +104,8 @@ class Limits:
     # Resource limit: in a frame-only run, seconds the finished frame (intake, frame, tree,
     # the response to the critique) must stay unchanged before the driver ends the lead.
     frame_settle_s: float = 60.0
+    # Resource limit: questions to the second model family (N1) in flight at once.
+    max_second_family: int = 2
     # Resource limit: times the driver resumes a run by itself after the account's usage
     # limit stopped it (0: never; the run then ends usage_limited for a manual resume).
     max_usage_resumes: int = 6

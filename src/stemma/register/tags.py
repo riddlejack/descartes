@@ -50,7 +50,9 @@ ANY_TAG = re.compile(rf"\[\[(?:c:[0-9a-f]{{12}}|nc:{_NC_REASON})\]\]")
 # Anything that starts like a tag: `[[`, c or nc in any case, optional spaces, `:`.
 _TAG_LIKE = re.compile(r"\[\[\s*n?c\s*:[^\[\]\n]*(?:\]\]?)?", re.IGNORECASE)
 NUMBER_TOKEN = re.compile(
-    rf"[+\-−]?[$£€¥]?{_NUMERAL}(?:{_NUMERAL}|[,.\u2009\u202f'])*(?:%|\s?(?:bn|mn|m|k|tn|trn|x))?",
+    # A scale suffix is one only when no letter follows it ("7 more" is the number 7).
+    rf"[+\-−]?[$£€¥]?{_NUMERAL}(?:{_NUMERAL}|[,.\u2009\u202f'])*"
+    rf"(?:%|\s?(?:bn|mn|m|k|tn|trn|x)(?![A-Za-z]))?",
     re.IGNORECASE,
 )
 
