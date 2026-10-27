@@ -10,6 +10,7 @@
     python run.py cleanup RUN_DIR          remove a finished run's copies from Zetaris and Postgres
     python run.py verify RUN_DIR           re-check a recorded run offline: hashes, quotes, sums
     python run.py report RUN_DIR OUT_DIR   a static report of a run (index.html, for GitHub Pages)
+    python run.py tamper RUN_DIR           change one byte of a copy; watch verify refuse it
 
 A replay is never shown as live: every recorded line is marked [replay] with its file's
 SHA-256, and only what runs now (the conformance suite, the data layer over the replayed
@@ -170,6 +171,13 @@ def cmd_report(run_dir: Path, out_dir: Path, with_verify: bool) -> int:
     return report_main([str(run_dir), str(out_dir), *(["--verify"] if with_verify else [])])
 
 
+def cmd_tamper(run_dir: Path, what: str, keep: bool, baseline: bool) -> int:
+    from stemma.report.tamper import main as tamper_main
+
+    return tamper_main([str(run_dir), "--what", what, *(["--keep"] if keep else []),
+                        *([] if baseline else ["--no-baseline"])])
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python run.py", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -197,6 +205,11 @@ def main(argv: list[str] | None = None) -> int:
     rpt.add_argument("run_dir", type=Path)
     rpt.add_argument("out_dir", type=Path)
     rpt.add_argument("--verify", action="store_true", help="show verify's result on the page")
+    tp = sub.add_parser("tamper", help="the tamper demo, on a copy of a recorded run")
+    tp.add_argument("run_dir", type=Path)
+    tp.add_argument("--what", choices=("source", "figure"), default="source")
+    tp.add_argument("--keep", action="store_true")
+    tp.add_argument("--no-baseline", action="store_true")
     args = ap.parse_args(argv)
     if args.cmd is None:
         if _truthy(os.environ.get("SAMPLE_MODE")):
@@ -219,6 +232,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_verify(args.run_dir, args.json)
     if args.cmd == "report":
         return cmd_report(args.run_dir, args.out_dir, args.verify)
+    if args.cmd == "tamper":
+        return cmd_tamper(args.run_dir, args.what, args.keep, not args.no_baseline)
     return cmd_record(args.run_dir, args.pack)
 
 

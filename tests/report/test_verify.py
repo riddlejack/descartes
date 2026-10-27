@@ -194,3 +194,14 @@ def test_run_one_verifies_in_under_a_minute_and_names_its_differences() -> None:
     calc = section(result, "calculations")
     assert calc.done > 100 and not calc.not_run
     assert all(("now reports" in f or "no result" in f) for f in calc.failures)
+
+
+@needs_sandbox
+def test_a_memo_never_hides_a_changed_script(run: tuple[Path, dict[str, str]]) -> None:
+    """The tamper demo's second pass reuses only byte-identical re-runs."""
+    run_dir, ids = run
+    memo: verify.Memo = {}
+    assert verify.verify(run_dir, memo=memo).outcome == "PASS" and len(memo) == 1
+    (run_dir / "analysis/helper.py").write_text("def years_left():\n    return 5\n")
+    fails = section(verify.verify(run_dir, memo=memo), "calculations").failures
+    assert len(fails) == 1 and ids["proj"][:12] in fails[0] and len(memo) == 2

@@ -27,14 +27,16 @@ from __future__ import annotations
 import argparse
 import ast
 import errno
+import functools
 import hashlib
 import json
 import os
 import stat
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -180,34 +182,56 @@ def _cid(c: dict[str, Any]) -> str:
     return f"claim c:{str(c['claim_id'])[:12]}{cited}"
 
 
+@contextmanager
+def _text_helpers_cached() -> Iterator[None]:
+    """Part A's `find_quote` normalises the whole stored text on every call. That is a
+    pure function of the text (its result is only read), so while quotations are
+    re-checked it is computed once per text, and the original is restored after."""
+    from stemma.evidence import quotes
+
+    saved = quotes.normalise
+    quotes.normalise = functools.lru_cache(maxsize=64)(saved)
+    try:
+        yield
+    finally:
+        quotes.normalise = saved
+
+
 def check_quotations(run: Run, receipts: dict[str, dict[str, Any]]) -> Section:
+    with _text_helpers_cached():
+        return _check_quotations(run, receipts)
+
+
+def _check_quotations(run: Run, receipts: dict[str, dict[str, Any]]) -> Section:
     sec = Section("quotations", "Quotations")
-    figures = figures_bad = 0
-    texts: dict[str, str | None] = {}
-    for c in run.claims.values():
-        if c.get("tier") not in SOURCED_TIERS:
+    sourced = [c for c in run.claims.values() if c.get("tier") in SOURCED_TIERS]
+    # One source at a time, so each stored text is read and normalised once.
+    items = sorted(((str(item.get("receipt_id")), str(c["claim_id"]), n, item, c)
+                    for c in sourced for n, item in enumerate(c.get("support") or [], start=1)),
+                   key=lambda t: (t[0], t[1], t[2]))
+    current: tuple[str, str | None] = ("", None)
+    for rid, _cid_full, n, item, c in items:
+        sec.done += 1
+        rec = receipts.get(rid)
+        if rec is None:
+            sec.failures.append(f"{_cid(c)}, support {n}: receipt {rid} is missing.")
             continue
-        for n, item in enumerate(c.get("support") or [], start=1):
-            sec.done += 1
-            rid = str(item.get("receipt_id"))
-            rec = receipts.get(rid)
-            if rec is None:
-                sec.failures.append(f"{_cid(c)}, support {n}: receipt {rid} is missing.")
-                continue
-            if rid not in texts:
-                texts[rid] = runread.stored_text(run.dir, rec)
-            text = texts[rid]
-            if text is None:
-                sec.failures.append(f"{_cid(c)}, support {n}: {_where(rec)} has no stored text.")
-                continue
-            try:
-                found = find_quote(text, str(item.get("quote")), rec.get("flagged_ranges"))
-            except EvidenceError as exc:
-                sec.failures.append(f"{_cid(c)}, support {n}: {exc}.")
-                continue
-            if not found["found"]:
-                sec.failures.append(f"{_cid(c)}, support {n}: the quotation is no longer in "
-                                    f"the stored text of {_where(rec)}.")
+        if current[0] != rid:
+            current = (rid, runread.stored_text(run.dir, rec))
+        text = current[1]
+        if text is None:
+            sec.failures.append(f"{_cid(c)}, support {n}: {_where(rec)} has no stored text.")
+            continue
+        try:
+            found = find_quote(text, str(item.get("quote")), rec.get("flagged_ranges"))
+        except EvidenceError as exc:
+            sec.failures.append(f"{_cid(c)}, support {n}: {exc}.")
+            continue
+        if not found["found"]:
+            sec.failures.append(f"{_cid(c)}, support {n}: the quotation is no longer in "
+                                f"the stored text of {_where(rec)}.")
+    figures = figures_bad = 0
+    for c in sourced:
         value = c.get("value") or {}
         written = value.get("as_written")
         if isinstance(written, str) and written.strip() and c.get("support"):
@@ -299,8 +323,26 @@ def code_bundle(run_dir: Path, script: str) -> Any:
     return Code(rel.name, files)
 
 
-def _rerun_one(run: Run, c: dict[str, Any], rerun_fn: Rerunner) -> tuple[str | None, str | None]:
-    """(failure, not-run reason) for one estimated claim; both None when it reproduced."""
+def experiment_key(code: Any, values: dict[str, float], documents: dict[str, str]) -> str:
+    """The SHA-256 of everything a re-run reads: its code files, input values and
+    documents. Two re-runs with the same key are the same experiment."""
+    h = hashlib.sha256()
+    for name in sorted(code.files):
+        h.update(name.encode() + b"\0" + hashlib.sha256(code.files[name]).digest())
+    h.update(json.dumps([code.script, sorted(values.items()),
+                         sorted((k, hashlib.sha256(v.encode()).hexdigest())
+                                for k, v in documents.items())]).encode())
+    return h.hexdigest()
+
+
+Memo = dict[str, Any]  # experiment key -> the re-run's result
+
+
+def _rerun_one(run: Run, c: dict[str, Any], rerun_fn: Rerunner,
+               memo: Memo | None = None) -> tuple[str | None, str | None]:
+    """(failure, not-run reason) for one estimated claim; both None when it reproduced.
+    With a memo, a re-run whose code, inputs and documents are byte-identical to one
+    already run in this process reuses that result (the tamper demo's second pass)."""
     from stemma.register.derivation import DerivationError
 
     deriv = c.get("derivation") or {}
@@ -327,8 +369,14 @@ def _rerun_one(run: Run, c: dict[str, Any], rerun_fn: Rerunner) -> tuple[str | N
         if text is None:
             return f"{_cid(c)}: document {rid} named by {script} has no stored text.", None
         documents[str(rid)] = text
+    key = experiment_key(code, values, documents)
     try:
-        rr = rerun_fn(code, values, documents) if documents else rerun_fn(code, values)
+        if memo is not None and key in memo:
+            rr = memo[key]
+        else:
+            rr = rerun_fn(code, values, documents) if documents else rerun_fn(code, values)
+            if memo is not None:
+                memo[key] = rr
     except DerivationError as exc:
         if "sandbox-exec is not available" in str(exc):
             return None, f"{_cid(c)}: {exc}"
@@ -346,14 +394,14 @@ def _rerun_one(run: Run, c: dict[str, Any], rerun_fn: Rerunner) -> tuple[str | N
 
 
 def check_calculations(run: Run, rerun_fn: Rerunner | None = None,
-                       workers: int = RERUN_WORKERS) -> Section:
+                       workers: int = RERUN_WORKERS, memo: Memo | None = None) -> Section:
     from stemma.register.derivation import rerun
 
     fn = rerun_fn or rerun
     sec = Section("calculations", "Calculations")
     todo = [c for c in run.claims.values() if c.get("tier") == "estimated"]
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        results = list(pool.map(lambda c: _rerun_one(run, c, fn), todo))
+        results = list(pool.map(lambda c: _rerun_one(run, c, fn, memo), todo))
     for failure, not_run in results:
         if not_run:
             sec.not_run.append(not_run)
@@ -451,7 +499,7 @@ def release_state(run: Run) -> str:
 
 
 def verify(run_dir: Path, rerun_fn: Rerunner | None = None,
-           workers: int = RERUN_WORKERS) -> Result:
+           workers: int = RERUN_WORKERS, memo: Memo | None = None) -> Result:
     started = time.monotonic()
     run = runread.load(Path(run_dir))
     for cid in run.cited():
@@ -460,7 +508,7 @@ def verify(run_dir: Path, rerun_fn: Rerunner | None = None,
     caps, texts = check_captures(run.dir, receipts)
     sections = [caps, texts,
                 check_quotations(run, {str(r.get("receipt_id")): r for r in receipts}),
-                check_calculations(run, rerun_fn, workers),
+                check_calculations(run, rerun_fn, workers, memo),
                 check_log(run.dir),
                 check_fingerprints(run)]
     return Result(run.run_id, run.run.get("created_at"), sections,
