@@ -506,3 +506,21 @@ skipped.
   lint's append-a-line tests have room.
 - Shown: lint and map check pass; tests/roles 59 pass; whole suite 1,426 pass, 18
   skipped.
+
+### After the v2 tree check (branch claude/v2-roles-tree-check, from v2-next)
+Four defects the check found against the approved decisions, fixed in the texts:
+1. Criteria beyond the question (decision D4): the lead's criteria must each be
+   stated by the question or task/intake.md, never its own (a source rule, flip
+   values); the framer names by id any criterion that adds a requirement neither
+   states.
+2. A decision tree whose top parts were each one option's terms (decision D2): the
+   lead's tree line, the method and the decision card now make a decision's top
+   parts criteria every option is assessed under.
+3. A list question whose tree never asked for the list: its first part finds the
+   candidates (lead, method).
+4. Leaves packing several measures: one measure per leaf (lead, method).
+The framer also checks these three tree shapes. To fit, the lead's terms clause
+moved into the D3 line and the arithmetic line lost its derivation detail (the
+tools' own schemas carry it); longest runnable lead 850/850. Placebo method
+lengthened to match. Shown: lint and map check pass; whole suite 1,607 pass, 19
+skipped.

@@ -10,7 +10,7 @@ Use this card when the question itself asks whether to act or which option to ta
 ## Framing the choice
 
 Take the options the question or the user names: for "whether to do X", doing it and not doing it; for "A or B", A and B.
-Make the tree's sub-questions the criteria every option is compared on, so that no option owns a subtree, and find early which criterion could end the question.
+Make the tree's top parts the criteria every option is compared on (what each offers, how certain it is, what it costs), never one option's own terms as a part, and find early which criterion could end the question.
 If the question asks what to do and names no options, work the options out from the findings after the research, never before it.
 Take what the decider is trying to achieve from the question and task/; if the options cannot be ranked against it, say so as the first finding.
 
