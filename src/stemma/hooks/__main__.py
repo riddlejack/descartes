@@ -13,6 +13,7 @@ Any failure inside a guard is a refusal, so a broken guard never lets a tool thr
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sys
 from pathlib import Path
@@ -70,8 +71,39 @@ def _answer(decision: guards.Decision, notice: str | None) -> str:
     return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", **specific}})
 
 
+def run_stop(stdin: str) -> tuple[int, str, str]:
+    """The Stop event: the lead's own session may not stop before its run is released
+    (stemma.hooks.stop). Every other session stops; so does any session when this
+    fails, since the driver resumes a lead that ended (failing open, unlike the
+    guards, never traps a session)."""
+    from stemma.hooks import stop
+
+    run_dir: Path | None = None
+    try:
+        hook = json.loads(stdin)
+        if not isinstance(hook, dict):
+            raise guards.GuardInputError("hook input is not a JSON object")
+        run_dir = guards.run_dir_from_env()
+        decision = stop.decide(hook, run_dir)
+    except Exception as exc:  # noqa: BLE001 - fail open, loudly
+        if run_dir is not None:
+            with contextlib.suppress(Exception):  # the stderr line below still says it
+                jsonl.append(run_dir / "events.jsonl", {
+                    "event": "stop_hook_failed", "at": guards.now(),
+                    "error": f"{type(exc).__name__}: {exc}"[:500]})
+        return EXIT_ALLOW, "", f"Stemma's stop hook failed ({type(exc).__name__})."
+    jsonl.append(run_dir / "events.jsonl", {
+        "event": "lead_stop_refused" if decision.block else "stop_allowed",
+        "at": guards.now(), "session_id": hook.get("session_id"), **decision.detail})
+    if decision.block:
+        return EXIT_BLOCK, "", decision.reason
+    return EXIT_ALLOW, "", ""
+
+
 def run(event: str, stdin: str) -> tuple[int, str, str]:
     """Return (exit code, stdout, stderr) for one hook call."""
+    if event == "stop":
+        return run_stop(stdin)
     try:
         handler = HANDLERS[event]
         hook = json.loads(stdin)

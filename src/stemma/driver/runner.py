@@ -767,6 +767,89 @@ class Driver:
                                                 landed, outcome or self.state.get("outcome"),
                                                 usage=self.usage_summary))
 
+    # ----- a lead that ended before the release -----------------------------------------
+    def killed_workers(self, name: str) -> list[str]:
+        """The background workers the harness killed when the lead's session `name`
+        ended, by their description, from its saved stream."""
+        try:
+            data = safeio.read_bytes(self.run_dir, f"{SESSIONS_DIR}/{name}.stream.jsonl")
+        except (FileNotFoundError, safeio.UnsafePath, NotADirectoryError):
+            return []
+        described: dict[str, str] = {}
+        killed: list[str] = []
+        for raw in data.splitlines():
+            if b"task_" not in raw:
+                continue
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(msg, dict) or msg.get("type") != "system":
+                continue
+            tid = str(msg.get("task_id") or "")
+            if msg.get("subtype") == "task_started":
+                described[tid] = str(msg.get("description") or tid)
+            elif (msg.get("subtype") == "task_updated"
+                  and (msg.get("patch") or {}).get("status") == "killed"):
+                killed.append(described.get(tid, tid))
+        return list(dict.fromkeys(killed))
+
+    def _lead_time_left(self) -> float:
+        first = next((e for e in events.read(self.run_dir)
+                      if e.get("event") == "session_launched" and e.get("role") == "lead"),
+                     None)
+        started = usage._ts(first.get("at")) if first else None
+        if started is None:
+            return self.limits.lead_max_s
+        return self.limits.lead_max_s - (time.time() - started)
+
+    def _resume_lead_if_ended(self) -> None:
+        """A lead whose session ended without an accepted finish_run (it ended its turn
+        to wait, or it crashed) is resumed, at most `max_lead_resumes` times (a resource
+        limit), with a notice naming the work in flight and any worker killed when it
+        ended, so it re-dispatches them. Never after a release, in a frame-only run, at
+        a usage stop, or with no lead time left."""
+        lead = self.state["lead"]
+        if lead.get("running") or lead.get("outcome") not in ("completed", "failed"):
+            return
+        if (self.stop_after == "frame" or self.state.get("usage_limited")
+                or self.state.get("release_blocked") or self.released(self.run_dir)):
+            return
+        n = int(self.state.get("lead_resumes", 0))
+        if n >= self.limits.max_lead_resumes or self._lead_time_left() <= 0:
+            if not self.state.get("lead_resumes_used_up"):
+                self.state["lead_resumes_used_up"] = True
+                self._save_state()
+                events.emit(self.run_dir, "lead_not_resumed", resumes=n,
+                            limit=self.limits.max_lead_resumes,
+                            time_left_s=round(self._lead_time_left()))
+            return
+        from stemma.hooks.arrivals import queue_notice
+        from stemma.hooks.stop import in_flight
+
+        killed = self.killed_workers(str(lead.get("name") or "lead"))
+        try:
+            flight = in_flight(self.run_dir)
+        except Exception as exc:  # noqa: BLE001 - the notice says less, the resume goes on
+            flight = {}
+            events.emit(self.run_dir, "lead_resume_notice_partial", error=str(exc)[:300])
+        lines = [("Stemma: your session ended before finish_run was accepted, so the "
+                  "driver resumed it. Do not end your turn while work is in flight; wait "
+                  "for it.")]
+        if killed:
+            lines.append("Workers that were stopped when it ended, to dispatch again: "
+                         + "; ".join(killed) + ".")
+        for key, items in flight.items():
+            if items:
+                lines.append(f"{key.replace('_', ' ')}: {', '.join(items)}.")
+        queue_notice(self.run_dir, f"lead_resumed_{n + 1}", " ".join(lines))
+        self.state["lead_resumes"] = n + 1
+        self._save_state()
+        events.emit(self.run_dir, "lead_resumed_after_end", resume=n + 1,
+                    limit=self.limits.max_lead_resumes, previous_outcome=lead.get("outcome"),
+                    killed_workers=killed)
+        self.start_lead(resume=True)
+
     # ----- frame-only runs ---------------------------------------------------------------
     def frame_failures(self) -> list[str]:
         """What a frame-only run still lacks before it may end (empty: the frame is done)."""
@@ -850,6 +933,7 @@ class Driver:
             return False
         if any(lv.session.rate_limited is not None for lv in self.live.values()):
             self.state["usage_limited"] = True
+        self._resume_lead_if_ended()
         if self.stop_after == "frame" and not self.state.get("frame_complete") \
                 and self._frame_settled(now):
             done = self._end_frame_only()

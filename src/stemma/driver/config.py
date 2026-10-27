@@ -107,6 +107,9 @@ class Limits:
     # Resource limit: times the driver resumes a run by itself after the account's usage
     # limit stopped it (0: never; the run then ends usage_limited for a manual resume).
     max_usage_resumes: int = 6
+    # Resource limit: times the driver resumes a lead whose session ended before
+    # finish_run was accepted (run 3: a lead that ended its turn to wait for workers).
+    max_lead_resumes: int = 3
     # Resource limit: seconds waited beyond the reset time the harness reported, so the
     # resumed sessions do not meet the same limit at its edge.
     usage_resume_margin_s: float = 120.0

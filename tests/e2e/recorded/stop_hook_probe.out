@@ -1,0 +1,50 @@
+run folder: <SCRATCH>
+{
+ "driver_exit": 3,
+ "stop_refusals": 2,
+ "first_refusal_in_flight": {
+  "branches_awaiting_verdict": [],
+  "branches_in_progress": [],
+  "branches_without_record": [
+   "b1"
+  ],
+  "checks_running_or_pending": []
+ },
+ "worker_record": true,
+ "lead_saw_report": null,
+ "subagent_stats": {
+  "spawned": 1,
+  "requested": {
+   "background": 0,
+   "foreground": 0,
+   "unset": 1
+  },
+  "started_in_background": 1,
+  "max_depth": 1,
+  "spawned_by_subagents": 0,
+  "completed": 1,
+  "failed": 0,
+  "killed": {
+   "parent": 0,
+   "user": 0,
+   "system": 0
+  },
+  "refused": {
+   "depth_limit": 0,
+   "concurrency_limit": 0,
+   "budget": 0
+  },
+  "by_type": {
+   "stemma:worker": 1
+  }
+ },
+ "stop_events": [
+  "stop_allowed",
+  "lead_stop_refused",
+  "lead_stop_refused"
+ ]
+}
+exit 1
+
+# re-evaluated on the same run folder:
+{"worker_report_reached_lead": true, "notification": "worker finished: RECORD WRITTEN\n\n- The command was blocked when I ran it normally (the tool won't run a plain `sleep` fo"}
