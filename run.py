@@ -9,6 +9,7 @@
     python run.py record RUN_DIR PACK_DIR  record a finished run as a replayable pack
     python run.py cleanup RUN_DIR          remove a finished run's copies from Zetaris and Postgres
     python run.py verify RUN_DIR           re-check a recorded run offline: hashes, quotes, sums
+    python run.py report RUN_DIR OUT_DIR   a static report of a run (index.html, for GitHub Pages)
 
 A replay is never shown as live: every recorded line is marked [replay] with its file's
 SHA-256, and only what runs now (the conformance suite, the data layer over the replayed
@@ -163,6 +164,12 @@ def cmd_verify(run_dir: Path, as_json: bool) -> int:
     return verify_main([str(run_dir), *(["--json"] if as_json else [])])
 
 
+def cmd_report(run_dir: Path, out_dir: Path, with_verify: bool) -> int:
+    from stemma.report.site import main as report_main
+
+    return report_main([str(run_dir), str(out_dir), *(["--verify"] if with_verify else [])])
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python run.py", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -186,6 +193,10 @@ def main(argv: list[str] | None = None) -> int:
     vf = sub.add_parser("verify", help="re-check a recorded run offline, with no keys")
     vf.add_argument("run_dir", type=Path)
     vf.add_argument("--json", action="store_true")
+    rpt = sub.add_parser("report", help="a static report of a run, for GitHub Pages")
+    rpt.add_argument("run_dir", type=Path)
+    rpt.add_argument("out_dir", type=Path)
+    rpt.add_argument("--verify", action="store_true", help="show verify's result on the page")
     args = ap.parse_args(argv)
     if args.cmd is None:
         if _truthy(os.environ.get("SAMPLE_MODE")):
@@ -206,6 +217,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_cleanup(args.run_dir)
     if args.cmd == "verify":
         return cmd_verify(args.run_dir, args.json)
+    if args.cmd == "report":
+        return cmd_report(args.run_dir, args.out_dir, args.verify)
     return cmd_record(args.run_dir, args.pack)
 
 
