@@ -197,3 +197,36 @@ public read-only register constructor.
 Shown on a throwaway merge of both branches (never committed): the full suite gave
 1532 passed and 19 skipped, mypy and ruff were clean, run 1's verify output was the same
 as on this branch, and `stemma verify|report|new` reach these entry points.
+
+## Codex recheck: five more fixes (H1 to H3, M1, M2)
+
+- **H1, only sealed bytes count.** With a release manifest, the viewer and verify fold
+  only the log's sealed prefix, and read only the sealed prefix of
+  `register/checks.jsonl`. Anything appended after the seal fails the seal check and is
+  never read, so a forged verdict, finish record or revocation decides nothing. A
+  manifest that does not seal `checks.jsonl` gives INCOMPLETE, never PASS; W2's
+  manifest now seals it.
+
+  W2's new `Register.read_only` folds the whole log file, not the sealed prefix, so
+  `report/ledger.py` keeps its own in-memory snapshot.
+- **H2, the tamper demo writes only inside its copy.**
+  - It copies the whole run except what is only operational, and refuses any link or
+    special file before it touches anything.
+  - It refuses to run when the untouched copy already fails verify.
+  - It takes the path it changes from a checked SHA-256, and writes through the
+    register's confined writer.
+
+  **Run 1 is now refused, for two reasons:** a worker left a symbolic link at
+  `branches/b3-public-policy/testdocs/`, and its calculations already fail. The demo
+  needs a clean run.
+- **H3, `stemma new` follows no link when it writes.** It creates the file exclusively,
+  and a dangling link counts as an existing file. `--force` never replaces a link, and a
+  folder reached through a link is refused.
+- **M1, side files are read safely.** `checks.jsonl` and `refused_corrections.jsonl` are
+  read through `safefs` and a strict parser. A calculation input too large for a float
+  is a named failure.
+- **M2, the driver checks the task before it is written.** `stemma new` validates with
+  the driver's own `load_task` first. It refuses when the driver predates task.json
+  v0.4: on this branch alone it now refuses, and after the merge it writes.
+- Folder and file names may now start with a dot (`.claude`), but `.` and `..` are
+  still refused.

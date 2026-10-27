@@ -37,7 +37,7 @@ WALK_MAX_BYTES: Final = 16 * 1024 * 1024 * 1024
 # Resource limit: bytes read at a time while hashing.
 CHUNK: Final = 1 << 20
 # Logical invariant: what one path segment inside a run may be.
-SEGMENT: Final = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.@+=~,-]{0,254}")
+SEGMENT: Final = re.compile(r"[A-Za-z0-9_.][A-Za-z0-9_.@+=~,-]{0,254}")
 _DIR: Final = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 _FILE: Final = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
 

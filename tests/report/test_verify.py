@@ -530,3 +530,16 @@ def test_an_oversized_input_number_is_a_named_failure(
     r.claims[ids["now"]]["value"] = {**r.claims[ids["now"]]["value"], "number": 10 ** 400}
     out = verify._rerun_one(r, r.claims[ids["proj"]], lambda *a, **k: None)
     assert out[0] is not None and "too large" in out[0]
+
+
+def test_dot_names_are_plain_but_dot_segments_are_not(tmp_path: Path) -> None:
+    from stemma.report import safefs
+
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude/settings.json").write_text("{}")
+    (tmp_path / ".DS_Store").write_text("")
+    files, problems = safefs.walk(tmp_path)
+    assert problems == [] and ".claude/settings.json" in files
+    for bad in (".", "..", "a/../b", "./a"):
+        with pytest.raises(safefs.UnsafeRead):
+            safefs.parts(bad)

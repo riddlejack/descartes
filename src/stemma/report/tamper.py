@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -30,11 +31,10 @@ from stemma.report import runread, safefs, verify
 
 _SHA = re.compile(r"[0-9a-f]{64}")
 
-# What a verify of the copy needs; everything else (the driver's state, the assembled
-# plugin, derived indexes, transcripts of tool calls) is left out (logical invariant).
-COPY = ("run.json", "task", "criteria.md", "tree.json", "register", "analysis", "draft",
-        "reviews", "framer", "branches", "deliverable", "store/bytes", "store/text",
-        "store/receipts")
+# The whole run is copied except what is operational only (the driver's state and
+# session temp folders, derived indexes, per-call identity stamps), all of which the
+# release seal leaves out too (logical invariant).
+SKIP_TOP = (".stemma", ".stemma-tmp")
 SKIP_IN_COPY = ("index.sqlite", "index.sqlite-wal", "index.sqlite-shm", "calls")
 
 
@@ -49,30 +49,42 @@ class Change:
 
 
 def _clone(src: Path, dst: Path) -> None:
-    """Copy a file tree; a copy-on-write clone where the file system offers one."""
+    """Copy one entry as it is: a link stays a link (to be refused), a folder is copied
+    without following links inside it, a copy-on-write clone where the system has one."""
     dst.parent.mkdir(parents=True, exist_ok=True)
+    if src.is_symlink():
+        os.symlink(os.readlink(src), dst)
+        return
     if sys.platform == "darwin" and src.is_dir():
         done = subprocess.run(["/bin/cp", "-c", "-R", str(src), str(dst)],
                               capture_output=True, check=False)
         if done.returncode == 0:
-            for name in SKIP_IN_COPY:
-                for p in dst.rglob(name):
-                    if p.is_dir():
-                        shutil.rmtree(p)
-                    else:
-                        p.unlink()
             return
     if src.is_dir():
-        shutil.copytree(src, dst, symlinks=True, ignore=shutil.ignore_patterns(*SKIP_IN_COPY))
+        shutil.copytree(src, dst, symlinks=True)
     else:
         shutil.copy2(src, dst, follow_symlinks=False)
 
 
 def copy_run(run_dir: Path, dest: Path) -> None:
-    for rel in COPY:
-        src = run_dir / rel
-        if src.exists() and not src.is_symlink():
-            _clone(src, dest / rel)
+    """Copy the run, refuse the copy if it holds a link or a special file, and only then
+    remove what is operational only (by paths the confined walk found)."""
+    dest.mkdir(parents=True)
+    for name in safefs.listdir(run_dir, ""):
+        if name in SKIP_TOP:
+            continue
+        _clone(run_dir / name, dest / name)
+    files, problems = safefs.walk(dest)
+    if problems:
+        raise TamperError("the run holds what a demo must not copy: "
+                          + "; ".join(problems[:5]))
+    folders = sorted({rel.rsplit("/", 1)[0] for rel in files if "/" in rel})
+    for rel in folders:
+        if rel.rsplit("/", 1)[-1] in SKIP_IN_COPY:
+            shutil.rmtree(dest / rel, ignore_errors=True)
+    for rel in files:
+        if rel.rsplit("/", 1)[-1] in SKIP_IN_COPY and (dest / rel).is_file():
+            (dest / rel).unlink()
     for p in dest.rglob("*"):  # stored files are written read-only; the copy is ours
         if p.is_file() and not p.is_symlink():
             p.chmod(0o644)
@@ -195,10 +207,6 @@ def demo(run_dir: Path, what: str = "source", keep: bool = False, out: Any = Non
         t = time.monotonic()
         copy_run(run_dir, copy)
         say(f"  1. Copied the recorded run to {copy} ({time.monotonic() - t:.0f} s).")
-        _files, problems = safefs.walk(copy)
-        if problems:
-            raise TamperError("the run holds what a demo must not copy: "
-                              + "; ".join(problems[:5]))
         say("  2. Verifying the untouched copy:")
         base = verify.verify(copy, memo=memo)
         for line in _lines(base):
