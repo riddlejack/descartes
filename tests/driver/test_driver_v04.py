@@ -103,7 +103,7 @@ def test_without_criteria_the_lead_writes_them(cfg: DriverConfig, tmp: Path,
 
 # --- frame-only ------------------------------------------------------------------------
 
-def seed_frame(run: Path, *, respond: bool) -> None:
+def seed_frame(run: Path, *, respond: bool, verify: bool = True) -> None:
     """What the lead and the blind framer would have done through their tools."""
     reg = Register(run)
     (run / "criteria.md").write_text("- C1: a\n")  # the lead's, at intake
@@ -120,6 +120,8 @@ def seed_frame(run: Path, *, respond: bool) -> None:
     checks_api.mark_launched(run, req.request_id, "s-f2", "claude-opus-5-5", "high")
     reg.record_frame(Caller("stemma:blind-framer", None, "s-f2"), "critique", "critique")
     checks_api.mark_ended(run, req.request_id, 0, "completed")
+    if verify:  # the driver confirmed the critique session's model and effort
+        checks_api.mark_verified(run, "s-f2", "claude-opus-5-5", "high")
     if respond:
         (run / "framer/lead-response.md").write_text("answered")
 
@@ -159,6 +161,62 @@ def test_frame_only_without_a_response_does_not_claim_completion(
     st = json.loads((run / ".stemma/driver-state.json").read_text())
     assert st["frame_missing"] == ["framer/lead-response.md does not exist"]
     assert not kinds(run, "frame_complete")
+
+
+def test_frame_only_waits_for_a_verified_critique(cfg: DriverConfig, tmp: Path, fake: Fake,
+                                                 limits: Limits) -> None:
+    fast = dataclasses.replace(limits, frame_settle_s=0.1)
+    fake.configure({"lead": {"write_files": {"intake.md": "i", "criteria.md": "- C1: a\n",
+                                             "framer/lead-response.md": "answered"}}})
+    run = create_run(cfg, write_task(tmp, stop_after="frame"), limits=fast)
+    seed_frame(run, respond=False, verify=False)
+    assert start(cfg, run, checks_api, fast) == 1
+    st = json.loads((run / ".stemma/driver-state.json").read_text())
+    assert st["frame_missing"] == [("the critique's session s-f2 is not verified (its model "
+                                   "and effort not yet confirmed, or revoked)")]
+    assert not kinds(run, "frame_complete")
+
+
+def test_frame_completion_is_rechecked_after_every_session_ends(
+        cfg: DriverConfig, tmp: Path, fake: Fake, limits: Limits,
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    from stemma.driver.runner import Driver
+
+    fast = dataclasses.replace(limits, frame_settle_s=0.3)
+    fake.configure({"lead": {"write_files": {"intake.md": "restated", "criteria.md": "- C1: a\n",
+                                             "framer/lead-response.md": "answered"},
+                             "sleep_s": 30}})
+    run = create_run(cfg, write_task(tmp, stop_after="frame"), limits=fast)
+    seed_frame(run, respond=False)
+    real_end = Driver._end
+
+    def end(self: Driver, name: str, live: Any) -> None:
+        real_end(self, name, live)
+        if name == "lead":  # verification at a session's end revokes the critique's session
+            checks_api.revoke(run, "s-f2", "transcript shows another model")
+
+    monkeypatch.setattr(Driver, "_end", end)
+    assert start(cfg, run, checks_api, fast) == 1  # ended_without_release, not frame_complete
+    st = json.loads((run / ".stemma/driver-state.json").read_text())
+    assert st["outcome"] == "ended_without_release" and not st["frame_complete"]
+    assert st["frame_missing"] == ["the blind framer's critique is not recorded"]  # revoked
+    assert st["lead"]["outcome"] == "frame_complete"  # it was stopped for the frame's end
+    assert not kinds(run, "frame_complete")
+    (nc,) = kinds(run, "frame_not_complete")
+    assert nc["missing"] == st["frame_missing"]
+    assert json.loads((run / "status.json").read_text())["outcome"] == "ended_without_release"
+
+
+def test_criteria_are_in_the_frame_settle_signature(cfg: DriverConfig, tmp: Path,
+                                                    limits: Limits) -> None:
+    from stemma.driver.runner import FRAME_FILES, Driver
+
+    assert "criteria.md" in FRAME_FILES
+    run = create_run(cfg, write_task(tmp, stop_after="frame"), limits=limits)
+    d = Driver(cfg, run, checks_api, limits)
+    before = d._frame_signature()
+    (run / "criteria.md").write_text("- C1: a different criterion, just before the poll\n")
+    assert d._frame_signature() != before
 
 
 def test_a_full_run_ignores_the_frame(cfg: DriverConfig, tmp: Path, fake: Fake,
@@ -318,3 +376,5 @@ def test_an_interrupted_wait_stops_the_driver(cfg: DriverConfig, tmp: Path, fake
 
     assert run_to_end(cfg, run, resume_first=False, api=checks_api, limits=limits,
                       sleep=interrupted) == OUTCOME_CODES["driver_stopped"]
+
+

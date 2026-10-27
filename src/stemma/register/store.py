@@ -31,7 +31,8 @@ import os
 import re
 import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -222,6 +223,47 @@ class Register:
         self._relied: list[str] = []
         self._lock = self.dir / "register"  # jsonl.exclusive locks `register.lock`
 
+    @classmethod
+    def read_only(cls, run_dir: Path) -> Register:
+        """A reader of a run's register (a viewer, `stemma verify`): it creates, locks and
+        writes nothing; every write method is refused. The register log must exist."""
+        reg = cls.__new__(cls)
+        reg.run_dir = run_dir
+        reg.dir = run_dir / "register"
+        reg.wm = WorldModel({"storage": "file", "path": str(reg.dir / "log.jsonl"),
+                             "namespace": "register", "readOnly": True})
+        reg._evidence = None
+        reg._rerun = rerun
+        reg._relied = []
+        reg._lock = reg.dir / "register"
+        reg._is_read_only = True
+        return reg
+
+    _is_read_only = False
+
+    @contextmanager
+    def _exclusive(self) -> Iterator[None]:
+        """The writers' lock; a read-only register takes it never and writes nothing."""
+        if self._is_read_only:
+            raise Refused("Refused: this register is open read-only.")
+        with jsonl.exclusive(self._lock):
+            yield
+
+    # Public reads for viewers and verify (no lock, no write).
+    def recorded_reviews(self, version: int) -> dict[str, dict[str, Any]]:
+        return self._recorded_reviews(version)
+
+    def recorded_frames(self, kind: str) -> list[dict[str, Any]]:
+        return self._recorded_frames(kind)
+
+    def run_facts(self, predicate: str) -> list[dict[str, Any]]:
+        self.wm.refresh()
+        return self._run_facts(predicate)
+
+    def frozen_records(self, branch_id: str) -> dict[int, dict[str, Any]]:
+        self.wm.refresh()
+        return self._frozen_records(branch_id)
+
     @property
     def evidence(self) -> Evidence:
         if self._evidence is None:
@@ -341,7 +383,8 @@ class Register:
             listing = {"receipt_id": rid, "round": rnd, "draft_version": version,
                        "claims": sorted(ids),
                        "statements": {c: self._claim_record(c)["statement"] for c in ids}}
-            self._write_once(assignment_file(prompt, rnd), json.dumps(listing, indent=2))
+            self._write_once(assignment_file(prompt, rnd), json.dumps(listing, indent=2),
+                             prompt, rnd)
             self.wm.assertFact({"about": RUN_ENTITY, "predicate": "doc_check_listed",
                                 "value": {"receipt_id": rid, "round": rnd,
                                           "claims": sorted(ids), "version": version},
@@ -362,7 +405,7 @@ class Register:
                     "sentences": [sg.text for sg in segs if tag in sg.text]})
             listing2 = {"draft_version": version, "round": rnd, "claims": entries}
             self._write_once(assignment_file(prompt, rnd),
-                             json.dumps(listing2, indent=2, ensure_ascii=False))
+                             json.dumps(listing2, indent=2, ensure_ascii=False), prompt, rnd)
             self.wm.assertFact({"about": RUN_ENTITY, "predicate": "derivation_check_listed",
                                 "value": {"prompt": prompt, "round": rnd, "version": version,
                                           "claims": no_doc},
@@ -371,15 +414,18 @@ class Register:
                                                 event, round_no=rnd).request_id)
         return out
 
-    def _write_once(self, rel: str, text: str) -> None:
-        """A checker's assignment: written once and never changed while it runs (Codex
-        review #5); a name already taken is a loud refusal, never an overwrite."""
+    def _write_once(self, rel: str, text: str, prompt: str, round_no: int) -> None:
+        """A checker's assignment: never changed once its check is requested (Codex
+        review #5). A file left by a crash before the request (no checker can have been
+        started for it) is an orphan and is replaced; the write never follows a link."""
         try:
-            taken = safeio.exists_nofollow(self.run_dir, rel)
+            safeio.exists_nofollow(self.run_dir, rel)
         except (safeio.UnsafePath, NotADirectoryError) as exc:
             raise Refused(f"Refused: {rel} cannot be written safely.") from exc
-        if taken:
-            raise Refused(f"Refused: {rel} already exists; an assignment is never rewritten.")
+        if any(st.request.round == round_no
+               for st in checks_api.for_prompt(self.run_dir, "claim-checker", prompt)):
+            raise Refused(f"Refused: {rel} already belongs to a requested check; an "
+                          f"assignment is never rewritten.")
         self._write(rel, text)
 
     def check_assignment(self, caller: Caller) -> dict[str, Any]:
@@ -436,6 +482,8 @@ class Register:
             raise Refused(f"Refused: {rel} is not a plain file.") from exc
 
     def _write(self, rel: str | PurePosixPath, text: str) -> None:
+        if self._is_read_only:
+            raise Refused("Refused: this register is open read-only.")
         try:
             safeio.write_text(self.run_dir, rel, text)
         except (safeio.UnsafePath, NotADirectoryError) as exc:
@@ -496,7 +544,7 @@ class Register:
 
     def claims_snapshot(self) -> tuple[int, list[dict[str, Any]]]:
         """Every claim record at one log position, under the writers' lock (D, 5a)."""
-        with jsonl.exclusive(self._lock):
+        with self._exclusive():
             self.wm.refresh()
             log = self.dir / "log.jsonl"
             position = log.stat().st_size if log.exists() else 0
@@ -562,7 +610,7 @@ class Register:
         self._require(caller, roles.AUTHORS, "file claims")
         result = filing.run_checks(raw, self.run_dir, self.evidence, self._rerun,
                                    self._inputs())
-        with jsonl.exclusive(self._lock):
+        with self._exclusive():
             self.wm.refresh()
             cid, existed = self._store_claim(result, caller, None)
             self.rebuild_index()
@@ -613,7 +661,7 @@ class Register:
         if corrected_claim is not None:
             corrected = filing.run_checks(corrected_claim, self.run_dir, self.evidence,
                                           self._rerun, self._inputs())
-        with jsonl.exclusive(self._lock):
+        with self._exclusive():
             self.wm.refresh()
             self._checker_may_judge(caller, cid)  # binding, in lock
             if self._claim_record(cid)["superseded_by"] is not None:
@@ -717,7 +765,7 @@ class Register:
         if action == "list":
             return {"pending": self.wm.mergeQueue("pending")}
         self._require(caller, frozenset({roles.LEAD}), "decide entity reviews")
-        with jsonl.exclusive(self._lock):
+        with self._exclusive():
             self.wm.refresh()
             try:
                 if action == "approve":
@@ -826,7 +874,7 @@ class Register:
             node["set_aside"] = reason.strip() if isinstance(reason, str) else None
         if node.get("status") == "set_aside":
             raise Refused("Refused: a node is set aside by giving set_aside its reason.")
-        with jsonl.exclusive(self._lock):
+        with self._exclusive():
             self.wm.refresh()
             self._sync_records()
             existing = {n["id"]: n for n in self.tree()}
@@ -863,6 +911,10 @@ class Register:
                 if old and any(merged.get(k) != old.get(k) for k in ("parent", "branch_id")):
                     raise Refused(f"Refused: only the lead moves node {nid} or changes its "
                                   f"branch.")
+                if merged.get("kind") == "open_lane" and (old or {}).get("kind") != "open_lane":
+                    # An empty open lane closes by nothing: under a node it would close
+                    # that node by its children (Codex re-check #4).
+                    raise Refused("Refused: only the lead adds an open lane.")
                 if not old and parent is not None and closure(
                         [*existing.values(), merged])[nid]["closes_by"] == "ancestor_set_aside":
                     raise Refused(f"Refused: node {nid} would sit under a node set aside; only "
@@ -936,7 +988,7 @@ class Register:
         missing = [h for h in RECORD_HEADINGS if h not in headings]
         if missing:
             raise Refused(f"Refused: record.md lacks the heading {missing[0]!r}.")
-        with jsonl.exclusive(self._lock):
+        with self._exclusive():
             self.wm.refresh()
             self._sync_records()
             nodes = self._branch_nodes(branch_id)
@@ -1059,7 +1111,7 @@ class Register:
                           f"one material point.")
         res_in = self._check_resolutions(resolutions or [])
         branch_dir = self._branch_dir(branch_id)
-        with jsonl.exclusive(self._lock):
+        with self._exclusive():
             self.wm.refresh()
             # Authorization and write under one lock: no new round can start in between.
             self._session_prompt_is(caller, "branch-reviewer", f"branch:{branch_id}")
@@ -1171,7 +1223,7 @@ class Register:
             raise Refused("Refused: a revision of the criteria states its reason.")
         if not isinstance(text, str):
             raise Refused("Refused: the criteria are text, one line per criterion.")
-        with jsonl.exclusive(self._lock):
+        with self._exclusive():
             self.wm.refresh()
             self._freeze_criteria(caller, f"revised: {reason.strip()}", text)
             frozen = self.frozen_criteria()
@@ -1302,7 +1354,7 @@ class Register:
         """Host only (the driver): a checking session ran on the wrong model or effort.
         Its verdicts, frames and reviews stop counting, it can record nothing more, and a
         branch it answered goes back to proposed_done for the relaunched check."""
-        with jsonl.exclusive(self._lock):
+        with self._exclusive():
             self.wm.refresh()
             checks_api.revoke(self.run_dir, session_id, reason)
             source = {"kind": "register", "at": now(), "by": "stemma:register"}
@@ -1345,7 +1397,7 @@ class Register:
         if not isinstance(assumption, str) or not assumption.strip():
             raise Refused("Refused: state the assumption.")
         branch_dir = self._branch_dir(branch_id)
-        with jsonl.exclusive(self._lock):
+        with self._exclusive():
             nodes = self._branch_nodes(branch_id)
             if any(n["status"] != "waiting_user" for n in nodes):
                 raise Refused("Refused: the branch is not waiting on the user.")
@@ -1379,7 +1431,7 @@ class Register:
         frame = self._read("frame.md")
         if not self._recorded_frames("own"):
             raise Refused("Refused: the blind framer's own frame has not landed.")
-        with jsonl.exclusive(self._lock):
+        with self._exclusive():
             self.wm.refresh()
             self._freeze_criteria(caller, "first review asked for")
             prior = checks_api.for_prompt(self.run_dir, "blind-framer", "frame:critique")
@@ -1440,7 +1492,7 @@ class Register:
         if isinstance(version, bool) or not isinstance(version, int) or version < 1:
             raise Refused("Refused: version is a positive whole number.")
         data = self._read(f"draft/answer.v{version}.md")
-        with jsonl.exclusive(self._lock):
+        with self._exclusive():
             done = self.submitted_versions()
             self._freeze_criteria(caller, "first review asked for")
             if done and version <= max(done):
@@ -1467,8 +1519,11 @@ class Register:
             # Before the submission is recorded: a refusal here leaves nothing submitted.
             claim_reqs = self.request_claim_checks(cited, "submit_draft", version,
                                                    data.decode("utf-8", "replace"))
+            # The criteria the reviews are asked to judge, bound at the request (Codex
+            # re-check #3): a revision before they record makes them judge old criteria.
             self._run_fact(caller, "draft_submitted",
-                           {"version": version, "sha256": sha256_bytes(data)})
+                           {"version": version, "sha256": sha256_bytes(data),
+                            "criteria_sha256": (self.frozen_criteria() or {}).get("sha256")})
             reqs = [checks_api.request_check(self.run_dir, role, f"draft:{version}",
                                              "submit_draft").request_id
                     for role in roles.FINAL_REVIEWERS]
@@ -1546,7 +1601,7 @@ class Register:
             raise Refused("Refused: kind is own or critique.")
         if not isinstance(text, str) or not text.strip():
             raise Refused("Refused: the frame text is empty.")
-        with jsonl.exclusive(self._lock):
+        with self._exclusive():
             self._session_prompt_is(caller, "blind-framer", f"frame:{kind}")
             if kind == "critique" and not self._recorded_frames("own"):
                 raise Refused("Refused: the own frame comes before the critique.")
@@ -1571,16 +1626,17 @@ class Register:
             raise Refused("Refused: the review text is empty.")
         checked = self._check_points(points)
         rel = f"reviews/v{version}/{REVIEW_FILE_OF[caller.agent_type]}"
-        with jsonl.exclusive(self._lock):
+        with self._exclusive():
             self._session_prompt_is(caller, roles.short(caller.agent_type), f"draft:{version}")
             if caller.agent_type in self._recorded_reviews(version):
                 raise Refused("Refused: this review is already recorded.")
             self._write(rel, text)
             abbr = REVIEW_ABBR[caller.agent_type]
-            frozen = self.frozen_criteria() or {}
+            asked = next((d for d in self._run_facts("draft_submitted")
+                          if int(d["version"]) == version), {})
             record = {"version": version, "role": caller.agent_type,
                       "sha256": sha256_bytes(text.encode("utf-8")), "session": caller.session_id,
-                      "criteria_sha256": frozen.get("sha256"),
+                      "criteria_sha256": asked.get("criteria_sha256"),
                       "points": [{"id": f"v{version}.{abbr}.{i}", **pt}
                                  for i, pt in enumerate(checked, start=1)]}
             self._run_fact(caller, "review_recorded", record)
@@ -1622,6 +1678,20 @@ class Register:
         if not nodes:
             failures.append("the tree has no nodes")
         for n in nodes:
+            if n["closes_by"] == "children":
+                # A node sent back closes only through its own resolutions, never through
+                # its children (Codex re-check #4).
+                pending = [pt["id"] for pt in self.sent_back(str(n.get("branch_id")),
+                                                              [str(n["id"])])]
+                if pending:
+                    facts = self._live_facts(node_entity(n["id"]), "branch_verdict")
+                    last = facts[-1]["value"] if facts else {}
+                    done = ({r["point_id"] for r in last.get("resolutions") or []}
+                            if last.get("verdict") in CLOSING else set())
+                    for pid in pending:
+                        if pid not in done:
+                            failures.append(f"node {n['id']}: point {pid} sent back on it has "
+                                            f"no resolution; its children do not close it")
             if n["closes_by"] == "unreachable":
                 failures.append(f"node {n['id']} is not reachable from a root of the tree "
                                 f"(its parents form a cycle or lead to no node)")
@@ -1713,7 +1783,7 @@ class Register:
         self._require(caller, frozenset({roles.LEAD}), "read the release gate")
         if isinstance(version, bool) or not isinstance(version, int) or version < 1:
             raise Refused("Refused: version is a positive whole number.")
-        with jsonl.exclusive(self._lock):
+        with self._exclusive():
             self.wm.refresh()
             self._sync_records()
             unmet = self.finish_failures(version)
@@ -1788,8 +1858,9 @@ class Register:
 
     def frame_failures(self) -> list[str]:
         """What a frame-only run lacks before it ends (CONTRACTS v0.4 section 9): intake.md,
-        criteria.md with a criterion, frame.md, a tree, the blind framer's critique, and
-        framer/lead-response.md written after it. Exact facts only."""
+        criteria.md with a criterion, frame.md, a tree, the blind framer's critique for the
+        latest critique round from a session the driver verified (and has not revoked),
+        and framer/lead-response.md written after it. Exact facts only."""
         self.wm.refresh()
         missing = [f"{rel} does not exist" for rel in ("intake.md", "frame.md")
                    if not safeio.is_file(self.run_dir, rel)]
@@ -1800,7 +1871,20 @@ class Register:
             missing.append(str(exc).removeprefix("Refused: ").rstrip("."))
         if not self.tree():
             missing.append("the tree has no nodes")
-        if not self._recorded_frames("critique"):
+        critiques = self._recorded_frames("critique")
+        if critiques:
+            last = critiques[-1]
+            session = str(last.get("session") or "")
+            rounds = checks_api.for_prompt(self.run_dir, roles.BLIND_FRAMER, "frame:critique")
+            latest = rounds[-1].request if rounds else None
+            mine = checks_api.state_for_session(self.run_dir, session) if session else None
+            if session not in checks_api.verified_sessions(self.run_dir):
+                missing.append(f"the critique's session {session} is not verified (its model "
+                               f"and effort not yet confirmed, or revoked)")
+            elif latest is None or mine is None or mine.request.request_id != latest.request_id:
+                missing.append(f"the recorded critique is not from the latest critique round "
+                               f"(round {latest.round if latest else 0} asked)")
+        if not critiques:
             missing.append("the blind framer's critique is not recorded")
         elif not safeio.is_file(self.run_dir, "framer/lead-response.md"):
             missing.append("framer/lead-response.md does not exist")
@@ -1817,7 +1901,7 @@ class Register:
         self._require(caller, frozenset({roles.LEAD}), "finish the run")
         if isinstance(version, bool) or not isinstance(version, int) or version < 1:
             raise Refused("Refused: version is a positive whole number.")
-        with jsonl.exclusive(self._lock):
+        with self._exclusive():
             self.wm.refresh()
             self._sync_records()
             if version not in self.submitted_versions():
@@ -1989,6 +2073,8 @@ class Register:
     # -------------------------------------------------------------------- index
     def rebuild_index(self) -> None:
         """Rebuild `register/index.sqlite` from the log (a derived view, never a source)."""
+        if self._is_read_only:
+            raise Refused("Refused: this register is open read-only.")
         path = self.dir / "index.sqlite"
         tmp = self.dir / "index.sqlite.tmp"
         tmp.unlink(missing_ok=True)

@@ -29,11 +29,15 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   review is asked for (frame critique, branch proposal or draft submission, each refused
   without a criterion): a copy goes to `register/criteria/criteria.r<n>.md` and its
   digest is recorded; after that only the lead's `revise_criteria(text, reason)` changes
-  them (never the user's). Final reviews record the digest they judged; the gate refuses
-  when criteria.md differs from the frozen copy or a review judged an earlier version.
+  them (never the user's). Each final review is bound to the criteria digest at the
+  moment its draft was submitted (the request), not when it records; the gate refuses
+  when criteria.md differs from the frozen copy or a review was asked to judge an
+  earlier version.
   Whether a criterion is met is a reviewer's judgment, never code's.
 - **Tree authority**: an author below the lead may add a node, never move one, change
-  its branch, or place work under a set-aside node; only the lead does.
+  its branch, add an open lane, or place work under a set-aside node; only the lead
+  does. A node with points sent back on it closes only through its own closing verdict's
+  resolutions, never through its children.
 - **Tree** (D2, D5; section 5): node kinds are `question` and `open_lane` only; options,
   rivals, gates and checks are never nodes (`tree_upsert` refuses any other kind). A node
   gains `set_aside`: the lead (only) gives the reason a node is set aside, or null to
@@ -98,8 +102,8 @@ D1 to D10); where an older line below disagrees, section 0 wins.
     it (the checker reads nothing else of the draft). It judges whether each script
     computes what the claim states from the right inputs, and whether each assumption
     is stated as one; the exact re-run is code's.
-  `claim:<claim_id>` is no longer a route. Each list is written once and never changed
-  while its checker runs; `check_assignment()` gives a checker its own list. A checker
+  `claim:<claim_id>` is no longer a route. Each list is never changed once its check is
+  requested (a list a crash left before its request is an orphan and is replaced); `check_assignment()` gives a checker its own list. A checker
   records verdicts only on the claims its own round's list names. Observed figures are still checked; the host
   still starts every checker. (Replayed on run 1's eleven drafts: 81 checker sessions
   where run 1 started 407.)
@@ -149,6 +153,14 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   change; `manifest.check(run_dir, manifest_sha256)` names every other difference,
   including log bytes appended after the seal. `manifest.read_log` and
   `manifest.parse_log` read the log with no writer or lock.
+- **Frame completion** (Codex review #9): a frame-only run is complete only if, after
+  every session has ended and been verified, the critique is from the latest round's
+  verified session; otherwise it ends `ended_without_release` with what is missing.
+  `criteria.md` is among the frame files whose settling it waits for.
+- **A read-only register**: `Register.read_only(run_dir)` opens a run's register for a
+  reader (a viewer, `stemma verify`): it creates, locks and writes nothing, and every
+  write method is refused; `recorded_reviews`, `recorded_frames`, `run_facts` and
+  `frozen_records` are its public reads. World Model's file log takes `readOnly`.
 - **CLI**: `stemma report|verify|new` call builder W3's entry points
   (`stemma.report.site`, `stemma.report.verify`, `stemma.onboard.new`), or refuse with
   exit code 2 when they are not installed.

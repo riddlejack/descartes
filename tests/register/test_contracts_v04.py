@@ -279,6 +279,44 @@ def test_frame_failures_name_what_is_missing_until_the_frame_is_done(reg: Regist
     assert reg.frame_failures() == []
 
 
+def _framed(reg: Register) -> None:
+    (reg.run_dir / "intake.md").write_text("i")
+    reg.tree_upsert(LEAD, {"id": "q1", "kind": "question", "statement": "x"})
+    (reg.run_dir / "framer").mkdir()
+    checks_api.request_check(reg.run_dir, "blind-framer", "frame:own", "run_start")
+    reg.record_frame(launched(reg, "blind-framer", "frame:own", "s-f1"), "own", "own")
+    (reg.run_dir / "frame.md").write_text("frame")
+    reg.request_frame_critique(LEAD)
+
+
+def test_frame_failures_need_a_verified_critique_session(reg: Register) -> None:
+    _framed(reg)
+    req = [r for r in checks_api.pending_checks(reg.run_dir) if r.prompt == "frame:critique"][-1]
+    checks_api.mark_launched(reg.run_dir, req.request_id, "s-f2", "claude-opus-5-5", "high")
+    reg.record_frame(Caller("stemma:blind-framer", None, "s-f2"), "critique", "c")
+    (reg.run_dir / "framer/lead-response.md").write_text("answered")
+    unverified = ("the critique's session s-f2 is not verified (its model and effort not yet "
+                  "confirmed, or revoked)")
+    assert reg.frame_failures() == [unverified]
+    checks_api.mark_verified(reg.run_dir, "s-f2", "claude-opus-5-5", "high")
+    assert reg.frame_failures() == []
+    checks_api.revoke(reg.run_dir, "s-f2", "wrong model")  # its frames stop counting
+    assert reg.frame_failures() == ["the blind framer's critique is not recorded"]
+
+
+def test_frame_failures_need_the_latest_critique_round(reg: Register) -> None:
+    _framed(reg)
+    reg.record_frame(launched(reg, "blind-framer", "frame:critique", "s-f2"), "critique", "c")
+    (reg.run_dir / "framer/lead-response.md").write_text("answered")
+    assert reg.frame_failures() == []
+    reg.request_frame_critique(LEAD)  # the lead asks again: round 2 has no critique yet
+    assert reg.frame_failures() == [
+        "the recorded critique is not from the latest critique round (round 2 asked)"]
+    reg.record_frame(launched(reg, "blind-framer", "frame:critique", "s-f3"), "critique", "c2")
+    (reg.run_dir / "framer/lead-response.md").write_text("answered again")
+    assert reg.frame_failures() == []
+
+
 
 # --- D7: claim checks per source document, only for cited claims --------------------
 
@@ -361,19 +399,21 @@ def test_a_planted_link_never_redirects_the_listing(reg: Register, tmp_path: Pat
     (reg.run_dir / "checks").mkdir()
     (reg.run_dir / "elsewhere.json").write_text("{}")
     (reg.run_dir / "checks/doc-r1.r1.json").symlink_to(reg.run_dir / "elsewhere.json")
-    with pytest.raises(Refused, match="already exists; an assignment is never rewritten"):
-        _cite(reg, 1, a)
+    _cite(reg, 1, a)  # no check was requested for it: replaced, never followed
     assert (reg.run_dir / "elsewhere.json").read_text() == "{}"
-    assert reg.submitted_versions() == []  # the refused submission recorded nothing
+    assert not (reg.run_dir / "checks/doc-r1.r1.json").is_symlink()
     # A linked checks folder is refused outright.
-    (reg.run_dir / "checks/doc-r1.r1.json").unlink()
+    b = reg.file_claim(WORKER, claim(statement="Also 1.2bn in fiscal 2025."))["claim_id"]
+    for f in (reg.run_dir / "checks").iterdir():
+        f.unlink()
     (reg.run_dir / "checks").rmdir()
     outside = tmp_path / "outside"
     outside.mkdir()
     (reg.run_dir / "checks").symlink_to(outside)
     with pytest.raises(Refused, match="cannot be written safely"):
-        _cite(reg, 1, a)
+        _cite(reg, 2, b)
     assert list(outside.iterdir()) == []
+    assert reg.submitted_versions() == [1]  # the refused submission recorded nothing
 
 
 def test_a_running_checkers_assignment_never_changes(reg: Register) -> None:
@@ -753,3 +793,99 @@ def test_a_crash_inside_a_send_back_keeps_the_send_back(reg: Register, cut: str,
     with pytest.raises(Refused, match="a branch is sent back once"):
         fresh.record_branch_verdict(reviewer_for(fresh, "b1", "s-r2"), "b1", "bound", "again",
                                     points=[mat(node="n1")])
+
+
+# --- A read-only register for viewers and verify -----------------------------------
+
+def test_a_read_only_register_reads_a_sealed_run_and_writes_nothing(reg: Register) -> None:
+    import os
+    import stat
+
+    cid = ready_run(reg)
+    reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
+    out = reg.finish_run(LEAD, 1)
+
+    def listing() -> set[tuple[str, int]]:
+        return {(str(p.relative_to(reg.run_dir)), p.stat().st_mtime_ns)
+                for p in reg.run_dir.rglob("*") if p.is_file()}
+
+    before = listing()
+    folders = [p for p in reg.run_dir.rglob("*") if p.is_dir()] + [reg.run_dir]
+    modes = {p: p.stat().st_mode for p in folders}
+    for p in folders:
+        os.chmod(p, stat.S_IRUSR | stat.S_IXUSR)  # nothing in the run may be written
+    try:
+        ro = Register.read_only(reg.run_dir)
+        assert ro.get_claim(cid)["verdict"]["verdict"] == "holds"
+        assert ro.finish_failures(1) == []
+        assert set(ro.recorded_reviews(1)) == {"stemma:deciders-eye-reviewer",
+                                               "stemma:evidence-auditor",
+                                               "stemma:mechanical-reader"}
+        assert ro.run_facts("finished")[0]["version"] == 1
+        assert ro.release_state() == "released"
+        for attempt in (lambda: ro.tree_upsert(LEAD, {"id": "x", "kind": "question",
+                                                      "statement": "x"}),
+                        lambda: ro.finish_run(LEAD, 1), lambda: ro.rebuild_index()):
+            with pytest.raises(Refused, match="open read-only"):
+                attempt()
+    finally:
+        for p, m in modes.items():
+            os.chmod(p, m)
+    assert listing() == before
+    from stemma.register import manifest
+
+    assert manifest.check(reg.run_dir, out["manifest_sha256"]) == []
+
+
+
+# --- Codex re-check: criteria bound at the request, sent-back parents, orphans ---------
+
+def test_a_review_judges_the_criteria_it_was_asked_to(reg: Register) -> None:
+    cid = ready_run(reg)
+    reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
+    (reg.run_dir / "draft/answer.v2.md").write_text(
+        f"# v2\n\nRevenue was 1.2bn [[c:{cid[:12]}]].\n")
+    reg.submit_draft(LEAD, 2)  # reviews asked against criteria A
+    reg.revise_criteria(LEAD, C + "- C3: Names its sources.\n", "the critique asked")  # B
+    for i, role in enumerate(("deciders-eye-reviewer", "evidence-auditor", "mechanical-reader")):
+        reg.record_review(launched(reg, role, "draft:2", f"s-c{i}"), 2, "ok", [])
+    unmet = reg.finish_failures(2)
+    assert len([f for f in unmet if "judged criteria since revised" in f]) == 3
+
+
+def test_a_sent_back_question_does_not_close_through_children(reg: Register) -> None:
+    _proposed(reg)
+    reg.record_branch_verdict(reviewer_for(reg, "b1", "s-r1"), "b1", "analyse", "x",
+                              points=[mat(node="n1")])
+    with pytest.raises(Refused, match="only the lead adds an open lane"):
+        reg.tree_upsert(WORKER, {"id": "ol", "kind": "open_lane", "statement": "later",
+                                 "parent": "n1"})
+    # Even a child the lead adds does not close the point sent back on its parent.
+    reg.tree_upsert(LEAD, {"id": "ol", "kind": "open_lane", "statement": "later",
+                           "parent": "n1"})
+    view = {n["id"]: n for n in reg.tree_view()}
+    assert view["n1"]["closes_by"] == "children"
+    assert any("node n1: point b1.r1.1 sent back on it has no resolution" in f
+               for f in reg.finish_failures())
+
+
+def test_an_orphan_assignment_left_by_a_crash_does_not_block_retries(
+        reg: Register, monkeypatch: pytest.MonkeyPatch) -> None:
+    from test_store import claim
+
+    a = reg.file_claim(WORKER, claim())["claim_id"]
+    real = checks_api.request_check
+
+    def crash(*_a: Any, **_k: Any) -> Any:
+        raise _Crash
+
+    monkeypatch.setattr(checks_api, "request_check", crash)
+    with pytest.raises(_Crash):
+        _cite(reg, 1, a)
+    monkeypatch.setattr(checks_api, "request_check", real)
+    assert (reg.run_dir / "checks/doc-r1.r1.json").exists()  # the orphan
+    _cite(reg, 1, a)
+    assert [r.prompt for r in checks_api.pending_checks(reg.run_dir)
+            if r.role == "claim-checker"] == ["doc:r1"]
+    chk = launched(reg, "claim-checker", "doc:r1", "s-d1")
+    assert reg.check_assignment(chk)["claims"] == [a]

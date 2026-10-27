@@ -131,6 +131,7 @@ class WorldModel:
                 "conflictPolicy",
                 "sourcePriority",
                 "schemaVersion",
+                "readOnly",
             },
         )
         storage = opts.get("storage", "memory")
@@ -150,7 +151,7 @@ class WorldModel:
             path = opts.get("path")
             if not isinstance(path, (str, os.PathLike)) or not str(path):
                 raise ValidationError("WorldModel: storage 'file' needs `path` (the log file)")
-            self._log = FileLog(path)
+            self._log = FileLog(path, read_only=bool(opts.get("readOnly", False)))
         else:
             raise ValidationError(f"WorldModel: storage must be 'memory' or 'file', not {storage!r}")
         namespace = opts.get("namespace")

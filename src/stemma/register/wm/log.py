@@ -81,19 +81,28 @@ class MemoryLog:
 class FileLog:
     """A JSONL log on disk, safe for several processes writing at once."""
 
-    def __init__(self, path: str | os.PathLike[str]) -> None:
+    def __init__(self, path: str | os.PathLike[str], read_only: bool = False) -> None:
         self.path = Path(path)
         self.lock_path = self.path.with_name(self.path.name + ".lock")
+        self.read_only = read_only
         if not self.path.parent.is_dir():
             raise StorageError(f"log folder does not exist: {self.path.parent}")
         try:
-            fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+            if read_only:  # a reader: opens nothing for writing, creates nothing
+                fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW)
+            else:
+                fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
             os.close(fd)
         except OSError as exc:
             raise StorageError(f"cannot open log {self.path}: {exc}") from exc
 
+    def _refuse_if_read_only(self) -> None:
+        if self.read_only:
+            raise StorageError(f"{self.path} is open read-only")
+
     @contextmanager
     def exclusive(self) -> Iterator[None]:
+        self._refuse_if_read_only()
         try:
             fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT, 0o644)
         except OSError as exc:
@@ -143,6 +152,7 @@ class FileLog:
     def discard_tail(self, cursor: int, torn: bytes) -> str:
         """Move an uncommitted torn tail to a sidecar file and cut it from the log,
         so the next append starts on a line boundary. Returns the sidecar path."""
+        self._refuse_if_read_only()
         sidecar = self.path.with_name(f"{self.path.name}.torn-{cursor}")
         if self.path.stat().st_size != cursor + len(torn):
             raise StorageError(f"{self.path} changed while its torn tail was being discarded")
@@ -154,6 +164,7 @@ class FileLog:
         return str(sidecar)
 
     def append(self, tx: Any) -> None:
+        self._refuse_if_read_only()
         line = encode_line(tx)
         try:
             fd = os.open(self.path, os.O_WRONLY | os.O_APPEND)

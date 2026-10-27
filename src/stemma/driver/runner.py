@@ -55,8 +55,9 @@ _ARTIFACT_RES: Final = tuple(re.compile(p) for p in (
 ))
 _SKIP_TOP: Final = frozenset({".stemma", ".claude", "store", "register", "task"})
 # The files a frame-only run ends on (CONTRACTS v0.4 section 9); the tree is tree.json.
-FRAME_FILES: Final = ("intake.md", "frame.md", "tree.json", "framer/critique.md",
-                      "framer/lead-response.md")
+# Invariant: every file frame_failures reads, so a change to any restarts the settle time.
+FRAME_FILES: Final = ("intake.md", "criteria.md", "frame.md", "tree.json",
+                      "framer/critique.md", "framer/lead-response.md")
 
 
 class CheckRequestLike(Protocol):
@@ -322,6 +323,7 @@ class Driver:
         lead.update({"session_id": sid, "launches": n + 1, "running": True, "name": name,
                      "outcome": None, "exit_code": None})
         self.state["outcome"] = None
+        self.state.pop("frame_ended", None)  # a resumed frame-only run is checked again
         self._save_state()
         self._start(spec)
 
@@ -799,15 +801,29 @@ class Driver:
         lead_running = any(lv.session.spec.role == "lead" for lv in self.live.values())
         return not lead_running or now - self._frame_sig_at >= self.limits.frame_settle_s
 
-    def _end_frame_only(self) -> None:
-        events.emit(self.run_dir, "frame_complete", files=list(FRAME_FILES))
-        self.state["frame_complete"] = True
-        self._save_state()
+    def _end_frame_only(self) -> bool:
+        """Stop and end every session (`_end` verifies each from its transcript, and may
+        revoke a check), then read the frame's conditions again: completion is recorded
+        only if they still hold. Returns whether the frame is complete."""
         for live in list(self.live.values()):
             reason = "frame_complete" if live.session.spec.role == "lead" else "driver_stopped"
             live.session.stop(reason, self.limits.stop_grace_s)
         for name, live in list(self.live.items()):
             self._end(name, live)
+        try:
+            missing = self.frame_failures()
+        except Exception as exc:  # noqa: BLE001 - loud: an unreadable register is not done
+            missing = [f"the register could not be read ({type(exc).__name__}: {exc})"]
+        self.state["frame_missing"] = missing
+        self.state["frame_ended"] = True  # the run ends here either way
+        self.state["frame_complete"] = not missing
+        self._save_state()
+        if missing:
+            events.emit(self.run_dir, "frame_not_complete", missing=missing,
+                        when="after every session ended")
+            return False
+        events.emit(self.run_dir, "frame_complete", files=list(FRAME_FILES))
+        return True
 
     def _live_checks(self) -> int:
         return sum(1 for lv in self.live.values() if lv.session.spec.request_id is not None)
@@ -836,8 +852,8 @@ class Driver:
             self.state["usage_limited"] = True
         if self.stop_after == "frame" and not self.state.get("frame_complete") \
                 and self._frame_settled(now):
-            self._end_frame_only()
-            self.write_status("stopped", "frame_complete")
+            done = self._end_frame_only()
+            self.write_status("stopped", "frame_complete" if done else "ended_without_release")
             return False
         if self.state.get("usage_limited"):
             # The account's usage limit refused a session: launching more only burns
@@ -903,6 +919,10 @@ class Driver:
             return "canary_failed"
         if self.stop_after == "frame" and self.state.get("frame_complete"):
             return "frame_complete"
+        if self.stop_after == "frame" and self.state.get("frame_ended"):
+            # Ended for the frame, whose conditions failed once every session had ended:
+            # never a usage stop to resume.
+            return "ended_without_release"
         # A lead stopped by its time limit is a terminal resource stop: it takes precedence
         # over a usage stop, which run_to_end would otherwise resume (Codex review #2).
         if lead_outcome == "stopped_by_limit" and not self.released(self.run_dir):
