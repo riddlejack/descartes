@@ -9,6 +9,7 @@ resolved) and ended (with the session's exit code and outcome).
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -90,8 +91,31 @@ def _states(records: list[dict[str, Any]]) -> dict[str, CheckState]:
     return out
 
 
-def states(run_dir: Path) -> dict[str, CheckState]:
-    return _states(jsonl.read_all(log_path(run_dir)))
+Records = list[dict[str, Any]] | None  # given records (a sealed prefix), or None: the file
+
+
+def _read(run_dir: Path, records: Records) -> list[dict[str, Any]]:
+    """The checks log's records: the ones given (a reader of a sealed prefix), else the
+    file's."""
+    return records if records is not None else jsonl.read_all(log_path(run_dir))
+
+
+def parse_records(data: bytes, need_kind: bool = True) -> list[dict[str, Any]]:
+    """The records of a checks log's bytes (a sealed prefix). A tail without its newline
+    is refused, never skipped: sealed bytes end on a record."""
+    if data and not data.endswith(b"\n"):
+        raise ValueError("the checks bytes end inside a record")
+    out = []
+    for n, line in enumerate(data.splitlines(), start=1):
+        rec = json.loads(line)
+        if not isinstance(rec, dict) or (need_kind and "kind" not in rec):
+            raise ValueError(f"checks record {n} is not a record")
+        out.append(rec)
+    return out
+
+
+def states(run_dir: Path, *, records: Records = None) -> dict[str, CheckState]:
+    return _states(_read(run_dir, records))
 
 
 def request_check(run_dir: Path, role: str, prompt: str, event: str,
@@ -146,10 +170,11 @@ def mark_ended(run_dir: Path, request_id: str, exit_code: int, outcome: str) -> 
                     "outcome": outcome, "at": _now()}, frozenset({"running"}))
 
 
-def for_prompt(run_dir: Path, role: str, prompt: str) -> list[CheckState]:
+def for_prompt(run_dir: Path, role: str, prompt: str, *,
+               records: Records = None) -> list[CheckState]:
     """Every round of one check, oldest first."""
     role = roles.short(role)
-    found = [s for s in states(run_dir).values()
+    found = [s for s in states(run_dir, records=records).values()
              if s.request.role == role and s.request.prompt == prompt]
     return sorted(found, key=lambda s: s.request.round)
 
@@ -171,11 +196,11 @@ def mark_verified(run_dir: Path, session_id: str, model: str, effort: str) -> No
                                      "effort": effort})
 
 
-def verified_sessions(run_dir: Path) -> frozenset[str]:
+def verified_sessions(run_dir: Path, *, records: Records = None) -> frozenset[str]:
     """Sessions whose model and effort the driver verified since their latest launch. A
     session launched again (a branch reviewer resumed for its next round, D8) counts as
     unverified until the driver verifies that launch too."""
-    records = jsonl.read_all(log_path(run_dir))
+    records = _read(run_dir, records)
     revoked = {r["session_id"] for r in records if r["kind"] == "revoked"}
     verified: set[str] = set()
     for r in records:
@@ -193,22 +218,24 @@ def block_release(run_dir: Path, reason: str) -> None:
                                      "at": _now(), "reason": reason})
 
 
-def release_blocks(run_dir: Path) -> list[str]:
-    return [r["reason"] for r in jsonl.read_all(log_path(run_dir))
+def release_blocks(run_dir: Path, *, records: Records = None) -> list[str]:
+    return [r["reason"] for r in _read(run_dir, records)
             if r["kind"] == "release_blocked"]
 
 
-def revoked_sessions(run_dir: Path) -> frozenset[str]:
-    return frozenset(r["session_id"] for r in jsonl.read_all(log_path(run_dir))
+def revoked_sessions(run_dir: Path, *, records: Records = None) -> frozenset[str]:
+    return frozenset(r["session_id"] for r in _read(run_dir, records)
                      if r["kind"] == "revoked")
 
 
-def state_for_session(run_dir: Path, session_id: str) -> CheckState | None:
+def state_for_session(run_dir: Path, session_id: str, *,
+                      records: Records = None) -> CheckState | None:
     """The check a live (not revoked) session was launched for."""
-    if session_id in revoked_sessions(run_dir):
+    recs = _read(run_dir, records)
+    if session_id in revoked_sessions(run_dir, records=recs):
         return None
     # A resumed session serves several rounds (D8): the one it was launched for last.
-    mine = [s for s in states(run_dir).values() if s.session_id == session_id]
+    mine = [s for s in states(run_dir, records=recs).values() if s.session_id == session_id]
     if not mine:
         return None
     return max(mine, key=lambda s: (s.launched_at or "", s.request.round))

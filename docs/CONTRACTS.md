@@ -169,6 +169,11 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   reader (a viewer, `stemma verify`): it creates, locks and writes nothing, and every
   write method is refused; `recorded_reviews`, `recorded_frames`, `run_facts` and
   `frozen_records` are its public reads. World Model's file log takes `readOnly`.
+  `Register.from_sealed(run_dir, log=bytes, checks=bytes, refused=bytes | None)` reads a
+  release as sealed: it folds exactly the given log prefix (World Model storage
+  `bytes`) and takes requests, verifications, revocations and release blocks from
+  exactly the given checks prefix (and refused corrections from `refused`), so nothing
+  appended after the seal counts; a prefix ending inside a line is refused.
 - **CLI**: `stemma report|verify|new` call builder W3's entry points
   (`stemma.report.site`, `stemma.report.verify`, `stemma.onboard.new`), or refuse with
   exit code 2 when they are not installed.
