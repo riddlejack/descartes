@@ -425,3 +425,29 @@ Not changed, with reasons:
 - D10: frontmatter is Opus 5.5 at high for every role; the driver's defaults
   (`MAX_EFFORT_ROLES` in `src/stemma/driver/task.py`) still set max for the lead and
   final reviewers and are B's to change.
+
+### Aligned to contract v0.4 (part B, commit 188bae3)
+- This branch is rebased onto 188bae3 so the lint reads v0.4. The pending list then
+  reported all four entries as now in the contract, and they were deleted; only
+  `run_analysis` remains pending (part B is adding it), and `check` will report it
+  when the contract names it.
+- The lead loses Bash as well as the source tools (the lint now refuses either);
+  its arithmetic script runs through `run_analysis`, and it files the exact result.
+- `criteria.md` lines are `- C1: <text>`. The lead answers each final-review point
+  by id in `draft/response.v<v>.md` before submitting version v (this replaces the
+  `draft/responses.v<n>.md` name agreed earlier); reviewers read
+  `register/drafts/previous.v<version>.md`. Points are `{point, material, node,
+  criterion}`.
+- Branch reviewer: one send-back per branch; the closing verdict gives every
+  sent-back point a resolution (resolved, bounded, conditional, disputed) and
+  records a new material point as an open limit. The worker writes the revision
+  order after a send-back, naming each point id, and names a bounded or conditional
+  point's id in its record.
+- Claim checker takes `doc:<receipt_id>` or, for a cited claim with no document,
+  `claim:<claim_id>`; the earlier gap on estimates is closed by v0.4.
+- The host lists points open at `max_review_rounds` in the completion statement, so
+  the lead's text no longer does.
+- v0.4 still has the order heading "What would change the decision"; the texts use
+  the approved "What would change the answer".
+- Shown: lint and map check pass; tests/roles 49 pass; whole suite 1,261 pass, 18
+  skipped.

@@ -93,17 +93,20 @@ CONTRACT_TOOLS = frozenset(
         "gate_status",
         "finish_run",
     }
-)
+) | frozenset({"run_analysis"})  # pending: see PENDING_CONTRACT_NAMES
 
-# Logical invariant: names and run-folder paths agreed with part B for the v2 texts
-# (brief W1-roles-v2, "Interfaces agreed with W2", 27 October) that docs/CONTRACTS.md
-# does not carry yet. Prose may use them until it does; once the contract names one,
-# `check` reports it here so the entry is deleted, and this list ends empty.
-PENDING_CONTRACT_NAMES = frozenset({"question_only", "broader_decision"})
-PENDING_CONTRACT_PATHS = frozenset({"criteria.md", "checks/"})
+# Logical invariant: names and run-folder paths agreed with part B (orchestrator,
+# 27 October) that docs/CONTRACTS.md v0.4 does not carry yet: `run_analysis`, the host
+# tool that runs the lead's arithmetic script. Prose may use them until the contract
+# does; once it names one, `check` reports it here so the entry is deleted, and this
+# list ends empty.
+PENDING_CONTRACT_NAMES = frozenset({"run_analysis"})
+PENDING_CONTRACT_PATHS: frozenset[str] = frozenset()
 
-# Logical invariant: the source-reading tools D6 takes from the lead (it reads branch
-# records, never sources); a read hook (part B) refuses its reads of stored sources.
+# Logical invariant: the tools decision D6 takes from the lead (it reads branch
+# records, never sources), as contract v0.4 section 0 lists them; Bash goes too, since a
+# guard cannot parse every way a shell command reads a file. A hook (part B) also
+# refuses the lead's Read of store/ and attachments.
 LEAD_FORBIDDEN_TOOLS = frozenset(
     {
         "WebSearch",
@@ -119,6 +122,8 @@ LEAD_FORBIDDEN_TOOLS = frozenset(
         TOOL_PREFIX + "tables",
         TOOL_PREFIX + "check_quote",
         TOOL_PREFIX + "query_data",
+        "Bash",
+        "WebFetch",
     }
 )
 
