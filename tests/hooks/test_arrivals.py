@@ -83,7 +83,7 @@ def test_the_leads_next_tool_call_receives_the_notice_once(run_dir: Path,
     assert r.returncode == 0
     note = context(r.stdout)
     assert note is not None and rec["path"] in note and "capture_file" in note
-    again = call(run_dir, "pre", pre(run_dir, "Read", {"file_path": str(run_dir / "x.md")}))
+    again = call(run_dir, "pre", pre(run_dir, "Read", {"file_path": str(run_dir / "frame.md")}))
     assert (again.returncode, again.stdout) == (0, "")  # delivered once
     sent = [e for e in events(run_dir) if e["event"] == "arrival_notice_delivered"]
     assert [(e["n"], e["tool_use_id"]) for e in sent] == [(1, "toolu_1")]

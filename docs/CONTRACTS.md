@@ -73,10 +73,15 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   are refused with `SwitchParked`; `s3_hypothesis_in_briefs` is `false` for v0.4 runs.
 - **The lead reads no sources** (D6; section 6): its own thread may not call capture,
   capture_file, sec_filings, sec_capture, sec_facts, outline, read, read_section,
-  search_store, tables, check_quote, query_data, WebSearch, WebFetch or Bash, nor Read
-  `store/`, `task/attachments/` or `task/arrivals/`. The PreToolUse guard refuses these
-  for the lead's main thread (agent type `stemma:lead`, no agent id); its workers keep
-  them. Bash is refused outright because a guard cannot parse every way a shell command
+  search_store, tables, check_quote, query_data, WebSearch, WebFetch or Bash, and its
+  Read is an allowlist of the run's approved artifacts (`stemma.hooks.guards.LEAD_READS`:
+  intake, frame, criteria, tree, framer files, orders, restatements, branch records,
+  revision orders, verdicts, drafts, reviews, the deliverable, the task's question,
+  intake, options and task.json, register drafts, snapshots, frames and criteria,
+  `analysis/**.py`, the run plugin), checked on the path with every link resolved, so a
+  source copied into any other file stays out of its reach (Codex review #7). The
+  PreToolUse guard enforces this for the lead's main thread (agent type `stemma:lead`,
+  no agent id); its workers keep their tools and reads. Bash is refused outright because a guard cannot parse every way a shell command
   reads a file. Arrival notices tell the lead to have a worker capture the file.
 - **Claim checks** (D7; sections 2 and 6): filing a claim requests no check. After
   `submit_draft(v)` the register puts every claim the frozen draft cites (by `[[c:…]]`

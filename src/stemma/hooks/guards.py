@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -113,9 +114,45 @@ LEAD_DENIED_MCP = frozenset(roles.MCP_PREFIX + t for t in (
     "capture", "capture_file", "sec_filings", "sec_capture", "sec_facts", "outline",
     "read", "read_section", "search_store", "tables", "check_quote", "query_data"))
 LEAD_DENIED_BUILTIN = frozenset({"WebSearch", "WebFetch", "Bash"})
-# Run-folder places that hold sources, which the lead's own thread may not Read: the
-# evidence store and the user's attached files.
-_LEAD_HIDDEN = (("store",), ("task", "attachments"), ("task", "arrivals"))
+# What the lead's own thread may Read (Codex review #7): the approved artifacts of the
+# run, and nothing else, so a source copied into some other file stays out of its
+# reach. Patterns are run-relative and casefolded; `**` is any depth. Invariant: the
+# lead reads frames, the tree, orders, branch records, revision orders, verdicts,
+# drafts, reviews and register outputs (D6), never sources.
+LEAD_READS = (
+    "claude.md", "intake.md", "frame.md", "criteria.md", "tree.json", "tree.md",
+    "history/**", "framer/*.md", "draft/**", "reviews/**", "deliverable/**",
+    "task/question.md", "task/intake.md", "task/task.json", "task/options.md",
+    "branches/**/order.md", "branches/**/restatement.md", "branches/**/record.md",
+    "branches/**/revision-*.md", "branches/**/verdicts/*.json",
+    "register/drafts/**", "register/branches/**", "register/criteria/**",
+    "register/frames/**", "analysis/**.py", ".stemma/plugin/**",
+)
+
+
+def _glob_re(pattern: str) -> re.Pattern[str]:
+    """A run-relative glob as a regex: `**/` any folders (or none), `**` anything,
+    `*` and `?` within one path component."""
+    out, i = "", 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out, i = out + "(?:.*/)?", i + 3
+        elif pattern.startswith("**", i):
+            out, i = out + ".*", i + 2
+        elif pattern[i] == "*":
+            out, i = out + "[^/]*", i + 1
+        elif pattern[i] == "?":
+            out, i = out + "[^/]", i + 1
+        else:
+            out, i = out + re.escape(pattern[i]), i + 1
+    return re.compile(out)
+
+
+_LEAD_READ_RES = tuple(_glob_re(p) for p in LEAD_READS)
+
+
+def _matches(rel: str, pattern: str) -> bool:
+    return _glob_re(pattern).fullmatch(rel) is not None
 
 
 def is_lead_main_thread(hook: dict[str, Any]) -> bool:
@@ -135,10 +172,10 @@ def guard_lead_tool(hook: dict[str, Any]) -> Decision | None:
 
 
 def lead_read_refusal(rel: PurePosixPath) -> str | None:
-    for hidden in _LEAD_HIDDEN:
-        if rel.parts[:len(hidden)] == hidden:
-            return f"Refused: the lead does not read {rel}; it reads branch records, never sources."
-    return None
+    text = str(rel)
+    if any(r.fullmatch(text) for r in _LEAD_READ_RES):
+        return None
+    return f"Refused: the lead does not read {rel}; it reads branch records, never sources."
 
 
 # --- Writes ------------------------------------------------------------------------

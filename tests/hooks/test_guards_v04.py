@@ -160,3 +160,34 @@ def test_only_the_lead_writes_criteria_and_not_once_frozen(run_dir: Path) -> Non
     r = call(run_dir, "pre", pre(run_dir, "Edit", {"file_path": "criteria.md", "old_string": "a",
                                                    "new_string": "b"}))
     assert r.returncode == 2 and "frozen" in r.stderr
+
+
+# --- Codex review #7: the lead reads approved artifacts only -------------------------
+
+@pytest.mark.parametrize("path", [
+    "branches/b1/source-copy.txt", "branches/b1/notes.md", "analysis/copy.txt",
+    "checks/doc-r1.r1.json", "events.jsonl", "register/log.jsonl", "usage.md",
+    "framer/sub/x.md", "task/attachments/brief.pdf", "odd.md", ".stemma/sessions/x.jsonl",
+])
+def test_the_lead_reads_nothing_beyond_the_approved_artifacts(run_dir: Path, path: str) -> None:
+    r = call(run_dir, "pre", pre(run_dir, "Read", {"file_path": path}))
+    assert r.returncode == 2 and "the lead does not read" in r.stderr, path
+
+
+@pytest.mark.parametrize("path", [
+    "intake.md", "frame.md", "criteria.md", "tree.json", "framer/critique.md",
+    "branches/b1/order.md", "branches/b1/sub/b2/record.md", "branches/b1/revision-1.md",
+    "branches/b1/verdicts/1.json", "draft/answer.v2.md", "draft/response.v2.md",
+    "reviews/v1/deciders-eye.md", "register/drafts/previous.v2.md", "analysis/sum.py",
+    "task/question.md", "Frame.MD",
+])
+def test_the_lead_reads_its_approved_artifacts(run_dir: Path, path: str) -> None:
+    r = call(run_dir, "pre", pre(run_dir, "Read", {"file_path": path}))
+    assert r.returncode == 0, (path, r.stderr)
+
+
+def test_a_link_from_an_approved_name_to_a_copy_is_refused(run_dir: Path) -> None:
+    (run_dir / "branches/b1/source-copy.txt").write_text("copied source text")
+    (run_dir / "branches/b1/order.md").symlink_to(run_dir / "branches/b1/source-copy.txt")
+    r = call(run_dir, "pre", pre(run_dir, "Read", {"file_path": "branches/b1/order.md"}))
+    assert r.returncode == 2
