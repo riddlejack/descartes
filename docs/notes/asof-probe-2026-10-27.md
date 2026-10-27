@@ -14,6 +14,8 @@ broker's tools directly; it started no session and no research run. The raw reco
 - `www.coreweave.com/newsroom` came back as the archive's copy of 24 September 2026,
   17:46:21 UTC (Memento-Datetime the same), five days before the cutoff.
 - `archived_links` listed 151 links on it: news articles, product pages, whitepapers.
+  So for the rehearsal the investor site is reachable only through the newsroom and
+  through filings.
 - Three links were captured through the archive in turn. The news article came back as
   the copy of 29 September 2026, 18:22:29 UTC; the newsroom again as 24 September.
 - No capture, replay date or Memento-Datetime was on or after the cutoff.
@@ -25,7 +27,12 @@ broker's tools directly; it started no session and no research run. The raw reco
 - stooq refused both CoreWeave (crwv.us) and NVIDIA (nvda.us): stooq now answers its CSV
   download with a JavaScript proof-of-work page that checks for a browser. The tool
   refused it as not a series and stored nothing. Getting past that page would mean
-  defeating a bot check, which we do not do. Daily share prices need another source.
+  defeating a bot check, which we do not do.
+- **Limit for the demo: no dated price series for shares.** The orchestrator ruled (27
+  October) that no other price source is added tonight: none whose terms have not been
+  read, and none that needs a bot check passed. Agents take share prices from archived
+  quote pages and dated reporting, captured through the archive before the cutoff, and
+  say so where a price matters.
 
 ## EDGAR full-text search (not run)
 `sec_search` needs the SEC contact identity, `STEMMA_SEC_IDENTITY`, which is not set in
