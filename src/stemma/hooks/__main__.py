@@ -27,6 +27,9 @@ EXIT_BLOCK = 2  # harness protocol: exit code 2 blocks the tool call
 
 def _decide_pre(hook: dict[str, Any], run_dir: Path) -> guards.Decision:
     tool = guards._require(hook, "tool_name")
+    lead = guards.guard_lead_tool(hook)
+    if lead is not None:
+        return lead
     if tool in guards.AGENT_TOOLS:
         return guards.guard_agent(hook)
     if tool in guards.WRITE_TOOLS:

@@ -27,8 +27,8 @@ def test_defaults_filled() -> None:
     assert sw["s3_hypothesis_in_briefs"] is False and sw["s6_cross_family"] == "off"
     m = sw["s5_models"]
     assert {r: v["effort"] for r, v in m.items()} == {
-        "lead": "max", "deciders-eye-reviewer": "max", "evidence-auditor": "max",
-        "mechanical-reader": "max", "worker": "high", "blind-framer": "high",
+        "lead": "high", "deciders-eye-reviewer": "high", "evidence-auditor": "high",
+        "mechanical-reader": "high", "worker": "high", "blind-framer": "high",
         "claim-checker": "high", "branch-reviewer": "high", "retrospective-writer": "high"}
     assert {v["model"] for v in m.values()} == {"claude-opus-5-5"}
 
@@ -43,9 +43,14 @@ def test_bad_switches_refused(given: dict[str, object]) -> None:
         fill_switches(given)
 
 
-def test_single_loop_makes_s3_not_applicable() -> None:
-    assert fill_switches({"s2_shape": "single_loop"})["s3_hypothesis_in_briefs"] == \
-        "not_applicable"
+@pytest.mark.parametrize("given", [{"s2_shape": "single_loop"},
+                                   {"s3_hypothesis_in_briefs": True},
+                                   {"s2_shape": "single_loop", "s3_hypothesis_in_briefs": False}])
+def test_parked_switch_values_are_refused(given: dict[str, object]) -> None:
+    from stemma.driver.errors import SwitchParked
+
+    with pytest.raises(SwitchParked, match="parked in contract v0.4"):
+        fill_switches(given)
     assert fill_switches({"s2_shape": "team"})["s3_hypothesis_in_briefs"] is False
 
 
@@ -72,7 +77,7 @@ def test_create_run(cfg: DriverConfig, tmp: Path) -> None:
     rj = json.loads((run / "run.json").read_text())
     assert rj["as_of"] == "2026-01-31" and rj["switches"]["s1_method"] == "placebo"
     assert rj["harness"]["version"] == "2.1.308 (Claude Code)"
-    assert rj["models"]["lead"] == {"model": "claude-opus-5-5", "effort": "max"}
+    assert rj["models"]["lead"] == {"model": "claude-opus-5-5", "effort": "high"}
     assert rj["limits"]["max_concurrent_checks"] == 4
     assert (run / "task" / "attachments" / "memo.txt").read_text() == "invented attachment"
     assert "The board." in (run / "task" / "intake.md").read_text()
@@ -89,10 +94,9 @@ def _asm(src: Path, tmp: Path, **sw: object) -> assemble.Assembly:
 
 def test_lead_text_is_base_plus_fragments_in_order(plugin_src: Path, tmp: Path) -> None:
     a = _asm(plugin_src, tmp, s1_method="none", s4_orientation="basic_facts",
-             s3_hypothesis_in_briefs=True, s6_cross_family="final")
+             s3_hypothesis_in_briefs=False, s6_cross_family="final")
     text = (a.plugin_dir / "agents" / "lead.md").read_text()
     order = ["LEAD-FRAGMENT s1_method=none", "LEAD-FRAGMENT s2_shape=team",
-             "LEAD-FRAGMENT s3_hypothesis_in_briefs=true",
              "LEAD-FRAGMENT s4_orientation=basic_facts", "LEAD-FRAGMENT s6_cross_family=final"]
     pos = [text.index(o) for o in order]
     assert pos == sorted(pos)
@@ -107,8 +111,8 @@ def test_lead_text_is_base_plus_fragments_in_order(plugin_src: Path, tmp: Path) 
 
 def test_model_and_effort_written_from_s5(plugin_src: Path, tmp: Path) -> None:
     a = _asm(plugin_src, tmp)
-    for name, effort in (("lead", "max"), ("worker", "high"), ("claim-checker", "high"),
-                         ("deciders-eye-reviewer", "max")):
+    for name, effort in (("lead", "high"), ("worker", "high"), ("claim-checker", "high"),
+                         ("deciders-eye-reviewer", "high")):
         f = frontmatter.parse((a.plugin_dir / "agents" / f"{name}.md").read_text(), name)
         assert f.scalar("model") == "claude-opus-5-5" and f.scalar("effort") == effort
 
@@ -157,7 +161,9 @@ def test_missing_fragment_is_typed(plugin_src: Path, tmp: Path) -> None:
 
 
 def test_single_loop_has_no_worker(plugin_src: Path, tmp: Path) -> None:
-    a = _asm(plugin_src, tmp, s2_shape="single_loop")
+    # Parked in v0.4 (fill_switches refuses it); the assembler's rule still holds.
+    sw = {**fill_switches({}), "s2_shape": "single_loop", "s3_hypothesis_in_briefs": "not_applicable"}
+    a = assemble.assemble(plugin_src, tmp / "out-single", sw)
     assert "worker" not in a.agents and not (a.plugin_dir / "agents" / "worker.md").exists()
 
 

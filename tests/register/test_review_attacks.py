@@ -28,6 +28,8 @@ from stemma.register.store import Caller, Register
 
 @pytest.fixture
 def reg(tmp_path: Path) -> Register:
+    (tmp_path / "run").mkdir()
+    (tmp_path / "run" / "criteria.md").write_text("- C1: The answer says whether the target is met.\n")
     return Register(tmp_path / "run", evidence=FakeEvidence())
 
 
@@ -55,7 +57,7 @@ def test_symlink_at_a_host_written_name_never_redirects_the_write(tmp_path: Path
     rd.mkdir()
     (rd / "CLAUDE.md").write_text("STANDING RULES\n")
     os.symlink("CLAUDE.md", rd / name)
-    Register(rd).tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "INJECTED"})
+    Register(rd).tree_upsert(LEAD, {"id": "n1", "kind": "question", "statement": "INJECTED"})
     assert (rd / "CLAUDE.md").read_text() == "STANDING RULES\n"
     assert not (rd / "tree.md").is_symlink() and not (rd / "tree.json").is_symlink()
 
@@ -65,7 +67,7 @@ def test_symlinked_branch_folder_is_refused(reg: Register, tmp_path: Path) -> No
     outside.mkdir()
     (reg.run_dir / "branches").mkdir(parents=True)
     os.symlink(outside, reg.run_dir / "branches/b1")
-    reg.tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "x", "branch_id": "b1"})
+    reg.tree_upsert(LEAD, {"id": "n1", "kind": "question", "statement": "x", "branch_id": "b1"})
     (outside / "record.md").write_text("x")
     with pytest.raises(Refused, match="not a plain folder"):
         reg.propose_branch_done(WORKER, "b1")
@@ -73,7 +75,7 @@ def test_symlinked_branch_folder_is_refused(reg: Register, tmp_path: Path) -> No
 
 def test_symlinked_verdicts_folder_cannot_take_a_verdict_elsewhere(reg: Register,
                                                                    tmp_path: Path) -> None:
-    reg.tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "x", "branch_id": "b1"})
+    reg.tree_upsert(LEAD, {"id": "n1", "kind": "question", "statement": "x", "branch_id": "b1"})
     write_record(reg, "b1")
     reg.propose_branch_done(WORKER, "b1")
     elsewhere = tmp_path / "elsewhere"
@@ -225,20 +227,21 @@ def test_correction_equal_to_another_claim_refused(reg: Register) -> None:
 # --- 7. A reviewed node cannot be rewritten in place --------------------------------
 
 @pytest.mark.parametrize("change", [{"statement": "A different crux never reviewed"},
-                                    {"branch_id": "b9"}, {"kind": "rival"}])
+                                    {"branch_id": "b9"}, {"kind": "open_lane"}])
 def test_changing_an_answered_node_reopens_it(reg: Register, change: dict[str, Any]) -> None:
-    reg.tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "Demand holds",
+    reg.tree_upsert(LEAD, {"id": "n1", "kind": "question", "statement": "Demand holds",
                            "branch_id": "b1", "crux": True})
     write_record(reg, "b1")
     reg.propose_branch_done(WORKER, "b1")
     reg.record_branch_verdict(reviewer_for(reg, "b1"), "b1", "answered", "done")
-    out = reg.tree_upsert(WORKER, {"id": "n1", **change})
+    who = LEAD if "branch_id" in change else WORKER  # only the lead reassigns (v0.4)
+    out = reg.tree_upsert(who, {"id": "n1", **change})
     assert out["status"] == "in_progress" and out["reopened_from"] == "answered"
     assert "node n1 is in_progress" in " ".join(reg.finish_failures())
 
 
 def test_changing_a_node_under_review_voids_the_review(reg: Register) -> None:
-    reg.tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "x", "branch_id": "b1"})
+    reg.tree_upsert(LEAD, {"id": "n1", "kind": "question", "statement": "x", "branch_id": "b1"})
     write_record(reg, "b1")
     reg.propose_branch_done(WORKER, "b1")
     rev = reviewer_for(reg, "b1")
@@ -250,11 +253,14 @@ def test_changing_a_node_under_review_voids_the_review(reg: Register) -> None:
 # --- 8. A verdict binds to its round --------------------------------------------------
 
 def test_round1_reviewer_cannot_answer_round2(reg: Register) -> None:
-    reg.tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "x", "branch_id": "b1"})
+    reg.tree_upsert(LEAD, {"id": "n1", "kind": "question", "statement": "x", "branch_id": "b1"})
     write_record(reg, "b1")
     reg.propose_branch_done(WORKER, "b1")
     old = reviewer_for(reg, "b1", "s-old")
-    reg.record_branch_verdict(old, "b1", "find_more", "thin", method="filings")
+    reg.record_branch_verdict(old, "b1", "find_more", "thin", method="filings",
+                              points=[{"point": "thin", "material": True, "node": "n1"}])
+    (reg.run_dir / "branches/b1/revision-1.md").write_text(
+        "# Finding\nb1.r1.1 thin\n# Raised by\nbranch reviewer\n# Is it right?\nyes\n# Fix\nmore filings\n")
     reg.propose_branch_done(WORKER, "b1")
     with pytest.raises(Refused, match="earlier round"):
         reg.record_branch_verdict(old, "b1", "answered", "fine now")
@@ -277,11 +283,11 @@ def test_claim_checker_cannot_read_frozen_drafts(tmp_path: Path) -> None:
 # --- 10. A torn last line does not stop the run --------------------------------------
 
 def test_torn_line_in_checks_log_is_recovered(reg: Register) -> None:
-    reg.file_claim(WORKER, claim())
+    checks_api.request_check(reg.run_dir, "claim-checker", "doc:r1", "test")
     log = checks_api.log_path(reg.run_dir)
     with open(log, "ab") as f:
         f.write(b'{"kind":"launched","request_id":"ab')  # a writer died mid-append
-    reg.file_claim(WORKER, claim(statement="Another 1.2bn claim."))
+    checks_api.request_check(reg.run_dir, "claim-checker", "doc:r2", "test")
     assert len(checks_api.pending_checks(reg.run_dir)) == 2
     assert Path(str(log) + ".torn").read_bytes() == b'{"kind":"launched","request_id":"ab\n'
 

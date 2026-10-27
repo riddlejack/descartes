@@ -82,7 +82,13 @@ def main() -> int:
     own_names = {t.split("(", 1)[0] for t in own}
     if not agent:
         own_names = set(tools)  # no --agent: the whole --tools list
-    shown = ["Task" if t == "Agent" else t for t in tools if t in own_names]
+    # Like the harness: a tool the settings deny by its bare name is not offered.
+    denied: set[str] = set()
+    settings_arg = opt(argv, "--settings")
+    if settings_arg and Path(settings_arg).is_file():
+        perms = json.loads(Path(settings_arg).read_text()).get("permissions", {})
+        denied = {d for d in perms.get("deny", []) if "(" not in d}
+    shown = ["Task" if t == "Agent" else t for t in tools if t in own_names and t not in denied]
     shown += [t for t in own if t.startswith("mcp__")]
     agents = sorted(f"stemma:{p.stem}" for p in (plugin / "agents").glob("*.md"))
     skills = sorted(f"stemma:{p.name}" for p in (plugin / "skills").glob("*")
@@ -143,7 +149,9 @@ def main() -> int:
     time.sleep(float(cfg.get("sleep_s", 0)))
     if cfg.get("rate_limited"):  # the account's usage limit refused the turn
         out({"type": "rate_limit_event", "session_id": sid,
-             "rate_limit_info": {"status": "rejected", "rateLimitType": "five_hour"}})
+             "rate_limit_info": {"status": "rejected", "rateLimitType": "five_hour",
+                                 **({"resetsAt": cfg["resets_at"]} if "resets_at" in cfg
+                                    else {})}})
         out({"type": "result", "subtype": "success", "is_error": False, "result": "",
              "session_id": sid, "num_turns": 0, "permission_denials": []})
         record["end"] = time.time()

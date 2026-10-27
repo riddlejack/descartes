@@ -4,7 +4,10 @@
   quotation found in its receipt's stored text; `value.as_written` inside a quotation.
   Whether `number` and `unit` correctly read `as_written` is the checker's call: code
   may attach a parse warning, never a refusal.
-- `estimated`: a derivation whose re-run reproduces `number` exactly.
+- `estimated`: a derivation whose re-run reproduces `number` exactly. The re-run runs
+  the script's bundle (`derivation.build_bundle`); once it reproduces, the bundle is
+  stored under its SHA-256 and the hash is written on the claim's derivation
+  (`bundle_sha256`), so a filed claim re-runs that stored copy (`rerun_filed`).
 - `assumed`: no support required.
 - `ratio`, `share`, `rate`: a filled `denominator`.
 A failure refuses the claim and names the failed check, nothing more.
@@ -22,7 +25,15 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from stemma.evidence.quotes import find_quote
-from stemma.register.derivation import DOCUMENTS_MAX, DerivationError, RerunResult, read_code
+from stemma.register.derivation import (
+    DOCUMENTS_MAX,
+    DerivationError,
+    RerunResult,
+    build_bundle,
+    load_bundle,
+    rerun,
+    store_bundle,
+)
 from stemma.register.evidence_port import Evidence, QuoteCheckFailed
 
 TIERS = ("observed", "interested_party", "secondary", "estimated", "assumed")
@@ -31,6 +42,8 @@ KINDS = ("level", "count", "ratio", "share", "rate", "change")
 NEEDS_DENOMINATOR = frozenset({"ratio", "share", "rate"})
 AGENT_FIELDS = ("statement", "value", "tier", "support", "derivation", "branch_id", "entities")
 VALUE_FIELDS = frozenset({"number", "unit", "period", "kind", "as_written", "denominator"})
+# Logical invariant: derivation fields the register writes, never the agent.
+CODE_DERIVATION_FIELDS = frozenset({"bundle_sha256"})
 
 
 class Refused(Exception):
@@ -49,8 +62,12 @@ def canonical(value: Any) -> str:
 
 
 def claim_id_of(claim: dict[str, Any]) -> str:
-    """Content-derived id over the fields the agent supplies."""
+    """Content-derived id over the fields the agent supplies (not the derivation's
+    `bundle_sha256`, which the register writes)."""
     body = {k: claim.get(k) for k in AGENT_FIELDS}
+    if isinstance(body["derivation"], dict):
+        body["derivation"] = {k: v for k, v in body["derivation"].items()
+                              if k not in CODE_DERIVATION_FIELDS}
     return hashlib.sha256(canonical(body).encode("utf-8")).hexdigest()
 
 
@@ -93,6 +110,9 @@ def normalise_shape(raw: dict[str, Any]) -> dict[str, Any]:
     ):
         raise Refused("Refused: each support item needs a receipt_id and a quote, nothing else.")
     deriv = raw.get("derivation")
+    if isinstance(deriv, dict) and set(deriv) & CODE_DERIVATION_FIELDS:
+        raise Refused("Refused: derivation.bundle_sha256 is written by the register; leave "
+                      "it out.")
     if deriv is not None and not (
         isinstance(deriv, dict) and _str(deriv.get("script"))
         and isinstance(deriv.get("inputs", []), list)
@@ -195,14 +215,14 @@ def check_estimated(claim: dict[str, Any], run_dir: Path, rerun: Rerun,
         raise Refused("Refused: an estimated claim needs a value.")
     rel = PurePosixPath(deriv["script"])
     if (rel.is_absolute() or len(rel.parts) < 2 or rel.parts[0] != "analysis"
-            or any(x in ("", ".", "..") for x in rel.parts)):
+            or any(x in ("", ".", "..") for x in str(deriv["script"]).split("/"))):
         raise Refused("Refused: the derivation script is not in analysis/.")
     docs_named = deriv.get("documents", [])
     if len(docs_named) > DOCUMENTS_MAX:
         raise Refused(f"Refused: the derivation names {len(docs_named)} documents, more than "
                       f"{DOCUMENTS_MAX} (a resource limit).")
     try:
-        code = read_code(run_dir, str(rel))
+        bundle = build_bundle(run_dir, str(deriv["script"]))
     except DerivationError as exc:
         raise Refused(f"Refused: the derivation could not be re-run: {exc}.") from exc
     values: dict[str, float] = {}
@@ -220,7 +240,7 @@ def check_estimated(claim: dict[str, Any], run_dir: Path, rerun: Rerun,
         except QuoteCheckFailed as exc:
             raise Refused(f"Refused: derivation document {rid}: {exc}.") from exc
     try:
-        rr = rerun(code, values, documents) if documents else rerun(code, values)
+        rr = rerun(bundle, values, documents) if documents else rerun(bundle, values)
     except DerivationError as exc:
         raise Refused(f"Refused: the derivation could not be re-run: {exc}.") from exc
     if rr.number is None:
@@ -228,8 +248,47 @@ def check_estimated(claim: dict[str, Any], run_dir: Path, rerun: Rerun,
     if rr.number != float(value["number"]):
         # Never echo the script's number: a script could encode file bytes in it.
         raise Refused("Refused: the derivation's re-run does not reproduce the claim's number.")
+    try:
+        sha = store_bundle(run_dir, bundle)
+    except DerivationError as exc:
+        raise Refused(f"Refused: the derivation's code could not be stored: {exc}.") from exc
+    claim["derivation"] = {**deriv, "bundle_sha256": sha}
     result.checks.append({"check": "derivation_reproduces", "passed": True,
-                          "time_limit_s": rr.time_limit_s, "inputs": sorted(values)})
+                          "time_limit_s": rr.time_limit_s, "inputs": sorted(values),
+                          "bundle_sha256": sha, "bundle_files": sorted(bundle.files)})
+
+
+def rerun_filed(run_dir: Path, claim: dict[str, Any], lookup: InputLookup,
+                evidence: Evidence | None = None, rerun_fn: Rerun = rerun) -> RerunResult:
+    """Re-run a filed estimated claim from the bundle stored at its filing
+    (`derivation.bundle_sha256`), never from analysis/, with its inputs' numbers from
+    `lookup` and its named documents from `evidence`. The caller compares the number with
+    the claim's. Every failure is a DerivationError saying what happened."""
+    deriv = claim.get("derivation")
+    if not isinstance(deriv, dict) or not isinstance(deriv.get("script"), str):
+        raise DerivationError(f"claim {claim.get('claim_id')} has no derivation")
+    sha = deriv.get("bundle_sha256")
+    if not isinstance(sha, str):
+        raise DerivationError(f"claim {claim.get('claim_id')} was filed with no stored "
+                              f"bundle (no derivation.bundle_sha256)")
+    bundle = load_bundle(run_dir, sha)
+    values: dict[str, float] = {}
+    for given in deriv.get("inputs") or []:
+        try:
+            full, number = lookup(str(given))
+        except Refused as exc:
+            raise DerivationError(f"derivation input {given}: {exc}") from exc
+        values[full] = number
+    documents: dict[str, str] = {}
+    for rid in deriv.get("documents") or []:
+        if evidence is None:
+            raise DerivationError("the derivation names documents and no evidence "
+                                  "service was given")
+        try:
+            documents[str(rid)] = evidence.read_text(run_dir, str(rid))
+        except QuoteCheckFailed as exc:
+            raise DerivationError(f"derivation document {rid}: {exc}") from exc
+    return rerun_fn(bundle, values, documents) if documents else rerun_fn(bundle, values)
 
 
 def check_denominator(claim: dict[str, Any], result: FilingResult) -> None:

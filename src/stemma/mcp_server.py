@@ -21,7 +21,7 @@ import anyio
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from stemma.register import jsonl
+from stemma.register import analysis_run, jsonl
 from stemma.register.evidence_port import EvidenceUnavailable
 from stemma.register.filing import Refused
 from stemma.register.store import Caller, Register, now
@@ -97,7 +97,8 @@ def _call_as[T](caller: Caller, tool: str, fn: Callable[[Register, Caller], T]) 
 WRITE_TOOLS = frozenset({"file_claim", "record_claim_verdict", "entity_review", "tree_upsert",
                          "propose_branch_done", "record_branch_verdict",
                          "request_frame_critique", "submit_draft", "finish_run",
-                         "proceed_on_assumption", "record_frame", "record_review"})
+                         "proceed_on_assumption", "record_frame", "record_review",
+                         "revise_criteria"})
 
 
 @server.tool()
@@ -109,8 +110,9 @@ def file_claim(ctx: Context[Any], statement: str, tier: str, branch_id: str | No
     value: {number, unit, period, kind (level|count|ratio|share|rate|change), as_written,
     denominator (for ratio, share, rate)}. support: [{receipt_id, quote}] (exact text from
     the receipt). derivation (estimated): {script: "analysis/<file>.py", inputs: [claim
-    ids]}. Code checks exact facts and refuses with the failed check; a checker session is
-    then started. Returns the claim id and its tag."""
+    ids]}. Code checks exact facts and refuses with the failed check. No check starts on
+    filing: once a submitted draft cites the claim, the host starts a checker for its
+    source document. Returns the claim id and its tag."""
     raw = {"statement": statement, "tier": tier, "branch_id": branch_id, "value": value,
            "support": support or [], "derivation": derivation, "entities": entities or []}
     return _call(ctx, "file_claim", lambda r, c: r.file_claim(c, raw))
@@ -119,12 +121,48 @@ def file_claim(ctx: Context[Any], statement: str, tier: str, branch_id: str | No
 @server.tool()
 def record_claim_verdict(ctx: Context[Any], claim_id: str, verdict: str, evidence: str,
                          corrected_claim: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Claim checker only: holds | holds_with_correction | not_supported |
+    """Claim checker only, for a claim your check lists (checks/doc-<receipt_id>.json for
+    a doc:<receipt_id> check): holds | holds_with_correction | not_supported |
     could_not_check, with its evidence. For holds_with_correction, corrected_claim is the
     corrected claim (same fields as file_claim); it supersedes the old one."""
     return _call(ctx, "record_claim_verdict",
                  lambda r, c: r.record_claim_verdict(c, claim_id, verdict, evidence,
                                                      corrected_claim))
+
+
+@server.tool()
+async def run_analysis(ctx: Context[Any], script: str, inputs: list[str] | None = None,
+                       documents: list[str] | None = None) -> dict[str, Any]:
+    """Lead and workers: run a script under analysis/ ("analysis/<file>.py") exactly as
+    file_claim re-runs it: with the modules under its folder it imports, no network, no
+    writes outside a temporary folder, a time limit. inputs: the claim ids it reads with
+    stemma.analysis.inputs(); documents: the receipt ids it reads with document().
+    Returns result (the exact value passed to result(), or null), stdout (capped),
+    exit_code, stderr_tail and the bundle's hash and files. Writes nothing to the run."""
+    caller = caller_of(ctx)  # read before leaving the request's task
+
+    def go() -> dict[str, Any]:
+        return _call_as(caller, "run_analysis",
+                        lambda r, c: analysis_run.run_for(r, c, script, inputs, documents))
+
+    return await anyio.to_thread.run_sync(go)
+
+
+@server.tool()
+def check_assignment(ctx: Context[Any]) -> dict[str, Any]:
+    """Claim checker only: the exact list of claims your session was started for (your
+    prompt, doc:<receipt_id> or derivations:v<n>, and its round), with the file that holds
+    it. Record a verdict for each; you may judge no other claim."""
+    return _call(ctx, "check_assignment", lambda r, c: r.check_assignment(c))
+
+
+@server.tool()
+def revise_criteria(ctx: Context[Any], text: str, reason: str) -> dict[str, Any]:
+    """Lead only: replace criteria.md (one line per criterion, "- C1: ...") once the
+    criteria are frozen (they freeze when the first review is asked for), stating why.
+    Final reviews made against the earlier criteria no longer count. The user's own
+    criteria, from the task, are never revised."""
+    return _call(ctx, "revise_criteria", lambda r, c: r.revise_criteria(c, text, reason))
 
 
 @server.tool()
@@ -168,17 +206,21 @@ def entity_review(ctx: Context[Any], action: str = "list", proposal_id: str = ""
 
 @server.tool()
 def tree_upsert(ctx: Context[Any], node: dict[str, Any]) -> dict[str, Any]:
-    """Create or change one tree node: {id, parent, kind (option|condition|rival|
-    open_lane), statement, doubt, settles_by, flip_point, crux, branch_id, status
-    (open|in_progress)}. Fields left out keep their values."""
+    """Create or change one tree node: {id, parent, kind (question|open_lane), statement,
+    doubt, settles_by, flip_point, crux, branch_id, status (open|in_progress), set_aside}.
+    Nodes are sub-questions of the question asked; options and rivals are never nodes.
+    Lead only: set_aside is the reason a node is set aside (neither possible answer could
+    change the headline), or null to bring it back; a set-aside node and everything under
+    it counts as closed and is listed by gate_status. Fields left out keep their values."""
     return _call(ctx, "tree_upsert", lambda r, c: r.tree_upsert(c, node))
 
 
 @server.tool()
 def get_tree(ctx: Context[Any]) -> list[dict[str, Any]]:
-    """The issue tree's nodes, each with how it closes (closes_by: "branch" for a leaf, a
-    condition, rival or open lane holding work; "children" for an option or any node with
-    children, whose status is derived; "nothing" for an empty open lane) and closed."""
+    """The issue tree's nodes, each with how it closes (closes_by: "branch" for a leaf
+    question or an open lane holding work; "children" for any node with children, whose
+    status is derived; "nothing" for an empty open lane; "set_aside" or
+    "ancestor_set_aside") and closed."""
     return _call(ctx, "get_tree", lambda r, c: r.tree_view())
 
 
@@ -193,16 +235,22 @@ def propose_branch_done(ctx: Context[Any], branch_id: str) -> dict[str, Any]:
 
 @server.tool()
 def record_branch_verdict(ctx: Context[Any], branch_id: str, verdict: str, reason: str,
-                          method: str | None = None,
-                          gap_type: str | None = None) -> dict[str, Any]:
+                          method: str | None = None, gap_type: str | None = None,
+                          points: list[dict[str, Any]] | None = None,
+                          resolutions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Branch reviewer only, judging the record snapshot of your round
     (register/branches/<id>/record.r<round>.md): answered | find_more (method) | analyse |
-    bound | ask_user
-    (the reason is the question for the user) | accept_gap (gap_type: user_held |
-    source_unavailable | method_exhausted | out_of_scope), with the reason."""
+    bound | ask_user (the reason is the question for the user) | accept_gap (gap_type:
+    user_held | source_unavailable | method_exhausted | out_of_scope), with the reason.
+    points: [{point, material, node (node id or null), criterion (C-id or null)}], at
+    least one of node and criterion set. find_more, analyse and bound send the branch back
+    and need a material point; a branch is sent back once. A later answered or
+    accept_gap gives resolutions: [{point_id, status: resolved | bounded | conditional |
+    disputed, note}] for every point sent back (bounded and conditional: the record names
+    the point id; disputed: a revision order of the branch names it)."""
     return _call(ctx, "record_branch_verdict",
                  lambda r, c: r.record_branch_verdict(c, branch_id, verdict, reason, method,
-                                                      gap_type))
+                                                      gap_type, points, resolutions))
 
 
 @server.tool()
@@ -222,9 +270,10 @@ def request_frame_critique(ctx: Context[Any]) -> dict[str, Any]:
 
 @server.tool()
 def submit_draft(ctx: Context[Any], version: int) -> dict[str, Any]:
-    """Lead only: freeze draft/answer.v<version>.md and start the three final reviews.
-    Each submission is one review round; after max_review_rounds (run.json, a resource
-    limit) it refuses another."""
+    """Lead only: freeze draft/answer.v<version>.md and start the three final reviews,
+    and a claim checker for each source document the draft's cited claims rest on (claims
+    with a verdict are not checked again). Each submission is one review round; after
+    max_review_rounds (run.json, a resource limit) it refuses another."""
     return _call(ctx, "submit_draft", lambda r, c: r.submit_draft(c, version))
 
 
@@ -254,17 +303,21 @@ def record_frame(ctx: Context[Any], kind: str, text: str) -> dict[str, Any]:
 def record_review(ctx: Context[Any], version: int, text: str,
                   points: list[dict[str, Any]]) -> dict[str, Any]:
     """Final reviewers only: record your review of draft <version> as markdown text, with
-    its points as a list of {point: text, material: true or false} (you judge which are
-    material). The register writes reviews/v<version>/<your file>; reviews are written by
-    this tool only. The draft under review is register/drafts/answer.v<version>.md."""
+    its points as a list of {point: text, material: true or false, node: tree node id or
+    null, criterion: criterion id (C1, ...) from criteria.md or null}, at least one of
+    node and criterion set (you judge which are material: would it change the answer, or
+    whether a criterion is met). Each point gets an id (v<version>.<you>.<n>). The register
+    writes reviews/v<version>/<your file>; reviews are written by this tool only. The
+    draft under review is register/drafts/answer.v<version>.md."""
     return _call(ctx, "record_review", lambda r, c: r.record_review(c, version, text, points))
 
 
 @server.tool()
 def gate_status(ctx: Context[Any], version: int) -> dict[str, Any]:
     """Lead only: read the release gate for draft <version> without releasing. Returns
-    every unmet condition, numbered one per line, the same list finish_run refuses with.
-    Call it after every review round."""
+    every unmet condition, numbered one per line, the same list finish_run refuses with;
+    the open material points of that version's reviews by criterion and by node; and the
+    nodes set aside, with their reasons. Call it after every review round."""
     return _call(ctx, "gate_status", lambda r, c: r.gate_status(c, version))
 
 

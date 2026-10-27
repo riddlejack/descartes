@@ -38,6 +38,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from stemma.register import checks_api, filing, jsonl, roles, safeio, tags
+from stemma.register import criteria as criteria_mod
 from stemma.register.derivation import RerunResult, rerun
 from stemma.register.evidence_port import Evidence, QuoteCheckFailed
 from stemma.register.evidence_port import load as load_evidence
@@ -49,31 +50,49 @@ RUN_ENTITY = "run:stemma:run"
 
 VERDICTS = ("holds", "holds_with_correction", "not_supported", "could_not_check")
 RELEASABLE = frozenset({"holds", "holds_with_correction", "could_not_check"})
-NODE_KINDS = ("option", "condition", "rival", "open_lane")
+# Tree node kinds (CONTRACTS v0.4 section 5, decision D2): the tree is the decomposition
+# of the question asked, so its nodes are sub-questions; an open lane holds what the
+# frame has not placed yet. Options, rivals, gates and checks are never nodes.
+NODE_KINDS = ("question", "open_lane")
 NODE_FIELDS = frozenset({"id", "parent", "kind", "statement", "doubt", "settles_by",
-                         "flip_point", "crux", "branch_id", "status"})
-NODE_RECORD_FIELDS = NODE_FIELDS | {"reopened_from"}
+                         "flip_point", "crux", "branch_id", "status", "set_aside"})
+NODE_RECORD_FIELDS = NODE_FIELDS | {"reopened_from", "set_aside_from"}
 STATUSES = ("open", "in_progress", "proposed_done", "answered", "gap_accepted",
-            "waiting_user", "stopped_by_limit")
+            "waiting_user", "stopped_by_limit", "set_aside")
 DONE = frozenset({"answered", "gap_accepted", "stopped_by_limit"})
 SETTABLE_BY_AUTHORS = frozenset({"open", "in_progress"})
 # Statuses a branch verdict set or is about to set; content changes reopen the node.
 REVIEWED = frozenset({"proposed_done", "answered", "gap_accepted"})
-# Leaf kinds a branch verdict closes (CONTRACTS section 6, v0.3); a node with children
-# closes when they all have (derived, never set), and an empty open lane needs nothing.
-LEAF_KINDS = frozenset({"condition", "rival", "open_lane"})
 # Resource limit: rounds of the three final reviews when run.json does not say (CONTRACTS
 # section 6, `max_review_rounds`); never a quality bar.
 DEFAULT_MAX_REVIEW_ROUNDS = 3
+# Resource limit: characters of a set-aside reason (shown in the tree and the deliverable).
+SET_ASIDE_MAX_CHARS = 2000
 GAP_TYPES = ("user_held", "source_unavailable", "method_exhausted", "out_of_scope")
 BRANCH_VERDICTS = {"answered": "answered", "accept_gap": "gap_accepted",
                    "find_more": "in_progress", "analyse": "in_progress",
                    "bound": "in_progress", "ask_user": "waiting_user"}
+# Verdicts that send a branch back to its worker for a material point (D9: once).
+SEND_BACK = frozenset({"find_more", "analyse", "bound"})
+# Verdicts that close a branch; each accounts for every point sent back earlier.
+CLOSING = frozenset({"answered", "accept_gap"})
+# What became of a point sent back (D9): fixed; bounded or made conditional in the
+# record (which then names the point's id); or disputed by the worker, the lead deciding
+# in the branch's revision order (which names the point's id).
+RESOLUTIONS = ("resolved", "bounded", "conditional", "disputed")
+# The fields of a review point (D4): what it says, whether it is material (would change
+# the answer or whether a criterion is met; the reviewer's judgment), and the tree node
+# and criterion it concerns (at least one).
+POINT_FIELDS = frozenset({"point", "material", "node", "criterion"})
+# Headings of a revision order (D6), in order.
+REVISION_HEADINGS = ("Finding", "Raised by", "Is it right?", "Fix")
 RECORD_HEADINGS = ("Conclusion and confidence", "Claims (ids)", "Model", "Rival tested",
                    "Methods tried and what each returned", "Gaps (typed)",
                    "Implications for other branches", "What was not checked")
 REVIEW_FILES = ("deciders-eye.md", "evidence-audit.md", "mechanical.md")
 REVIEW_FILE_OF = dict(zip(roles.FINAL_REVIEWERS, REVIEW_FILES, strict=True))
+# Short names in review point ids (`v<version>.<abbr>.<n>`), one per final reviewer.
+REVIEW_ABBR = dict(zip(roles.FINAL_REVIEWERS, ("de", "ea", "mr"), strict=True))
 FRAME_FILES = {"own": "framer/own-frame.md", "critique": "framer/critique.md"}
 
 # Resource limits: how long await_checks may block in one call, and how often it looks.
@@ -84,14 +103,13 @@ _SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 
 
 def closure(nodes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """How each node closes and whether it has (CONTRACTS section 6, v0.3), by node id:
-    `closes_by` is "branch" (a leaf: condition, rival, an open lane holding work, an
-    option filed as a branch), "children" (any node with children, and an option),
-    "nothing" (an empty open lane), or "unreachable" (no path up to a root: its parents
-    form a cycle or lead to no node); `status` is the stored one for a leaf and derived
-    for the rest; `closed` follows. A parent closes only with at least one child, all
-    closed: an option with nothing under it is an unfinished frame (`childless`).
-    The walk starts at the roots and visits each reachable node once."""
+    """How each node closes and whether it has (CONTRACTS v0.4 section 6), by node id:
+    `closes_by` is "branch" (a leaf: a question, or an open lane holding work), "children"
+    (any node with children; its status is derived), "nothing" (an empty open lane),
+    "set_aside" (the lead set it aside with a reason, D5: closed, and so is everything
+    under it, marked "ancestor_set_aside" with `set_aside_by`), or "unreachable" (no path
+    up to a root: its parents form a cycle or lead to no node). The walk starts at the
+    roots and visits each reachable node once."""
     by_id = {str(n["id"]): n for n in nodes}
     children: dict[str, list[str]] = {}
     roots: list[str] = []
@@ -102,6 +120,7 @@ def closure(nodes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         else:
             children.setdefault(str(parent), []).append(nid)
     order: list[str] = []  # reachable nodes, each once, parents before children
+    aside_by: dict[str, str] = {}  # node -> the set-aside ancestor (or itself)
     seen: set[str] = set()
     stack = sorted(roots, reverse=True)
     while stack:
@@ -110,22 +129,35 @@ def closure(nodes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
             continue
         seen.add(nid)
         order.append(nid)
+        parent = by_id[nid].get("parent")
+        if parent is not None and str(parent) in aside_by:
+            aside_by[nid] = aside_by[str(parent)]
+        elif by_id[nid].get("set_aside"):
+            aside_by[nid] = nid
         stack.extend(sorted(children.get(nid, []), reverse=True))
     out: dict[str, dict[str, Any]] = {}
     for nid in reversed(order):  # children before parents
         n, kids = by_id[nid], children.get(nid, [])
-        if n["kind"] == "option" and not kids and not n.get("branch_id"):
-            res: dict[str, Any] = {"closes_by": "children", "status": "open", "closed": False,
-                                   "childless": True}
+        if nid in aside_by:
+            by = aside_by[nid]
+            res: dict[str, Any] = {"closes_by": "set_aside" if by == nid
+                                   else "ancestor_set_aside",
+                                   "status": "set_aside", "closed": True, "set_aside_by": by}
         elif kids:
             subs = [out[k] for k in kids]
             if all(c["closed"] for c in subs):
-                st = ("stopped_by_limit" if any(c["status"] == "stopped_by_limit" for c in subs)
-                      else "gap_accepted" if any(c["status"] == "gap_accepted" for c in subs)
+                live = [c for c in subs if c["status"] != "set_aside"]
+                st = ("set_aside" if not live
+                      else "stopped_by_limit" if any(c["status"] == "stopped_by_limit"
+                                                     for c in live)
+                      else "gap_accepted" if any(c["status"] == "gap_accepted" for c in live)
                       else "answered")
+                closed = True
             else:
-                st = "open" if all(c["status"] == "open" for c in subs) else "in_progress"
-            res = {"closes_by": "children", "status": st, "closed": st in DONE}
+                st = "open" if all(c["status"] in ("open", "set_aside") for c in subs) \
+                    else "in_progress"
+                closed = False
+            res = {"closes_by": "children", "status": st, "closed": closed}
         elif n["kind"] == "open_lane" and not n.get("branch_id"):
             res = {"closes_by": "nothing", "status": "not_needed", "closed": True}
         else:
@@ -135,6 +167,16 @@ def closure(nodes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         if nid not in out:
             out[nid] = {"closes_by": "unreachable", "status": "open", "closed": False}
     return out
+
+
+def _concerns(pt: dict[str, Any]) -> str:
+    """What a point concerns, for a gate line: `criterion C2, node n3`."""
+    parts = []
+    if pt.get("criterion"):
+        parts.append(f"criterion {pt['criterion']}")
+    if pt.get("node"):
+        parts.append(f"node {pt['node']}")
+    return ", ".join(parts) or "no criterion or node recorded"
 
 
 def gate_refusal(failures: list[str]) -> str:
@@ -216,6 +258,161 @@ class Register:
         rounds = checks_api.for_prompt(self.run_dir, role, prompt)
         if state.request.round != max(r.request.round for r in rounds):
             raise Refused(f"Refused: this session was started for an earlier round of {prompt}.")
+
+    def _checker_may_judge(self, caller: Caller, cid: str) -> None:
+        """The caller is the main thread of a claim checker the driver launched for a
+        check whose list (its own round's) names `cid`: `doc:<receipt_id>` or
+        `derivations:v<n>` (D7). Anything else is refused."""
+        refusal = f"Refused: this session was not started for claim:{cid}."
+        if caller.agent_id:
+            raise Refused(refusal)
+        state = checks_api.state_for_session(self.run_dir, caller.session_id)
+        if state is None or state.request.role != "claim-checker":
+            raise Refused(refusal)
+        if cid not in self._check_lists().get((state.request.prompt, state.request.round), []):
+            raise Refused(refusal)
+
+    def _check_lists(self) -> dict[tuple[str, int], list[str]]:
+        """The claims each claim check lists, by (prompt, round)."""
+        out: dict[tuple[str, int], list[str]] = {}
+        for r in self._run_facts("doc_check_listed"):
+            out[(f"doc:{r['receipt_id']}", int(r["round"]))] = list(r["claims"])
+        for r in self._run_facts("derivation_check_listed"):
+            out[(str(r["prompt"]), int(r["round"]))] = list(r["claims"])
+        return out
+
+    def _due_for_checking(self, cited: list[str]) -> list[str]:
+        """The cited claims and, for each cited estimate, its input claims (through
+        estimates of estimates), cited or not: each is checked once (D7)."""
+        out: list[str] = []
+        todo = list(cited)
+        while todo:
+            cid = todo.pop(0)
+            if cid in out:
+                continue
+            out.append(cid)
+            try:
+                rec = self._claim_record(cid)
+            except Refused:
+                continue
+            if rec.get("tier") == "estimated":
+                for given in (rec.get("derivation") or {}).get("inputs") or []:
+                    try:
+                        todo.append(self.resolve_claim_id(str(given)))
+                    except Refused:
+                        continue
+        return out
+
+    def request_claim_checks(self, claim_ids: list[str], event: str, version: int,
+                             text: str = "") -> list[str]:
+        """Ask for the checks of the cited `claim_ids` (D7), each claim in exactly one
+        list: a claim with a source document (`home_document`) goes to that document's
+        checker, prompt `doc:<receipt_id>`, list `checks/doc-<receipt_id>.json`; a claim
+        resting on no document (an estimate with no documents, an assumption) goes to
+        the draft's one derivations checker, prompt `derivations:v<version>`, list
+        `checks/derivations-v<version>.json`, with the sentences of the draft (`text`)
+        that cite it. Each cited estimate's inputs are checked too, cited or not.
+        Skipped: superseded claims, claims with a verdict, and claims a check that has
+        not ended already lists. Call under the lock. Returns the request ids."""
+        states = checks_api.states(self.run_dir)
+        busy: set[str] = set()
+        for (prompt, rnd), ids in self._check_lists().items():
+            if any(st.request.prompt == prompt and st.request.round == rnd
+                   and st.status != "ended" for st in states.values()):
+                busy.update(ids)
+        by_doc: dict[str, list[str]] = {}
+        no_doc: list[str] = []
+        for cid in self._due_for_checking(claim_ids):
+            rec = self._claim_record(cid)
+            if rec["superseded_by"] or rec["verdict"] is not None or cid in busy:
+                continue
+            doc = self.home_document(rec)
+            if doc is not None:
+                by_doc.setdefault(doc, []).append(cid)
+            else:
+                no_doc.append(cid)
+        out: list[str] = []
+        source = {"kind": "register", "at": now(), "by": "stemma:register"}
+        if by_doc or no_doc:
+            self._ensure_entity(RUN_ENTITY, "run", "run", source)
+        for rid, ids in sorted(by_doc.items()):
+            prompt = f"doc:{rid}"
+            rnd = len(checks_api.for_prompt(self.run_dir, "claim-checker", prompt)) + 1
+            listing = {"receipt_id": rid, "round": rnd, "draft_version": version,
+                       "claims": sorted(ids),
+                       "statements": {c: self._claim_record(c)["statement"] for c in ids}}
+            self._write_once(assignment_file(prompt, rnd), json.dumps(listing, indent=2))
+            self.wm.assertFact({"about": RUN_ENTITY, "predicate": "doc_check_listed",
+                                "value": {"receipt_id": rid, "round": rnd,
+                                          "claims": sorted(ids), "version": version},
+                                "source": source})
+            out.append(checks_api.request_check(self.run_dir, roles.CLAIM_CHECKER, prompt,
+                                                event, round_no=rnd).request_id)
+        if no_doc:
+            prompt = f"derivations:v{version}"
+            rnd = len(checks_api.for_prompt(self.run_dir, "claim-checker", prompt)) + 1
+            segs = tags.segments(text) if text else []
+            entries = []
+            for cid in no_doc:
+                rec = self._claim_record(cid)
+                tag = f"[[c:{cid[:12]}]]"
+                entries.append({
+                    "claim_id": cid, "tier": rec["tier"], "statement": rec["statement"],
+                    "value": rec.get("value"), "derivation": rec.get("derivation"),
+                    "sentences": [sg.text for sg in segs if tag in sg.text]})
+            listing2 = {"draft_version": version, "round": rnd, "claims": entries}
+            self._write_once(assignment_file(prompt, rnd),
+                             json.dumps(listing2, indent=2, ensure_ascii=False))
+            self.wm.assertFact({"about": RUN_ENTITY, "predicate": "derivation_check_listed",
+                                "value": {"prompt": prompt, "round": rnd, "version": version,
+                                          "claims": no_doc},
+                                "source": source})
+            out.append(checks_api.request_check(self.run_dir, roles.CLAIM_CHECKER, prompt,
+                                                event, round_no=rnd).request_id)
+        return out
+
+    def _write_once(self, rel: str, text: str) -> None:
+        """A checker's assignment: written once and never changed while it runs (Codex
+        review #5); a name already taken is a loud refusal, never an overwrite."""
+        try:
+            taken = safeio.exists_nofollow(self.run_dir, rel)
+        except (safeio.UnsafePath, NotADirectoryError) as exc:
+            raise Refused(f"Refused: {rel} cannot be written safely.") from exc
+        if taken:
+            raise Refused(f"Refused: {rel} already exists; an assignment is never rewritten.")
+        self._write(rel, text)
+
+    def check_assignment(self, caller: Caller) -> dict[str, Any]:
+        """A claim checker's own assignment: the list its session was launched for (its
+        prompt and round), with the file that holds it."""
+        self._require(caller, frozenset({roles.CLAIM_CHECKER}), "read check assignments")
+        if caller.agent_id:
+            raise Refused("Refused: this session was not started for a claim check.")
+        self.wm.refresh()
+        state = checks_api.state_for_session(self.run_dir, caller.session_id)
+        if state is None or state.request.role != "claim-checker":
+            raise Refused("Refused: this session was not started for a claim check.")
+        prompt, rnd = state.request.prompt, state.request.round
+        rel = assignment_file(prompt, rnd)
+        try:
+            listing = json.loads(safeio.read_text(self.run_dir, rel))
+        except (FileNotFoundError, ValueError, safeio.UnsafePath) as exc:
+            raise Refused(f"Refused: the assignment {rel} cannot be read.") from exc
+        return {"prompt": prompt, "round": rnd, "file": rel, **listing}
+
+    @staticmethod
+    def home_document(rec: dict[str, Any]) -> str | None:
+        """The source document a claim's check goes with (D7): its first support item's
+        receipt; for an estimate, the first document its derivation names; None for a
+        claim resting on no document (an assumption, an estimate from claims alone)."""
+        for s in rec.get("support") or []:
+            rid = s.get("receipt_id") if isinstance(s, dict) else None
+            if isinstance(rid, str) and _SAFE_ID.fullmatch(rid):
+                return rid
+        for rid in (rec.get("derivation") or {}).get("documents") or []:
+            if isinstance(rid, str) and _SAFE_ID.fullmatch(rid):
+                return rid
+        return None
 
     def _revoked(self) -> frozenset[str]:
         return checks_api.revoked_sessions(self.run_dir)
@@ -368,19 +565,17 @@ class Register:
         with jsonl.exclusive(self._lock):
             self.wm.refresh()
             cid, existed = self._store_claim(result, caller, None)
-            req = checks_api.request_check(self.run_dir, roles.CLAIM_CHECKER, f"claim:{cid}",
-                                           "file_claim")
             self.rebuild_index()
+        # No check starts on filing (D7): a claim is checked once a submitted draft cites it.
         return {"claim_id": cid, "tag": f"[[c:{cid[:12]}]]", "already_filed": existed,
-                "checks": result.checks, "warnings": result.warnings,
-                "check_requested": req.request_id}
+                "checks": result.checks, "warnings": result.warnings}
 
     def record_claim_verdict(self, caller: Caller, claim_id: str, verdict: str,
                              evidence: str, corrected_claim: dict[str, Any] | None = None
                              ) -> dict[str, Any]:
         self._require(caller, frozenset({roles.CLAIM_CHECKER}), "record claim verdicts")
         cid = self.resolve_claim_id(claim_id)
-        self._session_prompt_is(caller, "claim-checker", f"claim:{cid}")  # early, cheap refusal
+        self._checker_may_judge(caller, cid)  # early, cheap refusal
         if verdict not in VERDICTS:
             raise Refused(f"Refused: verdict must be one of {', '.join(VERDICTS)}.")
         if verdict == "holds" and self._correction_refused(caller.session_id, cid):
@@ -420,7 +615,7 @@ class Register:
                                           self._rerun, self._inputs())
         with jsonl.exclusive(self._lock):
             self.wm.refresh()
-            self._session_prompt_is(caller, "claim-checker", f"claim:{cid}")  # binding, in lock
+            self._checker_may_judge(caller, cid)  # binding, in lock
             if self._claim_record(cid)["superseded_by"] is not None:
                 raise Refused("Refused: the claim is already superseded.")
             source = self._src(caller, kind="claim-checker")
@@ -576,8 +771,8 @@ class Register:
         for n in nodes:
             c = info[str(n["id"])]
             view = {**n, "closes_by": c["closes_by"], "closed": c["closed"]}
-            if c.get("childless"):
-                view["childless"] = True
+            if c.get("set_aside_by"):
+                view["set_aside_by"] = c["set_aside_by"]
             if c["closes_by"] != "branch":
                 view["stored_status"], view["status"] = n["status"], c["status"]
             out.append(view)
@@ -595,8 +790,9 @@ class Register:
         def walk(parent: str | None, depth: int) -> None:
             for n in children.get(parent, []):
                 crux = " **crux**" if n.get("crux") else ""
+                aside = f" (set aside: {n['set_aside']})" if n.get("set_aside") else ""
                 lines.append(f"{'  ' * depth}- `{n['id']}` [{n['kind']}, {n['status']}]{crux} "
-                             f"{n['statement']}")
+                             f"{n['statement']}{aside}")
                 walk(str(n["id"]), depth + 1)
 
         walk(None, 0)
@@ -608,6 +804,9 @@ class Register:
                               "attrs": node, "source": source})
 
     def tree_upsert(self, caller: Caller, node: dict[str, Any]) -> dict[str, Any]:
+        """Create or change one node. `set_aside` (D5, lead only) is the reason the node
+        is set aside, or null to bring it back; a set-aside node and everything under it
+        counts as closed, and the reason is shown in the tree and the run's record."""
         self._require(caller, roles.AUTHORS, "change the tree")
         bad = sorted(set(node) - NODE_FIELDS)
         if bad:
@@ -616,13 +815,26 @@ class Register:
         nid = node.get("id")
         if not isinstance(nid, str) or not _SAFE_ID.fullmatch(nid):
             raise Refused("Refused: a node needs a plain id.")
+        if "set_aside" in node:
+            self._require(caller, frozenset({roles.LEAD}), "set nodes aside")
+            reason = node["set_aside"]
+            if reason is not None and (not isinstance(reason, str) or not reason.strip()):
+                raise Refused("Refused: set_aside is the reason, as text, or null.")
+            if isinstance(reason, str) and len(reason) > SET_ASIDE_MAX_CHARS:
+                raise Refused(f"Refused: the set-aside reason is longer than "
+                              f"{SET_ASIDE_MAX_CHARS} characters.")
+            node["set_aside"] = reason.strip() if isinstance(reason, str) else None
+        if node.get("status") == "set_aside":
+            raise Refused("Refused: a node is set aside by giving set_aside its reason.")
         with jsonl.exclusive(self._lock):
             self.wm.refresh()
             self._sync_records()
             existing = {n["id"]: n for n in self.tree()}
             merged: dict[str, Any] = dict(existing.get(nid) or {
                 "id": nid, "parent": None, "doubt": None, "settles_by": None,
-                "flip_point": None, "crux": False, "branch_id": None, "status": "open"})
+                "flip_point": None, "crux": False, "branch_id": None, "status": "open",
+                "set_aside": None})
+            merged.setdefault("set_aside", None)
             merged.update(node)
             if merged.get("kind") not in NODE_KINDS:
                 raise Refused(f"Refused: kind must be one of {', '.join(NODE_KINDS)}.")
@@ -644,17 +856,40 @@ class Register:
                                        or not _SAFE_ID.fullmatch(branch)):
                 raise Refused("Refused: branch_id is not a plain id.")
             old = existing.get(nid) or {}
+            if caller.agent_type != roles.LEAD or caller.agent_id:
+                # Structure is the lead's (Codex review #4): an author below it may add a
+                # node, never move one, reassign its branch, or place work where a
+                # set-aside node above would close it unreviewed.
+                if old and any(merged.get(k) != old.get(k) for k in ("parent", "branch_id")):
+                    raise Refused(f"Refused: only the lead moves node {nid} or changes its "
+                                  f"branch.")
+                if not old and parent is not None and closure(
+                        [*existing.values(), merged])[nid]["closes_by"] == "ancestor_set_aside":
+                    raise Refused(f"Refused: node {nid} would sit under a node set aside; only "
+                                  f"the lead places work there.")
             old_status = old.get("status")
             if ("status" in node and node["status"] != old_status
                     and node["status"] not in SETTABLE_BY_AUTHORS):
                 raise Refused(f"Refused: status {node['status']} is not set by tree_upsert.")
-            changed = [k for k in NODE_FIELDS - {"id", "status"} if merged.get(k) != old.get(k)]
-            if old and old_status in REVIEWED and changed:
+            changed = [k for k in NODE_FIELDS - {"id", "status", "set_aside"}
+                       if merged.get(k) != old.get(k)]
+            if merged.get("set_aside"):
+                if old_status != "set_aside":
+                    merged["set_aside_from"] = old_status
+                merged["status"] = "set_aside"
+            elif old_status == "set_aside":
+                # Brought back: it starts again, and only a branch verdict closes it.
+                merged["status"] = "in_progress" if merged.get("branch_id") else "open"
+                merged.pop("set_aside_from", None)
+            elif old and old_status in REVIEWED and changed:
                 # A reviewed (or under-review) node that changes is no longer what was
                 # reviewed: it reopens, and only a new branch verdict can close it again.
                 merged["status"] = "in_progress"
                 merged["reopened_from"] = old_status
             self._put_node(merged, self._src(caller))
+            if merged.get("set_aside") != old.get("set_aside"):
+                self._run_fact(caller, "node_set_aside", {
+                    "node": nid, "reason": merged.get("set_aside"), "at": now()})
             self._write_tree()
         return merged
 
@@ -676,9 +911,15 @@ class Register:
         return rel
 
     def _branch_nodes(self, branch_id: str) -> list[dict[str, Any]]:
-        nodes = [n for n in self.tree() if n.get("branch_id") == branch_id]
+        """The branch's nodes that are not set aside, nor under a node set aside (they
+        need no review)."""
+        tree = self.tree()
+        info = closure(tree)
+        nodes = [n for n in tree if n.get("branch_id") == branch_id
+                 and info[str(n["id"])]["closes_by"] not in ("set_aside", "ancestor_set_aside")]
         if not nodes:
-            raise Refused(f"Refused: no tree node has branch {branch_id}.")
+            raise Refused(f"Refused: no tree node that is not set aside has branch "
+                          f"{branch_id}.")
         return nodes
 
     def propose_branch_done(self, caller: Caller, branch_id: str) -> dict[str, Any]:
@@ -699,7 +940,20 @@ class Register:
             self.wm.refresh()
             self._sync_records()
             nodes = self._branch_nodes(branch_id)
+            # Each point sent back is addressed before the branch returns to its reviewer:
+            # named in the record (resolved, bounded or conditional) or in a revision
+            # order (disputed, for the lead's ruling). Exact facts: the id appears.
+            orders = "\n".join(t for _n, t in self.revision_orders(branch_id))
+            record_text = record_bytes.decode("utf-8", "replace")
+            unaddressed = [pt["id"] for pt in self.sent_back(branch_id)
+                           if pt["id"] not in record_text and pt["id"] not in orders]
+            if unaddressed:
+                raise Refused(f"Refused: points {', '.join(unaddressed)} were sent back; "
+                              f"neither record.md nor a revision order of the branch "
+                              f"(revision-<n>.md with the headings "
+                              f"{'; '.join(REVISION_HEADINGS)}) names them.")
             source = self._src(caller)
+            self._freeze_criteria(caller, "first review asked for")
             prior = checks_api.for_prompt(self.run_dir, "branch-reviewer", f"branch:{branch_id}")
             rnd = len(prior) + 1
             # The reviewer is given this snapshot; its verdict binds to these bytes.
@@ -724,11 +978,38 @@ class Register:
         return {int(r["round"]): r for r in self._run_facts("record_frozen")
                 if r["branch_id"] == branch_id}
 
+    def _apply_verdicts(self) -> bool:
+        """Repair what a crash between writes left: each branch verdict recorded for the
+        latest proposed round of its branch is applied to every node it covers that
+        still awaits it (its node fact and status). Idempotent. Call under the lock;
+        returns True when it changed a node."""
+        by_id = {str(n["id"]): n for n in self.tree()}
+        changed = False
+        for v in self._run_facts("branch_verdict_recorded"):
+            frozen = self._frozen_records(str(v["branch_id"]))
+            if not frozen or int(v["round"]) != max(frozen):
+                continue
+            source = {"kind": "register", "at": now(), "by": "stemma:register"}
+            for nid in v.get("nodes") or []:
+                n = by_id.get(str(nid))
+                if (n is None or n["status"] != "proposed_done"
+                        or n.get("branch_id") != v["branch_id"]):
+                    continue  # moved on: a newer proposal, or another branch's now
+                facts = self._live_facts(node_entity(str(nid)), "branch_verdict")
+                if not any(f["value"].get("round") == v["round"]
+                           and f["value"].get("session") == v["session"] for f in facts):
+                    self.wm.assertFact({"about": node_entity(str(nid)),
+                                        "predicate": "branch_verdict", "value": v,
+                                        "source": {**source, "runId": v["session"]}})
+                self._put_node({**n, "status": BRANCH_VERDICTS[str(v["verdict"])]}, source)
+                changed = True
+        return changed
+
     def _sync_records(self) -> None:
         """A reviewed branch whose live record.md is no longer the reviewed snapshot
         reopens: the review no longer covers what the record says. Call under the lock."""
+        changed = self._apply_verdicts()
         source = {"kind": "register", "at": now(), "by": "stemma:register"}
-        changed = False
         for n in self.tree():
             branch = n.get("branch_id")
             if n["status"] not in REVIEWED or not branch:
@@ -751,7 +1032,14 @@ class Register:
 
     def record_branch_verdict(self, caller: Caller, branch_id: str, verdict: str,
                               reason: str, method: str | None = None,
-                              gap_type: str | None = None) -> dict[str, Any]:
+                              gap_type: str | None = None,
+                              points: list[dict[str, Any]] | None = None,
+                              resolutions: list[dict[str, Any]] | None = None
+                              ) -> dict[str, Any]:
+        """A branch reviewer's verdict on its round's record snapshot (D9): a send-back
+        (find_more, analyse, bound) carries at least one material point and happens once
+        per branch; a closing verdict (answered, accept_gap) gives a resolution for each
+        point sent back earlier."""
         self._require(caller, frozenset({roles.BRANCH_REVIEWER}), "record branch verdicts")
         if verdict not in BRANCH_VERDICTS:
             raise Refused(f"Refused: verdict must be one of {', '.join(BRANCH_VERDICTS)}.")
@@ -765,11 +1053,18 @@ class Register:
             raise Refused(f"Refused: gap type must be one of {', '.join(GAP_TYPES)}.")
         if gap_type == "user_held" and not self.assumptions(branch_id):
             raise Refused("Refused: user_held needs an assumption recorded for the branch.")
+        checked = self._check_points(points or [])
+        if verdict in SEND_BACK and not any(pt["material"] for pt in checked):
+            raise Refused(f"Refused: {verdict} sends the branch back, which needs at least "
+                          f"one material point.")
+        res_in = self._check_resolutions(resolutions or [])
         branch_dir = self._branch_dir(branch_id)
         with jsonl.exclusive(self._lock):
             self.wm.refresh()
             # Authorization and write under one lock: no new round can start in between.
             self._session_prompt_is(caller, "branch-reviewer", f"branch:{branch_id}")
+            if self._apply_verdicts():
+                self._write_tree()
             state = checks_api.state_for_session(self.run_dir, caller.session_id)
             rnd = state.request.round if state else 0
             nodes = self._branch_nodes(branch_id)
@@ -781,11 +1076,34 @@ class Register:
             snap = safeio.read_bytes(self.run_dir, frozen["snapshot"])
             if sha256_bytes(snap) != frozen["sha256"]:
                 raise Refused("Refused: the record snapshot does not match its digest.")
-            body = {"branch_id": branch_id, "round": rnd, "verdict": verdict, "reason": reason,
-                    "method": method, "gap_type": gap_type, "record_digest": frozen["sha256"],
+            sent = self.sent_back(branch_id)
+            if verdict in SEND_BACK and sent:
+                raise Refused(f"Refused: branch {branch_id} was sent back in round "
+                              f"{sent[0]['round']}; a branch is sent back once (D9). The "
+                              f"verdicts left are answered, accept_gap and ask_user, each "
+                              f"with a resolution for every point sent back.")
+            if verdict in CLOSING:
+                self._require_resolutions(branch_id, sent, res_in, snap.decode("utf-8",
+                                                                             "replace"))
+            elif res_in:
+                known = {pt["id"] for pt in sent}
+                for r in res_in:
+                    if r["point_id"] not in known:
+                        raise Refused(f"Refused: no point {r['point_id']} was sent back on "
+                                      f"branch {branch_id}.")
+            pts = [{"id": f"{branch_id}.r{rnd}.{i}", **pt}
+                   for i, pt in enumerate(checked, start=1)]
+            body = {"branch_id": branch_id, "nodes": sorted(str(n["id"]) for n in nodes),
+                    "round": rnd, "verdict": verdict, "reason": reason,
+                    "method": method, "gap_type": gap_type, "points": pts,
+                    "resolutions": res_in, "record_digest": frozen["sha256"],
                     "record_snapshot": frozen["snapshot"], "by": caller.agent_type,
                     "session": caller.session_id, "at": now()}
             source = self._src(caller, kind="branch-reviewer")
+            # The authoritative record first (Codex review #6): the send-back history and
+            # the node states derive from it, and _apply_verdicts repairs any node write
+            # a crash cut off, idempotently, under the lock.
+            self._run_fact(caller, "branch_verdict_recorded", body)
             for n in nodes:
                 self.wm.assertFact({"about": node_entity(n["id"]), "predicate": "branch_verdict",
                                     "value": body, "source": source})
@@ -795,6 +1113,182 @@ class Register:
             self._write(vdir / f"{number}.json", json.dumps(body, indent=2))
             self._write_tree()
         return {**body, "verdict_file": str(vdir / f"{number}.json")}
+
+    # ------------------------------------------------- review points (D4, D9)
+    def criteria(self) -> dict[str, str]:
+        """The run's criteria by id (criteria.md); refuses when the file is malformed."""
+        try:
+            return criteria_mod.read(self.run_dir)
+        except criteria_mod.CriteriaInvalid as exc:
+            raise Refused(f"Refused: {exc}.") from exc
+        except (safeio.UnsafePath, NotADirectoryError) as exc:
+            raise Refused("Refused: criteria.md is not a plain file.") from exc
+
+    def frozen_criteria(self) -> dict[str, Any] | None:
+        """The latest frozen criteria (Codex review #3): `{round, sha256, file, reason}`,
+        or None before the first review was asked for."""
+        got = self._run_facts("criteria_frozen")
+        return got[-1] if got else None
+
+    def _freeze_criteria(self, caller: Caller, reason: str, text: str | None = None) -> None:
+        """Freeze criteria.md before any review (the first frame critique, branch
+        proposal or draft submission): a copy under register/criteria/ and its digest.
+        Once frozen, criteria.md changes only through revise_criteria. Call under the
+        lock. `text` given: the lead's revision, written to criteria.md first."""
+        if text is None and self.frozen_criteria() is not None:
+            return
+        if text is not None:
+            try:
+                parsed = criteria_mod.parse(text)
+            except criteria_mod.CriteriaInvalid as exc:
+                raise Refused(f"Refused: {exc}.") from exc
+            if not parsed:
+                raise Refused("Refused: the criteria name no criterion (- C1: ...).")
+            self._write(criteria_mod.CRITERIA_FILE, text)
+        if not self.criteria():
+            raise Refused("Refused: criteria.md names no criterion (- C1: ...); write it at "
+                          "intake, before any review.")
+        data = self._read(criteria_mod.CRITERIA_FILE)
+        rnd = len(self._run_facts("criteria_frozen")) + 1
+        rel = f"register/criteria/criteria.r{rnd}.md"
+        try:
+            safeio.write_bytes(self.run_dir, rel, data)
+        except safeio.UnsafePath as exc:
+            raise Refused("Refused: the frozen criteria cannot be written safely.") from exc
+        self._run_fact(caller, "criteria_frozen", {"round": rnd, "sha256": sha256_bytes(data),
+                                                   "file": rel, "reason": reason})
+
+    def revise_criteria(self, caller: Caller, text: str, reason: str) -> dict[str, Any]:
+        """Lead only, after the criteria are frozen: replace criteria.md with `text`, for
+        the stated reason. Final reviews made against the earlier criteria stop counting,
+        and the user's own criteria (from the task) are never revised."""
+        self._require(caller, frozenset({roles.LEAD}), "revise the criteria")
+        if caller.agent_id:
+            raise Refused("Refused: only the lead's own thread revises the criteria.")
+        if criteria_mod.from_task(self.run_dir):
+            raise Refused("Refused: these are the user's criteria, from the task.")
+        if not isinstance(reason, str) or not reason.strip():
+            raise Refused("Refused: a revision of the criteria states its reason.")
+        if not isinstance(text, str):
+            raise Refused("Refused: the criteria are text, one line per criterion.")
+        with jsonl.exclusive(self._lock):
+            self.wm.refresh()
+            self._freeze_criteria(caller, f"revised: {reason.strip()}", text)
+            frozen = self.frozen_criteria()
+        return {"criteria": self.criteria(), **(frozen or {})}
+
+    def _check_points(self, points: Any) -> list[dict[str, Any]]:
+        """Each point is {point, material, node, criterion}: node a tree node id or null,
+        criterion a criterion id or null, at least one of them set. The reviewer judges
+        materiality; code checks only that the names exist."""
+        if not isinstance(points, list):
+            raise Refused("Refused: points is a list of {point, material, node, criterion}.")
+        if not points:
+            return []
+        nodes = {str(n["id"]) for n in self.tree()}
+        crit = self.criteria()
+        out: list[dict[str, Any]] = []
+        for i, pt in enumerate(points, start=1):
+            if (not isinstance(pt, dict) or not {"point", "material"} <= set(pt)
+                    or not set(pt) <= POINT_FIELDS
+                    or not isinstance(pt["point"], str) or not pt["point"].strip()
+                    or not isinstance(pt["material"], bool)):
+                raise Refused(f"Refused: point {i} is not {{point: text, material: true or "
+                              f"false, node: node id or null, criterion: C-id or null}}.")
+            node, cid = pt.get("node"), pt.get("criterion")
+            if node is None and cid is None:
+                raise Refused(f"Refused: point {i} names neither a tree node nor a criterion.")
+            if node is not None and (not isinstance(node, str) or node not in nodes):
+                raise Refused(f"Refused: point {i} names node {node!r}, which is not in the tree.")
+            if cid is not None and (not isinstance(cid, str) or cid not in crit):
+                raise Refused(f"Refused: point {i} names criterion {cid!r}, which is not in "
+                              f"criteria.md.")
+            out.append({"point": pt["point"], "material": pt["material"], "node": node,
+                        "criterion": cid})
+        return out
+
+    @staticmethod
+    def _check_resolutions(resolutions: Any) -> list[dict[str, Any]]:
+        if not isinstance(resolutions, list):
+            raise Refused("Refused: resolutions is a list of {point_id, status, note}.")
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for i, r in enumerate(resolutions, start=1):
+            if (not isinstance(r, dict) or not {"point_id", "status"} <= set(r)
+                    or not set(r) <= {"point_id", "status", "note"}
+                    or not isinstance(r["point_id"], str)
+                    or r["status"] not in RESOLUTIONS
+                    or not isinstance(r.get("note", ""), str)):
+                raise Refused(f"Refused: resolution {i} is not {{point_id, status: "
+                              f"{' | '.join(RESOLUTIONS)}, note}}.")
+            if r["point_id"] in seen:
+                raise Refused(f"Refused: point {r['point_id']} is resolved twice.")
+            seen.add(r["point_id"])
+            out.append({"point_id": r["point_id"], "status": r["status"],
+                        "note": r.get("note", "")})
+        return out
+
+    def sent_back(self, branch_id: str, nodes: list[str] | None = None) -> list[dict[str, Any]]:
+        """The material points sent back (by a session not revoked) on a branch or on any
+        of its nodes, each with its id and round; empty when none was. Obligations follow
+        the node as well as the branch id, so reassigning a node to another branch carries
+        them along (Codex review #4)."""
+        if nodes is None:
+            nodes = [str(n["id"]) for n in self.tree() if n.get("branch_id") == branch_id]
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for v in self._run_facts("branch_verdict_recorded"):
+            if v["verdict"] not in SEND_BACK:
+                continue
+            if v["branch_id"] != branch_id and not set(v.get("nodes") or []) & set(nodes):
+                continue
+            for pt in v["points"]:
+                if pt["material"] and pt["id"] not in seen:
+                    seen.add(pt["id"])
+                    out.append({**pt, "round": v["round"]})
+        return out
+
+    def _require_resolutions(self, branch_id: str, sent: list[dict[str, Any]],
+                             given: list[dict[str, Any]], record: str) -> None:
+        """A closing verdict accounts for every point sent back: `bounded` or
+        `conditional` needs the record snapshot to name the point's id; `disputed` needs
+        a revision order of the branch that names it (exact facts; the judgment of
+        whether the record really bounds it is the reviewer's)."""
+        by_id = {r["point_id"]: r for r in given}
+        want = [pt["id"] for pt in sent]
+        for pid in by_id:
+            if pid not in want:
+                raise Refused(f"Refused: no point {pid} was sent back on branch {branch_id}.")
+        for pid in want:
+            r = by_id.get(pid)
+            if r is None:
+                raise Refused(f"Refused: point {pid} was sent back on this branch; a closing "
+                              f"verdict gives its resolution ({', '.join(RESOLUTIONS)}).")
+            if r["status"] in ("bounded", "conditional") and pid not in record:
+                raise Refused(f"Refused: point {pid} is {r['status']}, but the record does "
+                              f"not name it.")
+            if r["status"] == "disputed" and not any(
+                    pid in text for _n, text in self.revision_orders(branch_id)):
+                raise Refused(f"Refused: point {pid} is disputed, but no revision order of "
+                              f"branch {branch_id} names it.")
+
+    def revision_orders(self, branch_id: str) -> list[tuple[int, str]]:
+        """The branch's revision orders (`revision-<n>.md`, D6) with all four headings."""
+        bdir = self.run_dir / self._branch_dir(branch_id)
+        out: list[tuple[int, str]] = []
+        for p in sorted(bdir.glob("revision-*.md")):
+            m = re.fullmatch(r"revision-(\d+)\.md", p.name)
+            if not m:
+                continue
+            try:
+                text = safeio.read_text(self.run_dir,
+                                        self._branch_dir(branch_id) / p.name)
+            except (OSError, UnicodeDecodeError, safeio.UnsafePath):
+                continue
+            heads = [h.strip() for h in re.findall(r"^#{1,6}\s+(.+?)\s*$", text, re.MULTILINE)]
+            if all(h in heads for h in REVISION_HEADINGS):
+                out.append((int(m.group(1)), text))
+        return sorted(out)
 
     def _verdict_files(self, branch_dir: PurePosixPath) -> list[PurePosixPath]:
         vdir = self.run_dir / branch_dir / "verdicts"
@@ -887,6 +1381,7 @@ class Register:
             raise Refused("Refused: the blind framer's own frame has not landed.")
         with jsonl.exclusive(self._lock):
             self.wm.refresh()
+            self._freeze_criteria(caller, "first review asked for")
             prior = checks_api.for_prompt(self.run_dir, "blind-framer", "frame:critique")
             req = checks_api.request_check(self.run_dir, roles.BLIND_FRAMER, "frame:critique",
                                            "request_frame_critique", round_no=len(prior) + 1)
@@ -947,6 +1442,7 @@ class Register:
         data = self._read(f"draft/answer.v{version}.md")
         with jsonl.exclusive(self._lock):
             done = self.submitted_versions()
+            self._freeze_criteria(caller, "first review asked for")
             if done and version <= max(done):
                 raise Refused(f"Refused: version {version} is not after version {max(done)}.")
             limit = self.max_review_rounds()
@@ -955,16 +1451,82 @@ class Register:
                               f"max_review_rounds in run.json, a resource limit). finish_run "
                               f"releases a reviewed version, listing the last round's "
                               f"criticisms.")
+            previous = self._previous_round(version, max(done)) if done else None
             try:
                 safeio.write_bytes(self.run_dir, frozen_draft(version), data)
             except safeio.UnsafePath as exc:
                 raise Refused("Refused: the frozen draft cannot be written safely.") from exc
+            if previous is not None:
+                self._write(previous_round_file(version), previous)
+            cited: list[str] = []
+            for short in dict.fromkeys(tags.claim_tags(data.decode("utf-8", "replace"))):
+                try:
+                    cited.append(self.resolve_claim_id(short))
+                except Refused:
+                    continue  # the gate names a tag that names no claim
+            # Before the submission is recorded: a refusal here leaves nothing submitted.
+            claim_reqs = self.request_claim_checks(cited, "submit_draft", version,
+                                                   data.decode("utf-8", "replace"))
             self._run_fact(caller, "draft_submitted",
                            {"version": version, "sha256": sha256_bytes(data)})
             reqs = [checks_api.request_check(self.run_dir, role, f"draft:{version}",
                                              "submit_draft").request_id
                     for role in roles.FINAL_REVIEWERS]
-        return {"version": version, "checks_requested": reqs}
+        return {"version": version, "checks_requested": reqs,
+                "claim_checks_requested": claim_reqs}
+
+    def _previous_round(self, version: int, last: int) -> str:
+        """What the final reviewers of `version` are shown (D8): the points the reviews of
+        the last submitted version raised, with their ids, and the lead's response,
+        `draft/response.v<version>.md`, which must name every point's id. Refused until
+        that round has finished: each of its three reviews recorded, or its check ended
+        for good (not an end that resume reruns)."""
+        have = self._recorded_reviews(last)
+        unfinished = []
+        for role in roles.FINAL_REVIEWERS:
+            if role in have:
+                continue
+            rounds = checks_api.for_prompt(self.run_dir, role, f"draft:{last}")
+            ended = bool(rounds) and all(
+                st.status == "ended" and st.outcome not in checks_api.RETRYABLE_OUTCOMES
+                for st in rounds)
+            if not ended:
+                unfinished.append(roles.short(role))
+        if unfinished:
+            raise Refused(f"Refused: the reviews of version {last} have not finished "
+                          f"({', '.join(unfinished)}); version {version} follows them.")
+        points = [pt for role in roles.FINAL_REVIEWERS
+                  for pt in have.get(role, {}).get("points", [])]
+        try:
+            response = safeio.read_text(self.run_dir, f"draft/response.v{version}.md")
+        except FileNotFoundError:
+            response = None
+        except (OSError, UnicodeDecodeError, safeio.UnsafePath) as exc:
+            raise Refused(f"Refused: draft/response.v{version}.md is not a plain text "
+                          f"file.") from exc
+        if points and response is None:
+            raise Refused(f"Refused: version {last}'s reviews raised points; "
+                          f"draft/response.v{version}.md answers them before version "
+                          f"{version} is submitted.")
+        unanswered = [pt["id"] for pt in points
+                      if pt.get("id") and pt["id"] not in (response or "")]
+        if unanswered:
+            raise Refused(f"Refused: draft/response.v{version}.md does not name points "
+                          f"{', '.join(unanswered)}.")
+        lines = [f"# The previous round: the reviews of version {last}", ""]
+        missing = [roles.short(r) for r in roles.FINAL_REVIEWERS if r not in have]
+        if missing:
+            lines += [f"Not recorded before this submission: {', '.join(missing)}.", ""]
+        lines += ["## Points raised", ""]
+        for pt in points:
+            where = _concerns(pt)
+            lines.append(f"- {pt.get('id', '')} ({'material' if pt['material'] else 'minor'};"
+                         f" {where}): {pt['point']}")
+        if not points:
+            lines.append("- none")
+        lines += ["", "## The lead's response", "",
+                  (response or "(none written)").strip(), ""]
+        return "\n".join(lines)
 
     # ------------------------------------------- frames and reviews (tool-written)
     def _recorded_frames(self, kind: str) -> list[dict[str, Any]]:
@@ -999,31 +1561,28 @@ class Register:
     def record_review(self, caller: Caller, version: int, text: str,
                       points: list[dict[str, Any]]) -> dict[str, Any]:
         """A final reviewer only: its review of draft <version>, from the session the
-        driver launched for draft:<version>, with its points, each {point, material}: the
-        reviewer judges materiality, code only reads it (CONTRACTS section 6, v0.3.1)."""
+        driver launched for draft:<version>, with its points, each {point, material, node,
+        criterion} (D4): the reviewer judges materiality, code only reads it and checks
+        that the node and criterion it names exist (CONTRACTS v0.4 section 6)."""
         self._require(caller, frozenset(roles.FINAL_REVIEWERS), "record reviews")
         if isinstance(version, bool) or not isinstance(version, int) or version < 1:
             raise Refused("Refused: version is a positive whole number.")
         if not isinstance(text, str) or not text.strip():
             raise Refused("Refused: the review text is empty.")
-        if not isinstance(points, list):
-            raise Refused("Refused: points is a list of {point, material}.")
-        for i, pt in enumerate(points, start=1):
-            if (not isinstance(pt, dict) or set(pt) != {"point", "material"}
-                    or not isinstance(pt["point"], str) or not pt["point"].strip()
-                    or not isinstance(pt["material"], bool)):
-                raise Refused(f"Refused: point {i} is not {{point: text, material: true or "
-                              f"false}}.")
+        checked = self._check_points(points)
         rel = f"reviews/v{version}/{REVIEW_FILE_OF[caller.agent_type]}"
         with jsonl.exclusive(self._lock):
             self._session_prompt_is(caller, roles.short(caller.agent_type), f"draft:{version}")
             if caller.agent_type in self._recorded_reviews(version):
                 raise Refused("Refused: this review is already recorded.")
             self._write(rel, text)
+            abbr = REVIEW_ABBR[caller.agent_type]
+            frozen = self.frozen_criteria() or {}
             record = {"version": version, "role": caller.agent_type,
                       "sha256": sha256_bytes(text.encode("utf-8")), "session": caller.session_id,
-                      "points": [{"point": pt["point"], "material": pt["material"]}
-                                 for pt in points]}
+                      "criteria_sha256": frozen.get("sha256"),
+                      "points": [{"id": f"v{version}.{abbr}.{i}", **pt}
+                                 for i, pt in enumerate(checked, start=1)]}
             self._run_fact(caller, "review_recorded", record)
         return {**record, "file": rel}
 
@@ -1045,6 +1604,20 @@ class Register:
 
         for reason in checks_api.release_blocks(self.run_dir):
             failures.append(f"the release is blocked: {reason}")
+        try:
+            if not self.criteria():
+                failures.append("criteria.md names no criterion (- C1: ...)")
+        except Refused as exc:
+            failures.append(str(exc).removeprefix("Refused: ").rstrip("."))
+        frozen = self.frozen_criteria()  # None until a review was asked for
+        if frozen is not None:
+            try:
+                live = sha256_bytes(safeio.read_bytes(self.run_dir, criteria_mod.CRITERIA_FILE))
+            except (FileNotFoundError, safeio.UnsafePath, NotADirectoryError):
+                live = None
+            if live != frozen["sha256"]:
+                failures.append("criteria.md differs from the frozen criteria; only "
+                                "revise_criteria changes them")
         nodes = self.tree_view()
         if not nodes:
             failures.append("the tree has no nodes")
@@ -1053,12 +1626,8 @@ class Register:
                 failures.append(f"node {n['id']} is not reachable from a root of the tree "
                                 f"(its parents form a cycle or lead to no node)")
                 continue
-            if n.get("childless"):
-                failures.append(f"node {n['id']} is an option with no conditions under it; "
-                                f"add what would have to be true, or file it as a branch")
-                continue
             if n["closes_by"] != "branch":
-                continue  # an empty open lane, or a node its children close
+                continue  # set aside, an empty open lane, or a node its children close
             if n["status"] not in DONE:
                 where = (f"branch {n['branch_id']}" if n.get("branch_id")
                          else "in no branch; only a branch verdict closes it")
@@ -1070,6 +1639,12 @@ class Register:
                 else:
                     rests_on(facts[-1]["source"].get("runId"),
                              f"the branch verdict for node {n['id']}")
+                    resolved = {r["point_id"] for r in facts[-1]["value"].get("resolutions")
+                                or []}
+                    for pt in self.sent_back(str(n.get("branch_id")), [str(n["id"])]):
+                        if pt["id"] not in resolved:
+                            failures.append(f"node {n['id']}: point {pt['id']} sent back on "
+                                            f"branch {n['branch_id']} has no resolution")
         critiques = self._recorded_frames("critique")
         if not critiques:
             failures.append("the blind framer's critique is not recorded")
@@ -1097,11 +1672,15 @@ class Register:
                                 f"is not recorded")
                 continue
             rests_on(have[role]["session"], f"the {roles.short(role)} review")
+            if frozen is not None and have[role].get("criteria_sha256") != frozen["sha256"]:
+                failures.append(f"the {roles.short(role)} review of version {version} judged "
+                                f"criteria since revised")
             if not at_limit:
                 for pt in have[role].get("points", []):
                     if pt["material"]:
                         failures.append(f"the {roles.short(role)} review of version {version} "
-                                        f"raises a material point: {pt['point'][:300]}")
+                                        f"raises a material point {pt.get('id', '')} "
+                                        f"({_concerns(pt)}): {pt['point'][:300]}")
         if text is None:
             text = safeio.read_text(self.run_dir, frozen_draft(version))
         for a in self.assumptions():
@@ -1138,8 +1717,99 @@ class Register:
             self.wm.refresh()
             self._sync_records()
             unmet = self.finish_failures(version)
+            points = self.open_material_points(version)
+            aside = self.set_aside_nodes()
         return {"version": version, "releasable": not unmet, "unmet_count": len(unmet),
-                "unmet": "\n".join(f"{i}. {f}" for i, f in enumerate(unmet, start=1))}
+                "unmet": "\n".join(f"{i}. {f}" for i, f in enumerate(unmet, start=1)),
+                "open_material_points": points, "set_aside": aside,
+                "branch_limits": self.branch_limits()}
+
+    def open_material_points(self, version: int) -> dict[str, Any]:
+        """The material points the final reviews of `version` raise, grouped by the
+        criterion and by the tree node each concerns (a point naming both is in both)."""
+        by_criterion: dict[str, list[dict[str, Any]]] = {}
+        by_node: dict[str, list[dict[str, Any]]] = {}
+        count = 0
+        for role, rec in sorted(self._recorded_reviews(version).items()):
+            for pt in rec.get("points", []):
+                if not pt["material"]:
+                    continue
+                count += 1
+                item = {"id": pt.get("id"), "by": roles.short(role), "point": pt["point"],
+                        "criterion": pt.get("criterion"), "node": pt.get("node")}
+                if pt.get("criterion"):
+                    by_criterion.setdefault(str(pt["criterion"]), []).append(item)
+                if pt.get("node"):
+                    by_node.setdefault(str(pt["node"]), []).append(item)
+        return {"count": count, "by_criterion": by_criterion, "by_node": by_node}
+
+    def branch_limits(self) -> list[dict[str, Any]]:
+        """Material points a branch reviewer recorded on the verdict that closed a branch
+        (D9): after the one send-back they cannot go back to the worker, so they stay as
+        open limits of the branch and reach the deliverable. Latest closing verdict of
+        each branch, by sessions not revoked."""
+        latest: dict[str, dict[str, Any]] = {}
+        for v in self._run_facts("branch_verdict_recorded"):
+            latest[v["branch_id"]] = v
+        out = []
+        for b, v in sorted(latest.items()):
+            if v["verdict"] not in CLOSING:
+                continue
+            out += [{"branch_id": b, "id": pt["id"], "point": pt["point"],
+                     "node": pt.get("node"), "criterion": pt.get("criterion")}
+                    for pt in v.get("points", []) if pt["material"]]
+        return out
+
+    def set_aside_nodes(self) -> list[dict[str, Any]]:
+        """Every node the lead set aside (D5), with its reason; nodes under one are listed
+        with `under` naming it."""
+        out = []
+        for n in self.tree_view():
+            if n.get("closes_by") == "set_aside":
+                out.append({"id": n["id"], "statement": n["statement"],
+                            "reason": n.get("set_aside")})
+            elif n.get("closes_by") == "ancestor_set_aside":
+                out.append({"id": n["id"], "statement": n["statement"],
+                            "under": n.get("set_aside_by")})
+        return out
+
+    def run_record(self, version: int) -> dict[str, Any]:
+        """What the deliverable and the viewer show beside the answer (v0.4): the
+        criteria, the nodes set aside with their reasons, the assumptions taken in place
+        of the user's answers, and the material points the released version's reviews
+        left open (only possible at the review-round limit)."""
+        return {"version": version, "criteria": self.criteria(),
+                "set_aside": self.set_aside_nodes(), "assumptions": self.assumptions(),
+                "branch_limits": self.branch_limits(),
+                "open_material_points": self.open_material_points(version),
+                "review_rounds": {"used": len(self.submitted_versions()),
+                                  "limit": self.max_review_rounds(),
+                                  "note": "a resource limit, never a quality verdict"}}
+
+    def frame_failures(self) -> list[str]:
+        """What a frame-only run lacks before it ends (CONTRACTS v0.4 section 9): intake.md,
+        criteria.md with a criterion, frame.md, a tree, the blind framer's critique, and
+        framer/lead-response.md written after it. Exact facts only."""
+        self.wm.refresh()
+        missing = [f"{rel} does not exist" for rel in ("intake.md", "frame.md")
+                   if not safeio.is_file(self.run_dir, rel)]
+        try:
+            if not self.criteria():
+                missing.append("criteria.md names no criterion")
+        except Refused as exc:
+            missing.append(str(exc).removeprefix("Refused: ").rstrip("."))
+        if not self.tree():
+            missing.append("the tree has no nodes")
+        if not self._recorded_frames("critique"):
+            missing.append("the blind framer's critique is not recorded")
+        elif not safeio.is_file(self.run_dir, "framer/lead-response.md"):
+            missing.append("framer/lead-response.md does not exist")
+        else:
+            crit = os.stat(self.run_dir / "framer" / "critique.md", follow_symlinks=False)
+            resp = os.stat(self.run_dir / "framer" / "lead-response.md", follow_symlinks=False)
+            if resp.st_mtime_ns < crit.st_mtime_ns:
+                missing.append("framer/lead-response.md predates the latest critique")
+        return missing
 
     def finish_run(self, caller: Caller, version: int) -> dict[str, Any]:
         """Release the frozen, reviewed draft `version` as the deliverable. The bytes read
@@ -1168,6 +1838,8 @@ class Register:
                 raise Refused(gate_refusal(failures))
             self._write("deliverable/answer.md", text)
             self._write("deliverable/answer.reader.md", self._render_reader(text))
+            self._write("deliverable/record.json", json.dumps(
+                self.run_record(version), indent=2, ensure_ascii=False))
             extra: dict[str, Any] = {}
             if self.review_rounds_exhausted():
                 self._write("deliverable/completion.md", self._completion_statement(version))
@@ -1181,9 +1853,33 @@ class Register:
                                                 "sessions": self._relied, **extra})
             req = checks_api.request_check(self.run_dir, roles.RETRO_WRITER, "retro:run",
                                            "finish_run")
+            sealed = self._seal(version)
         return {"finished": True, "version": version, "deliverable": "deliverable/answer.md",
                 "reader": "deliverable/answer.reader.md", "check_requested": req.request_id,
+                "manifest": sealed["manifest"], "manifest_sha256": sealed["manifest_sha256"],
                 **extra}
+
+    def _seal(self, version: int) -> dict[str, Any]:
+        """Seal the released run (`release/manifest.json`, after the finished fact). The
+        manifest's own digest goes to events.jsonl, never the sealed log. A run that
+        cannot be sealed (a link or special file in it) has its release blocked, so it
+        does not stand, and the refusal says why. Call under the lock."""
+        from stemma.register import manifest
+
+        try:
+            run_id = json.loads(safeio.read_text(self.run_dir, "run.json"))["run_id"]
+        except (FileNotFoundError, ValueError, KeyError, TypeError, safeio.UnsafePath):
+            run_id = self.run_dir.name
+        try:
+            sealed = manifest.seal(self.run_dir, version, str(run_id))
+        except (manifest.ManifestError, manifest.LogError) as exc:
+            checks_api.block_release(self.run_dir, f"the release could not be sealed: {exc}")
+            raise Refused(f"Refused: finish_run: the run could not be sealed ({exc}); the "
+                          f"release does not stand.") from exc
+        jsonl.append(self.run_dir / "events.jsonl", {
+            "event": "release_sealed", "at": now(), "source": "register", "version": version,
+            "manifest": sealed["manifest"], "manifest_sha256": sealed["manifest_sha256"]})
+        return sealed
 
     def _render_reader(self, text: str) -> str:
         order: dict[str, int] = {}
@@ -1267,12 +1963,15 @@ class Register:
             landed: dict[str, Any] = {}
             waiting: list[dict[str, Any]] = []
             all_states = list(checks_api.states(self.run_dir).values())
+            lists = self._check_lists()
             for t in targets:
                 got = self._landed(t)
                 if got is not None:
                     landed[t] = got
                     continue
-                mine = [s for s in all_states if s.request.prompt == t]
+                mine = [s for s in all_states if s.request.prompt == t
+                        or (t.startswith("claim:") and t[6:] in lists.get(
+                            (s.request.prompt, s.request.round), []))]
                 if not mine:
                     waiting.append({"id": t, "status": "not_requested"})
                 for s in mine:
@@ -1313,6 +2012,23 @@ class Register:
 def frozen_record(branch_id: str, round_no: int) -> str:
     """The record snapshot a branch reviewer is given for a round (tool-only)."""
     return f"register/branches/{branch_id}/record.r{round_no}.md"
+
+
+def assignment_file(prompt: str, round_no: int) -> str:
+    """Where a claim check's assignment lives (tool-only, written once per round):
+    `checks/doc-<receipt_id>.r<n>.json` or `checks/derivations-v<v>.r<n>.json`."""
+    kind, _, ident = prompt.partition(":")
+    if kind == "doc":
+        return f"checks/doc-{ident}.r{round_no}.json"
+    if kind == "derivations":
+        return f"checks/derivations-{ident}.r{round_no}.json"
+    raise ValueError(f"{prompt} is not a claim check prompt")
+
+
+def previous_round_file(version: int) -> str:
+    """Where submit_draft writes what the final reviewers of `version` are shown of the
+    previous round (tool-only; D8)."""
+    return f"register/drafts/previous.v{version}.md"
 
 
 def frozen_draft(version: int) -> str:

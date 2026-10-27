@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from stemma.driver.config import AVAILABLE_MODELS, EFFORTS
-from stemma.driver.errors import SwitchInvalid, TaskInvalid
+from stemma.driver.errors import SwitchInvalid, SwitchParked, TaskInvalid
 from stemma.register import roles
 
 # Switches whose value selects a text fragment, in assembly order (invariant: section 7's
@@ -36,14 +36,34 @@ SWITCH_DEFAULTS: Final[dict[str, str]] = {
 }
 
 DEFAULT_MODEL: Final = "claude-opus-5-5"
-# The lead and the three final reviewers run at the highest effort, the rest at high
-# (invariant: section 7, s5 defaults).
-MAX_EFFORT_ROLES: Final = frozenset({roles.short(roles.LEAD)} |
-                                    {roles.short(r) for r in roles.FINAL_REVIEWERS})
+# Every role, the lead included, runs at high effort unless the task says otherwise
+# (invariant: the owner's decision D10, CONTRACTS v0.4 section 7).
+DEFAULT_EFFORT: Final = "high"
 ALL_ROLE_NAMES: Final = tuple(sorted(roles.short(r) for r in roles.ALL_ROLES))
 
 NOT_APPLICABLE: Final = "not_applicable"  # a switch that the run's shape makes moot
-_TASK_KEYS: Final = frozenset({"question", "intake", "attachments", "as_of", "switches"})
+# Switch values v0.4 parks, with why (invariant: the orchestrator's rulings on the owner's
+# decisions). A parked value is refused, never silently replaced.
+PARKED: Final[dict[tuple[str, str], str]] = {
+    ("s2_shape", "single_loop"): "the single author would need the workers' source tools, "
+                                 "which the lead does not have (D6)",
+    ("s3_hypothesis_in_briefs", "true"): "its hypothesis-blind control was a tree node, "
+                                         "which the tree no longer holds (D2)",
+}
+_TASK_KEYS: Final = frozenset({"question", "intake", "attachments", "as_of", "switches",
+                               "scope", "criteria", "options", "roles", "stop_after"})
+# What the research covers (D1): the question asked, or also the broader decision it
+# informs. Invariant: the two readings onboarding offers; the narrow one by default.
+SCOPES: Final = ("question_only", "broader_decision")
+DEFAULT_SCOPE: Final = "question_only"
+# Where a run ends (CONTRACTS v0.4 section 9): `full` releases a deliverable; `frame`
+# ends once the frame, the tree and the answer to the frame critique exist.
+STOP_AFTER: Final = ("full", "frame")
+# Resource limits: how many criteria and options a task may carry, and the characters of
+# each (the lead and every reviewer read them all).
+MAX_CRITERIA: Final = 12
+MAX_OPTIONS: Final = 12
+MAX_ITEM_CHARS: Final = 1000
 
 
 @dataclass(frozen=True)
@@ -54,11 +74,15 @@ class Task:
     as_of: str | None
     switches_given: dict[str, Any]
     switches: dict[str, Any]  # every switch, defaults filled; s5_models is the role map
+    scope: str = DEFAULT_SCOPE
+    criteria: tuple[str, ...] = ()  # C1, C2, ... in this order; empty: the lead drafts them
+    options: tuple[str, ...] | None = None  # only when the user named them (D2)
+    roles_given: dict[str, Any] | None = None
+    stop_after: str = "full"
 
 
 def default_models() -> dict[str, dict[str, str]]:
-    return {r: {"model": DEFAULT_MODEL, "effort": "max" if r in MAX_EFFORT_ROLES else "high"}
-            for r in ALL_ROLE_NAMES}
+    return {r: {"model": DEFAULT_MODEL, "effort": DEFAULT_EFFORT} for r in ALL_ROLE_NAMES}
 
 
 def _switch_value(name: str, value: Any) -> str:
@@ -71,31 +95,33 @@ def _switch_value(name: str, value: Any) -> str:
     return value
 
 
-def _models(given: Any) -> dict[str, dict[str, str]]:
+def _models(given: Any, where: str = "s5_models") -> dict[str, dict[str, str]]:
     out = default_models()
     if given is None:
         return out
     if not isinstance(given, dict):
-        raise SwitchInvalid("s5_models must be an object of role -> {model, effort}")
+        raise SwitchInvalid(f"{where} must be an object of role -> {{model, effort}}")
     for role, spec in given.items():
         r = roles.short(str(role))
         if r not in out:
-            raise SwitchInvalid(f"s5_models names an unknown role {role!r}")
+            raise SwitchInvalid(f"{where} names an unknown role {role!r}")
         if not isinstance(spec, dict) or not set(spec) <= {"model", "effort"} or not spec:
-            raise SwitchInvalid(f"s5_models[{role!r}] must be an object with model and/or effort")
+            raise SwitchInvalid(f"{where}[{role!r}] must be an object with model and/or effort")
         if "model" in spec:
             if spec["model"] not in AVAILABLE_MODELS:
                 raise SwitchInvalid(
-                    f"s5_models[{role!r}].model must be one of {list(AVAILABLE_MODELS)}")
+                    f"{where}[{role!r}].model must be one of {list(AVAILABLE_MODELS)}")
             out[r]["model"] = spec["model"]
         if "effort" in spec:
             if spec["effort"] not in EFFORTS:
-                raise SwitchInvalid(f"s5_models[{role!r}].effort must be one of {list(EFFORTS)}")
+                raise SwitchInvalid(f"{where}[{role!r}].effort must be one of {list(EFFORTS)}")
             out[r]["effort"] = spec["effort"]
     return out
 
 
-def fill_switches(given: Any) -> dict[str, Any]:
+def fill_switches(given: Any, role_models: Any = None) -> dict[str, Any]:
+    """Every switch with defaults filled. `role_models` is task.json's `roles`; it and
+    `switches.s5_models` say the same thing, so a task gives one or the other."""
     if given is None:
         given = {}
     if not isinstance(given, dict):
@@ -108,13 +134,22 @@ def fill_switches(given: Any) -> dict[str, Any]:
     for name in FRAGMENT_SWITCHES:
         if name in given:
             v = _switch_value(name, given[name])
+            why = PARKED.get((name, v))
+            if why is not None:
+                raise SwitchParked(f"{name} = {v} is parked in contract v0.4: {why}")
         else:
             v = SWITCH_DEFAULTS[name]
         out[name] = v == "true" if name == "s3_hypothesis_in_briefs" else v
     if out["s2_shape"] == "single_loop":
         # s3 needs workers; with one author it is recorded not applicable (section 7).
         out["s3_hypothesis_in_briefs"] = NOT_APPLICABLE
-    out["s5_models"] = _models(given.get("s5_models"))
+    if role_models is not None and given.get("s5_models") is not None:
+        raise SwitchInvalid("give per-role models in task.json 'roles' or in "
+                            "switches.s5_models, not both")
+    if role_models is not None:
+        out["s5_models"] = _models(role_models, "roles")
+    else:
+        out["s5_models"] = _models(given.get("s5_models"))
     return out
 
 
@@ -173,4 +208,44 @@ def load_task(path: Path) -> Task:
         except ValueError as exc:
             raise TaskInvalid(f"task.json 'as_of' is not a real date: {as_of}") from exc
     given = data.get("switches") or {}
-    return Task(q, intake, tuple(atts), as_of, given, fill_switches(given))
+    scope = data.get("scope", DEFAULT_SCOPE)
+    if scope not in SCOPES:
+        raise TaskInvalid(f"task.json 'scope' must be one of {list(SCOPES)}")
+    criteria = _texts(data.get("criteria"), "criteria", MAX_CRITERIA)
+    options_raw = data.get("options")
+    options = None if options_raw is None else _texts(options_raw, "options", MAX_OPTIONS)
+    if options is not None and len(options) < 2:
+        raise TaskInvalid("task.json 'options' names at least two options, or is absent")
+    stop_after = data.get("stop_after", "full")
+    if stop_after not in STOP_AFTER:
+        raise TaskInvalid(f"task.json 'stop_after' must be one of {list(STOP_AFTER)}")
+    role_models = data.get("roles")
+    return Task(q, intake, tuple(atts), as_of, given, fill_switches(given, role_models),
+                scope, criteria, options, role_models, stop_after)
+
+
+def _texts(value: Any, key: str, limit: int) -> tuple[str, ...]:
+    """A list of plain, distinct, non-empty strings, within the resource limits."""
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(v, str) and v.strip() for v in value):
+        raise TaskInvalid(f"task.json '{key}' must be a list of non-empty strings")
+    items = tuple(" ".join(v.split()) for v in value)
+    if len(items) > limit:
+        raise TaskInvalid(f"task.json '{key}' has more than {limit} items")
+    if any(len(v) > MAX_ITEM_CHARS for v in items):
+        raise TaskInvalid(f"task.json '{key}' has an item longer than {MAX_ITEM_CHARS} "
+                          f"characters")
+    if len(set(items)) != len(items):
+        raise TaskInvalid(f"task.json '{key}' repeats an item")
+    return items
+
+
+def criteria_markdown(criteria: tuple[str, ...]) -> str:
+    """`criteria.md` as the driver writes it from the task (D4): one line per criterion,
+    `- C<n>: <text>`, the form `stemma.register.criteria` reads."""
+    lines = ["# What done means for this question", "",
+             ("The user's criteria, from task.json. Every review point names the "
+              "criterion or tree node it concerns."), ""]
+    lines += [f"- C{i}: {c}" for i, c in enumerate(criteria, start=1)]
+    return "\n".join(lines) + "\n"

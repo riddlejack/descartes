@@ -254,7 +254,10 @@ def launch(cfg: DriverConfig, run_dir: Path, plugin_dir: Path, spec: LaunchSpec,
 
 def expectation(run_dir: Path, plugin_dir: Path, agents: list[str], skills: list[str],
                 spec: LaunchSpec, version: str) -> canary.Expectation:
+    # A tool the session's settings deny by name is left out of the init message by the
+    # harness (2.1.308): the frame-only or single-author lead has no Agent tool.
+    main = tuple(t for t in spec.tools.main if not (spec.deny_agent and t == "Agent"))
     return clean.stemma_expectation(
         cwd=run_dir, plugin_dir=plugin_dir, agents=agents, skills=skills,
-        main_tools=spec.tools.main, harness_version=version,
+        main_tools=main, harness_version=version,
         session_id=None if spec.resume else spec.session_id)

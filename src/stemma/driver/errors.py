@@ -19,6 +19,10 @@ class SwitchInvalid(TaskInvalid):
     """A switch is unknown or has a value section 7 does not list."""
 
 
+class SwitchParked(SwitchInvalid):
+    """A switch value v0.4 parks: it conflicts with an owner's decision (section 7)."""
+
+
 class PluginInvalid(DriverError):
     """The plugin source cannot be assembled into a run plugin."""
 

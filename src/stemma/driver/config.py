@@ -45,6 +45,7 @@ TOOL_ONLY: Final = (
     ".claude/",
     ".stemma/",
     "branches/**/verdicts/",
+    "checks/",
     "deliverable/",
     "reviews/",
     "framer/own-frame.md",
@@ -85,6 +86,20 @@ class Limits:
     # register refuses another round after this many and releases the last one with its
     # criticisms listed (CONTRACTS section 6, v0.3).
     max_review_rounds: int = 3
+    # Resource limit: in a frame-only run, seconds the finished frame (intake, frame, tree,
+    # the response to the critique) must stay unchanged before the driver ends the lead.
+    frame_settle_s: float = 60.0
+    # Resource limit: times the driver resumes a run by itself after the account's usage
+    # limit stopped it (0: never; the run then ends usage_limited for a manual resume).
+    max_usage_resumes: int = 6
+    # Resource limit: seconds waited beyond the reset time the harness reported, so the
+    # resumed sessions do not meet the same limit at its edge.
+    usage_resume_margin_s: float = 120.0
+    # Resource limit: seconds waited when the harness reported no reset time.
+    usage_wait_unknown_s: float = 900.0
+    # Resource limit: the longest wait for a reset; a later reset (a weekly limit) ends
+    # the run usage_limited instead, for a manual resume.
+    usage_wait_max_s: float = 6 * 3600.0
     # Recorded beside the numbers in run.json, so no reader takes them for a quality bar.
     purpose: str = "resource limits only (time, sessions, bytes); never a quality bar"
 

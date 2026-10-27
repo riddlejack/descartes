@@ -28,11 +28,13 @@ from stemma.register.store import Caller, Register
 
 @pytest.fixture
 def reg(tmp_path: Path) -> Register:
+    (tmp_path / "run").mkdir()
+    (tmp_path / "run" / "criteria.md").write_text("- C1: The answer says whether the target is met.\n")
     return Register(tmp_path / "run", evidence=FakeEvidence())
 
 
 def proposed(reg: Register) -> None:
-    reg.tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "x", "branch_id": "b1"})
+    reg.tree_upsert(LEAD, {"id": "n1", "kind": "question", "statement": "x", "branch_id": "b1"})
     write_record(reg, "b1")
     reg.propose_branch_done(WORKER, "b1")
 
@@ -77,7 +79,7 @@ def test_verdict_binds_to_the_frozen_record_not_the_live_one(reg: Register) -> N
     import hashlib
     assert out["record_digest"] == hashlib.sha256(frozen).hexdigest()
     # The live record no longer matches what was reviewed, so the node reopens.
-    reg.tree_upsert(LEAD, {"id": "n2", "kind": "condition", "statement": "y"})
+    reg.tree_upsert(LEAD, {"id": "n2", "kind": "question", "statement": "y"})
     node = next(n for n in reg.tree() if n["id"] == "n1")
     assert node["status"] == "in_progress" and node["reopened_from"] == "answered"
 
@@ -101,7 +103,7 @@ def test_revoked_checker_verdict_is_discounted_and_further_ones_refused(reg: Reg
     with pytest.raises(Refused, match="not started for"):
         reg.record_claim_verdict(chk, cid, "holds", "again")
     # The driver relaunches the check; the new session's verdict counts.
-    req = checks_api.for_prompt(reg.run_dir, "claim-checker", f"claim:{cid}")[-1].request
+    req = next(s for s in checks_api.states(reg.run_dir).values() if s.request.prompt == "doc:r1").request
     checks_api.mark_launched(reg.run_dir, req.request_id, "s-right", "claude-opus-5-5", "high",
                              relaunch=True)
     reg.record_claim_verdict(Caller("stemma:claim-checker", None, "s-right"), cid, "holds", "ok")

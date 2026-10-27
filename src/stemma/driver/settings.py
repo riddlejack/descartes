@@ -22,6 +22,8 @@ from stemma.driver.clean import merge_settings
 from stemma.driver.config import SESSIONS_DIR, TOOL_ONLY
 from stemma.driver.errors import AgentFileInvalid
 from stemma.register import roles
+from stemma.register.criteria import CRITERIA_FILE
+from stemma.register.criteria import from_task as criteria_from_task
 
 MCP_PREFIX: Final = roles.MCP_PREFIX
 # Kept in --tools and allowed for every session: harmless now that the plugin's MCP server
@@ -47,20 +49,23 @@ FRAMER_OWN_DENY: Final = (
     "frame.md", "history/", "tree.json", "tree.md", "branches/", "draft/", "deliverable/",
     "reviews/", "analysis/", "register/",
 )
-# The decider's-eye reviewer reads only task/, intake.md and the draft under review: every
-# other name the run folder holds or will hold (section 3) is denied.
+# The decider's-eye reviewer reads only task/, intake.md, criteria.md and the draft under
+# review, and from round 2 on the previous round (D8): reviews/v<n-1>/, the lead's
+# draft/response.v<n>.md and register/drafts/previous.v<n>.md. Every other name the run
+# folder holds or will hold (section 3) is denied; draft/ and reviews/ are enumerated
+# entry by entry, because a Read deny rule cannot be reopened by an allow.
 DECIDERS_EYE_KNOWN: Final = (
     "frame.md", "history/", "tree.json", "tree.md", "framer/", "branches/", "store/",
     "analysis/", "deliverable/", "events.jsonl", "status.json", "status.html",
-    "usage.jsonl", "usage.jsonl.lock", "usage.md",
-    "retro.md", "run.json", "draft/",
+    "usage.jsonl", "usage.jsonl.lock", "usage.md", "checks/",
+    "retro.md", "run.json", "draft/answer.*", "draft/notes.md",
     # register/ holds the frozen draft the reviewer reads; everything else in it is denied.
     "register/log.jsonl", "register/log.jsonl.lock", "register/checks.jsonl",
     "register/checks.jsonl.lock", "register/index.sqlite", "register/register.lock",
     "register/calls/", "register/frames/", "register/tmp/",
 )
-DECIDERS_EYE_KEEP: Final = frozenset({"task", "intake.md", "CLAUDE.md", "register",
-                                      ".stemma", ".claude"})
+DECIDERS_EYE_KEEP: Final = frozenset({"task", "intake.md", "criteria.md", "CLAUDE.md",
+                                      "register", "draft", "reviews", ".stemma", ".claude"})
 
 
 @dataclass(frozen=True)
@@ -140,11 +145,17 @@ def _draft_version(prompt: str) -> str:
 
 def _deciders_eye_reads(prompt: str) -> list[str]:
     """The only run-folder paths the decider's-eye reviewer reads (section 6)."""
-    return ["task", "intake.md", f"register/drafts/answer.v{_draft_version(prompt)}.md"]
+    v = int(_draft_version(prompt))
+    out = ["task", "intake.md", "criteria.md", f"register/drafts/answer.v{v}.md"]
+    if v > 1:
+        out += [f"register/drafts/previous.v{v}.md", f"reviews/v{v - 1}",
+                f"draft/response.v{v}.md"]
+    return out
 
 
 def _deciders_eye_denials(run_dir: Path, prompt: str) -> list[str]:
     v = _draft_version(prompt)
+    keep = set(_deciders_eye_reads(prompt))
     out: list[str] = list(DECIDERS_EYE_KNOWN)
     if run_dir.is_dir():
         for p in sorted(run_dir.iterdir()):
@@ -158,9 +169,17 @@ def _deciders_eye_denials(run_dir: Path, prompt: str) -> list[str]:
     drafts = register / "drafts"
     if drafts.is_dir():
         for p in sorted(drafts.iterdir()):
-            if p.name != f"answer.v{v}.md":
+            if f"register/drafts/{p.name}" not in keep:
                 out.append(f"register/drafts/{p.name}" + ("/" if p.is_dir() else ""))
-    out.append("reviews/")  # reviews are tool-written; the reviewer records through a tool
+    for folder in ("draft", "reviews"):
+        d = run_dir / folder
+        if d.is_dir():
+            for p in sorted(d.iterdir()):
+                rel = f"{folder}/{p.name}"
+                if rel not in keep:
+                    out.append(rel + ("/" if p.is_dir() else ""))
+    # This round's reviews (the other two reviewers') are never read: written later.
+    out.append(f"reviews/v{v}/")
     return list(dict.fromkeys(out))
 
 
@@ -253,6 +272,12 @@ def stemma_settings_extra(run_dir: Path, role: str, prompt: str, tools: ToolSets
     for pat in TOOL_ONLY:
         deny += [_rule("Write", run_dir, pat), _rule("Edit", run_dir, pat)]
         deny_write_abs.append(_abs(run_dir, pat))
+    if criteria_from_task(run_dir):
+        # The user's criteria (D4), written by the driver: no agent changes them.
+        deny += [_rule("Write", run_dir, CRITERIA_FILE), _rule("Edit", run_dir, CRITERIA_FILE)]
+    # Only the lead's Write and Edit tools write criteria.md (the guard decides when);
+    # no shell ever does (Codex review #3).
+    deny_write_abs.append(_abs(run_dir, CRITERIA_FILE))
     if cache_dir is not None:
         # A later run is served the cache's entries, so no agent may write them.
         deny += [_rule_abs("Write", cache_dir, folder=True),

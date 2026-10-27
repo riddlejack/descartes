@@ -26,6 +26,8 @@ from stemma.register.store import Register, closure
 
 @pytest.fixture
 def reg(tmp_path: Path) -> Register:
+    (tmp_path / "run").mkdir()
+    (tmp_path / "run" / "criteria.md").write_text("- C1: The answer says whether the target is met.\n")
     return Register(tmp_path / "run", evidence=FakeEvidence())
 
 
@@ -38,8 +40,8 @@ def node(nid: str, kind: str, parent: str | None = None, status: str = "open",
 # --- 1. finish_run returns the whole gate, readable by an agent --------------------
 
 def test_finish_run_refusal_lists_every_unmet_condition_numbered(reg: Register) -> None:
-    reg.tree_upsert(LEAD, {"id": "T3", "kind": "condition", "statement": "x"})
-    reg.tree_upsert(LEAD, {"id": "R1", "kind": "rival", "statement": "y", "branch_id": "b1"})
+    reg.tree_upsert(LEAD, {"id": "T3", "kind": "question", "statement": "x"})
+    reg.tree_upsert(LEAD, {"id": "R1", "kind": "question", "statement": "y", "branch_id": "b1"})
     with pytest.raises(Refused) as exc:
         reg.finish_run(LEAD, 1)  # nothing submitted: still the whole list
     msg = str(exc.value)
@@ -47,8 +49,8 @@ def test_finish_run_refusal_lists_every_unmet_condition_numbered(reg: Register) 
     assert msg.startswith(f"Refused: finish_run: {len(expected)} unmet conditions:\n")
     lines = msg.splitlines()[1:]
     assert lines == [f"{i}. {f}" for i, f in enumerate(expected, start=1)]
-    assert "1. node R1 is open (rival, branch b1)" in lines
-    assert "2. node T3 is open (condition, in no branch; only a branch verdict closes it)" \
+    assert "1. node R1 is open (question, branch b1)" in lines
+    assert "2. node T3 is open (question, in no branch; only a branch verdict closes it)" \
         in lines
     assert any("critique is not recorded" in line for line in lines)
     assert any("version 1 was not submitted" in line for line in lines)
@@ -57,18 +59,17 @@ def test_finish_run_refusal_lists_every_unmet_condition_numbered(reg: Register) 
 # --- 2. Leaves close by branch verdict; parents derive; an empty open lane needs nothing
 
 def test_closure_leaves_parents_and_open_lanes() -> None:
-    nodes = [node("O1", "option"),  # no children: nothing yet says what must be true
-             node("O2", "option"), node("C2", "condition", "O2", "answered", "b1"),
-             node("O3", "option"), node("C3", "condition", "O3", "open", "b2"),
-             node("T", "condition", status="open"),  # a parent: its stored status is ignored
-             node("T1", "condition", "T", "answered", "b1"),
-             node("T2", "rival", "T", "gap_accepted", "b1"),
+    nodes = [node("O1", "question"),  # no children and no branch: a leaf nobody holds
+             node("O2", "question"), node("C2", "question", "O2", "answered", "b1"),
+             node("O3", "question"), node("C3", "question", "O3", "open", "b2"),
+             node("T", "question", status="open"),  # a parent: its stored status is ignored
+             node("T1", "question", "T", "answered", "b1"),
+             node("T2", "question", "T", "gap_accepted", "b1"),
              node("OL", "open_lane"),  # empty
              node("OL2", "open_lane", branch_id="b9"),  # holds work: a leaf
-             node("T3", "condition")]  # a leaf in no branch
+             node("T3", "question")]  # a leaf in no branch
     c = closure(nodes)
-    assert c["O1"] == {"closes_by": "children", "status": "open", "closed": False,
-                       "childless": True}  # an unfinished frame, never closed
+    assert c["O1"] == {"closes_by": "branch", "status": "open", "closed": False}
     assert c["O2"]["closed"] and c["O2"]["status"] == "answered"
     assert not c["O3"]["closed"] and c["O3"]["status"] == "open"
     assert c["T"] == {"closes_by": "children", "status": "gap_accepted", "closed": True}
@@ -78,9 +79,9 @@ def test_closure_leaves_parents_and_open_lanes() -> None:
 
 
 def test_parent_status_is_derived_never_the_stored_one(reg: Register) -> None:
-    reg.tree_upsert(LEAD, {"id": "O1", "kind": "option", "statement": "carry on"})
+    reg.tree_upsert(LEAD, {"id": "O1", "kind": "question", "statement": "carry on"})
     reg.tree_upsert(LEAD, {"id": "OL", "kind": "open_lane", "statement": "unplanned"})
-    reg.tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "x",
+    reg.tree_upsert(LEAD, {"id": "n1", "kind": "question", "statement": "x",
                            "branch_id": "b1", "parent": "O1"})
     cid = ready_run(reg)  # n1 answered by its branch verdict
     reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
@@ -98,12 +99,12 @@ def test_parent_status_is_derived_never_the_stored_one(reg: Register) -> None:
 def test_a_parent_waits_on_an_open_child_and_names_only_the_leaf(reg: Register) -> None:
     cid = ready_run(reg)
     reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
-    reg.tree_upsert(LEAD, {"id": "O1", "kind": "option", "statement": "act now"})
-    reg.tree_upsert(LEAD, {"id": "T3", "kind": "condition", "statement": "pace holds",
+    reg.tree_upsert(LEAD, {"id": "O1", "kind": "question", "statement": "act now"})
+    reg.tree_upsert(LEAD, {"id": "T3", "kind": "question", "statement": "pace holds",
                            "parent": "O1"})
     failures = reg.finish_failures(1)
     assert [f for f in failures if f.startswith("node ")] == [
-        "node T3 is open (condition, in no branch; only a branch verdict closes it)"]
+        "node T3 is open (question, in no branch; only a branch verdict closes it)"]
     # Filed as a branch and closed by its reviewer, the leaf closes and so does O1.
     reg.tree_upsert(LEAD, {"id": "T3", "branch_id": "b3"})
     write_record(reg, "b3")
@@ -171,25 +172,3 @@ def test_the_driver_records_the_limit_in_run_json() -> None:
     assert Limits.from_json({**Limits().to_json(), "max_review_rounds": 5}).max_review_rounds == 5
 
 
-def test_a_childless_option_blocks_the_release_and_says_what_is_missing(reg: Register) -> None:
-    # Walking-skeleton replay: options O3 to O5 had nothing under them.
-    reg.tree_upsert(LEAD, {"id": "O1", "kind": "option", "statement": "carry on"})
-    reg.tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "x",
-                           "branch_id": "b1", "parent": "O1"})
-    reg.tree_upsert(LEAD, {"id": "O3", "kind": "option", "statement": "act on one segment"})
-    cid = ready_run(reg)
-    reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
-    view = {n["id"]: n for n in reg.tree_view()}
-    assert view["O1"]["closed"] and not view["O3"]["closed"]
-    assert view["O3"]["status"] == "open" and view["O3"]["childless"]
-    with pytest.raises(Refused) as exc:
-        reg.finish_run(LEAD, 1)
-    assert str(exc.value).splitlines()[1:] == [
-        ("1. node O3 is an option with no conditions under it; add what would have to be "
-         "true, or file it as a branch")]
-    # Filed as a branch and closed by its reviewer, the option closes as a leaf.
-    reg.tree_upsert(LEAD, {"id": "O3", "branch_id": "b3"})
-    write_record(reg, "b3")
-    reg.propose_branch_done(WORKER, "b3")
-    reg.record_branch_verdict(reviewer_for(reg, "b3", "s-rev3"), "b3", "answered", "done")
-    assert reg.finish_run(LEAD, 1)["finished"]

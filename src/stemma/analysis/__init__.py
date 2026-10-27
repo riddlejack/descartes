@@ -18,8 +18,14 @@ Where the values come from is behind one interface, `ClaimValues`:
 A script may also read a whole captured document (a dataset, a table) with
 `document("<receipt_id>")`; name each such receipt in the derivation's `documents`:
 `{"script": "analysis/x.py", "inputs": [claim ids], "documents": [receipt ids]}`.
-Helper modules beside the script in analysis/ are copied with it; other files are not.
-Run scripts with "$STEMMA_PYTHON".
+The re-run copies the script's bundle: the script and the modules under its own folder
+in analysis/ that it imports (`import helper`, `from pkg import util`, relative imports
+inside a package), found by reading the code, transitively. Nothing else is copied: no
+data file, no module reached through a link or above the script's folder, no module
+named only at run time (`importlib.import_module`). At filing the bundle is stored by
+its hash, and a filed claim is re-run from that copy, so editing analysis/ afterwards
+changes nothing filed. Run a script exactly as filing will with the `run_analysis`
+tool, or with "$STEMMA_PYTHON".
 """
 
 from __future__ import annotations

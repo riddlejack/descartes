@@ -108,18 +108,27 @@ def test_deciders_eye_reads_only_task_intake_and_its_draft(tmp: Path) -> None:
     deny = s["permissions"]["deny"]
     denied = {r[len("Read(/"):-1] for r in deny if r.startswith("Read(")}
     r = str(run)
-    # The reviewer reads the frozen draft (register/drafts/), never the editable draft/.
-    for must in ("frame.md", "branches/**", "odd-new-file.md", "draft/**",
-                 "reviews/**", "tree.json", "register/drafts/answer.v1.md",
-                 "register/log.jsonl"):
+    # The reviewer reads the frozen draft (register/drafts/), never the editable draft/;
+    # from round 2 the previous round's reviews and the lead's response (v0.4, D8).
+    for must in ("frame.md", "branches/**", "odd-new-file.md", "draft/answer.*",
+                 "draft/answer.v1.md", "draft/answer.v2.md", "draft/notes.md",
+                 "reviews/v2/**", "tree.json", "register/drafts/answer.v1.md",
+                 "register/log.jsonl", "checks/**"):
         assert f"{r}/{must}" in denied, must
-    for allowed in ("task/**", "intake.md", "register/drafts/answer.v2.md", "register/**",
-                    "register/drafts/**"):
+    for allowed in ("task/**", "intake.md", "criteria.md", "register/drafts/answer.v2.md",
+                    "register/**", "register/drafts/**", "reviews/v1/**",
+                    "draft/response.v2.md", "draft/**", "reviews/**"):
         assert f"{r}/{allowed}" not in denied, allowed
     fs = s["sandbox"]["filesystem"]
     assert fs["denyRead"] == [r, "/cfg/projects"]
-    assert fs["allowRead"] == [f"{r}/task", f"{r}/intake.md",
-                               f"{r}/register/drafts/answer.v2.md"]
+    assert fs["allowRead"] == [f"{r}/task", f"{r}/intake.md", f"{r}/criteria.md",
+                               f"{r}/register/drafts/answer.v2.md",
+                               f"{r}/register/drafts/previous.v2.md", f"{r}/reviews/v1",
+                               f"{r}/draft/response.v2.md"]
+    first = build_settings(run, "deciders-eye-reviewer", "draft:1",
+                           split_tools([["Read", "Write"]]), CONFIG)
+    assert first["sandbox"]["filesystem"]["allowRead"] == [
+        f"{r}/task", f"{r}/intake.md", f"{r}/criteria.md", f"{r}/register/drafts/answer.v1.md"]
     with pytest.raises(AgentFileInvalid):
         build_settings(run, "deciders-eye-reviewer", "draft:x", split_tools([]), CONFIG)
 

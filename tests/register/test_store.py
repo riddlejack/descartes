@@ -45,23 +45,37 @@ def claim(**over: Any) -> dict[str, Any]:
 
 @pytest.fixture
 def reg(tmp_path: Path) -> Register:
+    (tmp_path / "run").mkdir()
+    (tmp_path / "run" / "criteria.md").write_text("- C1: The answer says whether the target is met.\n")
     return Register(tmp_path / "run", evidence=FakeEvidence())
 
 
+def _lists(reg: Register, cid: str, prompt: str, rnd: int) -> bool:
+    return cid in reg._check_lists().get((prompt, rnd), [])
+
+
 def checker_for(reg: Register, cid: str, session: str = "s-check") -> Caller:
-    req = next(r for r in checks_api.pending_checks(reg.run_dir) if r.prompt == f"claim:{cid}")
+    """The checker the driver would launch for the check that lists `cid` (D7), asking for
+    that check first if no submitted draft has."""
+    reg.wm.refresh()
+    if not any(_lists(reg, cid, r.prompt, r.round) for r in checks_api.pending_checks(reg.run_dir)):
+        from stemma.register import jsonl as _j
+
+        with _j.exclusive(reg._lock):
+            reg.request_claim_checks([cid], "test", 0)
+    req = next(r for r in checks_api.pending_checks(reg.run_dir)
+               if _lists(reg, cid, r.prompt, r.round))
     checks_api.mark_launched(reg.run_dir, req.request_id, session, "claude-opus-5-5", "high")
     checks_api.mark_verified(reg.run_dir, session, "claude-opus-5-5", "high")  # as the driver
     return Caller("stemma:claim-checker", None, session)
 
 
-def test_file_claim_records_author_from_caller_and_requests_check(reg: Register) -> None:
+def test_file_claim_records_author_from_caller_and_requests_no_check(reg: Register) -> None:
     out = reg.file_claim(WORKER, claim())
     rec = reg.get_claim(out["claim_id"][:12])
     assert rec["author"] == "stemma:worker"
     assert rec["verdict"] is None
-    pending = checks_api.pending_checks(reg.run_dir)
-    assert [(p.role, p.prompt) for p in pending] == [("claim-checker", f"claim:{out['claim_id']}")]
+    assert checks_api.pending_checks(reg.run_dir) == []  # D7: nothing is checked on filing
 
 
 def test_refiling_is_idempotent(reg: Register) -> None:
@@ -70,7 +84,6 @@ def test_refiling_is_idempotent(reg: Register) -> None:
     b = reg.file_claim(LEAD, claim())
     assert (a["claim_id"], b["already_filed"]) == (b["claim_id"], True)
     assert (reg.dir / "log.jsonl").read_bytes() == log  # nothing appended
-    assert len(checks_api.pending_checks(reg.run_dir)) == 1
 
 
 @pytest.mark.parametrize("who", ["stemma:claim-checker", "stemma:branch-reviewer",
@@ -192,7 +205,7 @@ def reviewer_for(reg: Register, branch: str, session: str = "s-rev") -> Caller:
 
 
 def test_branch_reaches_answered_only_by_a_verdict(reg: Register) -> None:
-    reg.tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "Demand holds",
+    reg.tree_upsert(LEAD, {"id": "n1", "kind": "question", "statement": "Demand holds",
                            "branch_id": "b1", "crux": True})
     for status in ("answered", "gap_accepted", "proposed_done", "stopped_by_limit"):
         with pytest.raises(Refused, match="not set by tree_upsert"):
@@ -211,15 +224,23 @@ def test_branch_reaches_answered_only_by_a_verdict(reg: Register) -> None:
     rev = reviewer_for(reg, "b1")
     with pytest.raises(Refused, match="names the method"):
         reg.record_branch_verdict(rev, "b1", "find_more", "thin")
-    reg.record_branch_verdict(rev, "b1", "find_more", "thin", method="primary filings")
+    reg.record_branch_verdict(rev, "b1", "find_more", "thin", method="primary filings",
+                              points=[{"point": "thin", "material": True, "criterion": "C1"}])
     assert reg.tree()[0]["status"] == "in_progress"
     # Second round: a new check request, and the old reviewer session cannot answer it.
+    with pytest.raises(Refused, match="neither record.md nor a revision order"):
+        reg.propose_branch_done(WORKER, "b1")
+    (reg.run_dir / "branches/b1/revision-1.md").write_text(
+        "# Finding\nb1.r1.1 thin\n# Raised by\nbranch reviewer\n# Is it right?\nyes\n# Fix\nmore filings\n")
     reg.propose_branch_done(WORKER, "b1")
     with pytest.raises(Refused, match="not started for"):
         reg.record_branch_verdict(Caller("stemma:branch-reviewer", None, "s-z"), "b1",
                                   "answered", "x")
     rev2 = reviewer_for(reg, "b1", "s-rev2")
-    reg.record_branch_verdict(rev2, "b1", "answered", "the record carries the weight")
+    with pytest.raises(Refused, match="b1.r1.1 was sent back"):
+        reg.record_branch_verdict(rev2, "b1", "answered", "the record carries the weight")
+    reg.record_branch_verdict(rev2, "b1", "answered", "the record carries the weight",
+                              resolutions=[{"point_id": "b1.r1.1", "status": "resolved"}])
     assert reg.tree()[0]["status"] == "answered"
     files = sorted((reg.run_dir / "branches/b1/verdicts").glob("*.json"))
     assert [json.loads(f.read_text())["verdict"] for f in files] == ["find_more", "answered"]
@@ -228,7 +249,7 @@ def test_branch_reaches_answered_only_by_a_verdict(reg: Register) -> None:
 
 
 def test_record_without_contract_headings_refused(reg: Register) -> None:
-    reg.tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "x", "branch_id": "b1"})
+    reg.tree_upsert(LEAD, {"id": "n1", "kind": "question", "statement": "x", "branch_id": "b1"})
     d = reg.run_dir / "branches/b1"
     d.mkdir(parents=True)
     (d / "record.md").write_text("## Conclusion and confidence\nDone.\n")
@@ -237,11 +258,11 @@ def test_record_without_contract_headings_refused(reg: Register) -> None:
 
 
 @pytest.mark.parametrize("node, msg", [
-    ({"id": "../x", "kind": "condition", "statement": "x"}, "plain id"),
+    ({"id": "../x", "kind": "question", "statement": "x"}, "plain id"),
     ({"id": "n2", "kind": "topic", "statement": "x"}, "kind must be one of"),
-    ({"id": "n2", "kind": "condition", "statement": ""}, "needs a statement"),
-    ({"id": "n2", "kind": "condition", "statement": "x", "parent": "zz"}, "not a node"),
-    ({"id": "n2", "kind": "condition", "statement": "x", "verdict": "answered"}, "unknown"),
+    ({"id": "n2", "kind": "question", "statement": ""}, "needs a statement"),
+    ({"id": "n2", "kind": "question", "statement": "x", "parent": "zz"}, "not a node"),
+    ({"id": "n2", "kind": "question", "statement": "x", "verdict": "answered"}, "unknown"),
 ])
 def test_hostile_tree_changes_refused(reg: Register, node: dict[str, Any], msg: str) -> None:
     with pytest.raises(Refused, match=msg):
@@ -258,6 +279,18 @@ def launched(reg: Register, role: str, prompt: str, session: str) -> Caller:
     checks_api.mark_launched(reg.run_dir, req.request_id, session, "claude-opus-5-5", "high")
     checks_api.mark_verified(reg.run_dir, session, "claude-opus-5-5", "high")  # as the driver
     return Caller(f"stemma:{role}", None, session)
+
+
+def finish_reviews(reg: Register, version: int) -> None:
+    """The final reviews of `version` end without recording (as the driver records a
+    session that ended): the round is finished, so the next version may be submitted."""
+    for role in ("deciders-eye-reviewer", "evidence-auditor", "mechanical-reader"):
+        for st in checks_api.for_prompt(reg.run_dir, role, f"draft:{version}"):
+            if st.status == "pending":
+                checks_api.mark_launched(reg.run_dir, st.request.request_id,
+                                         f"s-fin-{version}-{role}", "claude-opus-5-5", "high")
+            if st.status != "ended":
+                checks_api.mark_ended(reg.run_dir, st.request.request_id, 0, "completed")
 
 
 def frames_and_reviews(reg: Register, version: int = 1) -> None:
@@ -277,7 +310,7 @@ def frames_and_reviews(reg: Register, version: int = 1) -> None:
 
 
 def ready_run(reg: Register, body: str | None = None) -> str:
-    reg.tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "x", "branch_id": "b1"})
+    reg.tree_upsert(LEAD, {"id": "n1", "kind": "question", "statement": "x", "branch_id": "b1"})
     write_record(reg, "b1")
     reg.propose_branch_done(WORKER, "b1")
     reg.record_branch_verdict(reviewer_for(reg, "b1"), "b1", "answered", "done")
@@ -335,8 +368,10 @@ def test_await_checks_never_invents(reg: Register) -> None:
     cid = reg.file_claim(WORKER, claim())["claim_id"]
     out = reg.await_checks([cid[:12]], 0)
     assert out["landed"] == {}
-    assert out["not_landed"][0]["status"] == "pending"
+    assert out["not_landed"][0]["status"] == "not_requested"  # no draft cites it yet
     checker = checker_for(reg, cid)
+    waiting = reg.await_checks([cid[:12]], 0)["not_landed"]
+    assert [(w["status"], w["role"]) for w in waiting] == [("running", "claim-checker")]
     reg.record_claim_verdict(checker, cid, "holds", "matches")
     out = reg.await_checks([cid, "frame:own"], 0)
     assert out["landed"][f"claim:{cid}"]["verdict"] == "holds"
@@ -383,8 +418,7 @@ def test_two_processes_filing_at_once(tmp_path: Path) -> None:
     expected = sorted([f"w{w}-{i}" for w in (0, 1) for i in range(n)] +
                       [f"same-{i}" for i in range(n)])
     assert branches == expected
-    requests = checks_api.states(run_dir)
-    assert len(requests) == len(expected)  # one check per claim, none twice
+    assert checks_api.states(run_dir) == {}  # D7: filing starts no check
     seqs = [e["seq"] for e in reg.wm.events()]
     assert seqs == sorted(set(seqs))
 
@@ -406,7 +440,7 @@ def test_checker_subagent_inside_a_launched_session_is_refused(reg: Register) ->
 
 
 def test_waiting_user_branch_proceeds_on_assumption(reg: Register) -> None:
-    reg.tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "x", "branch_id": "b1"})
+    reg.tree_upsert(LEAD, {"id": "n1", "kind": "question", "statement": "x", "branch_id": "b1"})
     write_record(reg, "b1")
     reg.propose_branch_done(WORKER, "b1")
     reg.record_branch_verdict(reviewer_for(reg, "b1"), "b1", "ask_user",
@@ -435,12 +469,13 @@ def test_waiting_user_branch_proceeds_on_assumption(reg: Register) -> None:
     assert "does not list the assumption taken for branch b1" in " ".join(reg.finish_failures(1))
     (reg.run_dir / "draft/answer.v2.md").write_text(
         "# Answer\n\nThe answer holds. We assume Europe only.\n")
+    finish_reviews(reg, 1)
     reg.submit_draft(LEAD, 2)
     assert "assumption" not in " ".join(reg.finish_failures(2))
 
 
 def test_user_held_needs_a_recorded_assumption(reg: Register) -> None:
-    reg.tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "x", "branch_id": "b1"})
+    reg.tree_upsert(LEAD, {"id": "n1", "kind": "question", "statement": "x", "branch_id": "b1"})
     write_record(reg, "b1")
     reg.propose_branch_done(WORKER, "b1")
     with pytest.raises(Refused, match="needs an assumption"):
@@ -449,7 +484,7 @@ def test_user_held_needs_a_recorded_assumption(reg: Register) -> None:
 
 
 def test_await_checks_accepts_bare_branch_ids_and_draft_versions(reg: Register) -> None:
-    reg.tree_upsert(LEAD, {"id": "n1", "kind": "condition", "statement": "x", "branch_id": "b1"})
+    reg.tree_upsert(LEAD, {"id": "n1", "kind": "question", "statement": "x", "branch_id": "b1"})
     (reg.run_dir / "branches/b1").mkdir(parents=True)
     out = reg.await_checks(["b1", 1, "2"], 0)
     assert [w["id"] for w in out["not_landed"]] == ["branch:b1", "draft:1", "draft:2"]

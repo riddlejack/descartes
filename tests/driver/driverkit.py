@@ -84,7 +84,8 @@ def write_plugin(root: Path, *, worker_base: bool = True) -> Path:
             name="worker", tools="Read, WebSearch, mcp__plugin_stemma_stemma__file_claim"))
     for role, tools in (("blind-framer", "Read, Bash"),
                         ("claim-checker", "Read, Bash, mcp__plugin_stemma_stemma__get_claim"),
-                        ("deciders-eye-reviewer", "Read, Write")):
+                        ("deciders-eye-reviewer", "Read, Write"),
+                        ("branch-reviewer", "Read")):
         (root / "agents" / f"{role}.md").write_text(AGENT.format(name=role, tools=tools))
     # Real and placebo versions share frontmatter names (contract v0.2.2, section 7).
     for folder, name, body in (("decomposition-method", "method", "REAL METHOD"),

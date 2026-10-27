@@ -49,12 +49,14 @@ def test_mismatch_never_echoes_the_scripts_number(tmp_path: Path) -> None:
 
 @pytest.fixture
 def reg(tmp_path: Path) -> Register:
+    (tmp_path / "run").mkdir()
+    (tmp_path / "run" / "criteria.md").write_text("- C1: The answer says whether the target is met.\n")
     return Register(tmp_path / "run", evidence=FakeEvidence())
 
 
 def test_unverified_checker_verdict_does_not_release(reg: Register) -> None:
     cid = ready_run(reg)
-    req = next(r for r in checks_api.pending_checks(reg.run_dir) if r.prompt == f"claim:{cid}")
+    req = next(r for r in checks_api.pending_checks(reg.run_dir) if r.prompt == "doc:r1")
     checks_api.mark_launched(reg.run_dir, req.request_id, "s-unv", "claude-opus-5-5", "high")
     reg.record_claim_verdict(Caller("stemma:claim-checker", None, "s-unv"), cid, "holds", "ok")
     with pytest.raises(Refused, match="not verified yet"):
@@ -109,7 +111,7 @@ def test_a_refused_correction_binds_only_its_own_session_and_claim(reg: Register
         reg.record_claim_verdict(chk, cid, "holds_with_correction", "x",
                                  corrected_claim=claim(tier="estimated", support=[]))
     # The driver relaunches the check: a fresh session judges afresh.
-    req = checks_api.for_prompt(reg.run_dir, "claim-checker", f"claim:{cid}")[-1].request
+    req = next(s for s in checks_api.states(reg.run_dir).values() if s.request.prompt == "doc:r1").request
     checks_api.mark_launched(reg.run_dir, req.request_id, "s-second", "claude-opus-5-5",
                              "high", relaunch=True)
     checks_api.mark_verified(reg.run_dir, "s-second", "claude-opus-5-5", "high")
