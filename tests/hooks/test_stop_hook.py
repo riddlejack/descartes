@@ -112,12 +112,70 @@ def test_the_lead_stops_at_its_time_limit_and_in_a_frame_only_run(run_dir: Path)
     assert not stop.decide(hook(), run_dir).block
 
 
-def test_the_wait_never_runs_past_the_time_limit(run_dir: Path) -> None:
+def test_the_wait_never_runs_past_the_time_limit_and_then_lets_go(run_dir: Path) -> None:
+    # Codex review #6: from 30 s before the limit, the hook sleeps to the limit exactly
+    # (never a whole poll past it) and then lets the lead stop.
     _branch(run_dir, "b1")
     c = Clock()
     c.t += 3600 - 30
     d = stop.decide(hook(), run_dir, clock=c, sleep=c.sleep, wait_s=240)
-    assert d.block and c.t <= 4070908800.0 + 3600 + stop.POLL_S
+    assert not d.block and d.detail["why"] == "the lead's time limit has passed"
+    assert c.t == 4070908800.0 + 3600
+
+
+def test_usage_waits_are_not_counted_as_lead_time(run_dir: Path) -> None:
+    # Codex review #2: run 50 s, a 3000 s usage wait, then a resumed launch.
+    from stemma.driver.leadtime import lead_time_used
+
+    jsonl.append(run_dir / "events.jsonl",
+                 {"event": "session_ended", "role": "lead", "session": "lead",
+                  "at": "2099-01-01T00:00:50.000Z"},
+                 {"event": "session_launched", "role": "lead", "session": "lead-r1",
+                  "at": "2099-01-01T00:50:50.000Z"})
+    first = json.loads((run_dir / "events.jsonl").read_text().splitlines()[0])
+    lines = (run_dir / "events.jsonl").read_text().splitlines()
+    lines[0] = json.dumps({**first, "session": "lead"})
+    (run_dir / "events.jsonl").write_text("\n".join(lines) + "\n")
+    c = Clock()
+    c.t += 3050 + 10  # 10 s into the resumed launch
+    assert lead_time_used(run_dir, now=c.t) == pytest.approx(60.0)
+    run = json.loads((run_dir / "run.json").read_text())
+    (run_dir / "run.json").write_text(json.dumps({**run, "limits": {"lead_max_s": 100}}))
+    _branch(run_dir, "b1")
+    d = stop.decide(hook(), run_dir, clock=c, sleep=c.sleep, wait_s=5)
+    assert d.block  # 40 s of lead time remain, though 3060 s have passed
+
+
+def test_a_usage_stop_lets_the_lead_stop_for_the_supervisor(run_dir: Path) -> None:
+    # Codex review #3, before and during the wait.
+    _branch(run_dir, "b1")
+    state = json.loads((run_dir / ".stemma/driver-state.json").read_text())
+    (run_dir / ".stemma/driver-state.json").write_text(json.dumps({**state,
+                                                                   "usage_limited": True}))
+    assert not stop.decide(hook(), run_dir).block
+    (run_dir / ".stemma/driver-state.json").write_text(json.dumps(state))
+    c = Clock()
+
+    def sleep(s: float) -> None:
+        c.sleep(s)
+        (run_dir / ".stemma/driver-state.json").write_text(
+            json.dumps({**state, "usage_limited": True}))
+
+    d = stop.decide(hook(), run_dir, clock=c, sleep=sleep, wait_s=200)
+    assert not d.block and "usage stop" in d.detail["why"] and c.t - 4070908800.0 <= 5
+
+
+def test_a_new_launch_starts_its_idle_count_afresh(run_dir: Path) -> None:
+    # Codex review #7.
+    _branch(run_dir, "b1")
+    c = Clock()
+    for _ in range(stop.MAX_IDLE_REFUSALS):
+        stop.decide(hook(), run_dir, clock=c, sleep=c.sleep, wait_s=1)
+    assert not stop.decide(hook(), run_dir, clock=c, sleep=c.sleep, wait_s=1).block
+    state = json.loads((run_dir / ".stemma/driver-state.json").read_text())
+    state["lead"]["launches"] = 2  # the driver resumed the lead
+    (run_dir / ".stemma/driver-state.json").write_text(json.dumps(state))
+    assert stop.decide(hook(), run_dir, clock=c, sleep=c.sleep, wait_s=1).block
 
 
 def test_endless_idle_refusals_end(run_dir: Path) -> None:

@@ -15,6 +15,7 @@ import json
 import os
 import re
 import signal
+import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator, Sequence
@@ -25,7 +26,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any, Final, Protocol, cast
 
-from stemma.driver import canary, events, frontmatter, hostio, status, usage, verify
+from stemma.driver import canary, events, frontmatter, hostio, leadtime, status, usage, verify
 from stemma.driver.assemble import folder_digest, sha256_bytes
 from stemma.driver.config import (
     LOCK_FILE,
@@ -231,6 +232,9 @@ class Driver:
         # The lead's remaining permitted wall time on an automatic resume (run_to_end):
         # lead_max_s less what its sessions have already run. None: a session's own limit.
         self.lead_budget_s: float | None = None
+        # The shared usage-stop flag and the lock every launch decision takes with it.
+        self._stop_lock = threading.RLock()
+        self._usage_stop = False
 
     # ----- state -------------------------------------------------------------------
     def _load_state(self) -> dict[str, Any]:
@@ -249,7 +253,21 @@ class Driver:
         return data
 
     def _save_state(self) -> None:
-        hostio.write_json(self.run_dir, STATE_FILE, self.state)
+        with self._stop_lock:  # the reader threads persist a usage stop too
+            hostio.write_json(self.run_dir, STATE_FILE, self.state)
+
+    def _note_usage_stop(self, s: Session) -> None:
+        """A reader thread saw the account's usage limit refuse a session: set the shared
+        stop flag and persist it at once, under the lock every lead launch takes, so no
+        launch decided before it happens after it, and the lead's Stop hook sees it."""
+        with self._stop_lock:
+            self._usage_stop = True
+            self.state["usage_limited"] = True
+            self._save_state()
+
+    def _launch_allowed(self) -> bool:
+        """Under `_stop_lock`: no usage stop has been seen."""
+        return not (self._usage_stop or self.state.get("usage_limited"))
 
     # ----- launching ---------------------------------------------------------------
     def _check_plugin(self) -> None:
@@ -288,7 +306,7 @@ class Driver:
     def _start(self, spec: LaunchSpec) -> Live:
         self._check_plugin()
         s = launch(self.cfg, self.run_dir, self.plugin_dir, spec, self._on_init,
-                   self.limits.stop_grace_s)
+                   self.limits.stop_grace_s, self._note_usage_stop)
         events.emit(self.run_dir, "session_launched", session=spec.name, role=spec.role,
                     prompt=spec.prompt, session_id=spec.session_id, resume=spec.resume,
                     model=spec.model, effort=spec.effort, request_id=spec.request_id,
@@ -320,6 +338,11 @@ class Driver:
         n = int(lead.get("launches", 0))
         name = "lead" if n == 0 else f"lead-r{n}"
         spec = self._spec("lead", lead_prompt(self.run_id), sid, resume, name, None)
+        # Every launch gets what is left of the lead's cumulative time, never the whole
+        # limit again (the gaps between sessions, such as usage waits, do not count).
+        left = leadtime.lead_time_left(self.run_dir, self.limits.lead_max_s)
+        self.lead_budget_s = max(0.0, left if self.lead_budget_s is None
+                                 else min(self.lead_budget_s, left))
         lead.update({"session_id": sid, "launches": n + 1, "running": True, "name": name,
                      "outcome": None, "exit_code": None})
         self.state["outcome"] = None
@@ -795,13 +818,7 @@ class Driver:
         return list(dict.fromkeys(killed))
 
     def _lead_time_left(self) -> float:
-        first = next((e for e in events.read(self.run_dir)
-                      if e.get("event") == "session_launched" and e.get("role") == "lead"),
-                     None)
-        started = usage._ts(first.get("at")) if first else None
-        if started is None:
-            return self.limits.lead_max_s
-        return self.limits.lead_max_s - (time.time() - started)
+        return leadtime.lead_time_left(self.run_dir, self.limits.lead_max_s)
 
     def _resume_lead_if_ended(self) -> None:
         """A lead whose session ended without an accepted finish_run (it ended its turn
@@ -842,13 +859,21 @@ class Driver:
         for key, items in flight.items():
             if items:
                 lines.append(f"{key.replace('_', ' ')}: {', '.join(items)}.")
-        queue_notice(self.run_dir, f"lead_resumed_{n + 1}", " ".join(lines))
-        self.state["lead_resumes"] = n + 1
-        self._save_state()
-        events.emit(self.run_dir, "lead_resumed_after_end", resume=n + 1,
-                    limit=self.limits.max_lead_resumes, previous_outcome=lead.get("outcome"),
-                    killed_workers=killed)
-        self.start_lead(resume=True)
+        with self._stop_lock:
+            # Decided and launched under the lock a usage stop takes: a rejection seen
+            # while the notice was built stops this launch (Codex review #4).
+            if not self._launch_allowed():
+                events.emit(self.run_dir, "lead_not_resumed", resumes=n,
+                            reason="a usage stop arrived before the launch")
+                return
+            queue_notice(self.run_dir, f"lead_resumed_{n + 1}", " ".join(lines))
+            self.state["lead_resumes"] = n + 1
+            self._save_state()
+            events.emit(self.run_dir, "lead_resumed_after_end", resume=n + 1,
+                        limit=self.limits.max_lead_resumes,
+                        previous_outcome=lead.get("outcome"), killed_workers=killed,
+                        lead_time_left_s=round(self._lead_time_left(), 1))
+            self.start_lead(resume=True)
 
     # ----- frame-only runs ---------------------------------------------------------------
     def frame_failures(self) -> list[str]:
@@ -932,7 +957,9 @@ class Driver:
             self.exit_code = 2
             return False
         if any(lv.session.rate_limited is not None for lv in self.live.values()):
-            self.state["usage_limited"] = True
+            with self._stop_lock:
+                self.state["usage_limited"] = True
+                self._save_state()
         self._resume_lead_if_ended()
         if self.stop_after == "frame" and not self.state.get("frame_complete") \
                 and self._frame_settled(now):
@@ -1129,25 +1156,8 @@ def usage_reset_at(run_dir: Path, since: str | None) -> float | None:
 
 
 def lead_time_used(run_dir: Path) -> float:
-    """Seconds the lead's sessions have run, from the `session_launched` and
-    `session_ended` events of role lead. A launch with no recorded end (a driver that
-    died) counts up to the last event in the log, the most it can have run unseen."""
-    started: dict[str, float] = {}
-    total, last = 0.0, 0.0
-    for e in events.read(run_dir):
-        t = usage._ts(e.get("at"))
-        if t is None:
-            continue
-        last = max(last, t)
-        if e.get("role") != "lead":
-            continue
-        if e.get("event") == "session_launched":
-            started[str(e.get("session"))] = t
-        elif e.get("event") == "session_ended":
-            began = started.pop(str(e.get("session")), None)
-            if began is not None:
-                total += max(0.0, t - began)
-    return total + sum(max(0.0, last - began) for began in started.values())
+    """Seconds the lead's sessions have run (`stemma.driver.leadtime`)."""
+    return leadtime.lead_time_used(run_dir)
 
 
 def _resume_refusal(run_dir: Path, lim: Limits) -> tuple[str, str, dict[str, Any]] | None:

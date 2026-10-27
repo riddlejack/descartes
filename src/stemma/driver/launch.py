@@ -193,8 +193,11 @@ class Session:
 OnInit = Callable[[Session, dict[str, Any]], list[str]]
 
 
+OnLimit = Callable[[Session], None]
+
+
 def _follow(run_dir: Path, s: Session, on_init: OnInit, grace_s: float,
-            out: IO[bytes], sink: IO[bytes]) -> None:
+            out: IO[bytes], sink: IO[bytes], on_limit: OnLimit | None = None) -> None:
     """Reader thread: copy the stream to disk, run the canary on init, note compactions."""
     unparsed_seen = False
     with sink:
@@ -235,6 +238,12 @@ def _follow(run_dir: Path, s: Session, on_init: OnInit, grace_s: float,
                                 session_id=s.spec.session_id,
                                 limit_type=limit.get("rateLimitType"),
                                 resets_at=limit.get("resetsAt"))
+                    if on_limit is not None:
+                        try:  # the driver's shared stop flag, set at once
+                            on_limit(s)
+                        except Exception as exc:  # noqa: BLE001 - loud; the reader goes on
+                            events.emit(run_dir, "usage_stop_not_recorded",
+                                        session=s.spec.name, error=str(exc)[:300])
             elif mtype == "result":
                 s.result = msg
 
@@ -258,7 +267,7 @@ def session_tmp(run_dir: Path, session_id: str) -> str:
 
 
 def launch(cfg: DriverConfig, run_dir: Path, plugin_dir: Path, spec: LaunchSpec,
-           on_init: OnInit, grace_s: float) -> Session:
+           on_init: OnInit, grace_s: float, on_limit: OnLimit | None = None) -> Session:
     """Write the session's settings file and start the process. Never raises after start."""
     settings_rel = f"{SETTINGS_DIR}/{spec.name}.json"
     cl = clean.clean_launch(
@@ -292,7 +301,8 @@ def launch(cfg: DriverConfig, run_dir: Path, plugin_dir: Path, spec: LaunchSpec,
     s = Session(spec, argv, proc, time.monotonic(), stream_path, stderr_path)
     assert proc.stdout is not None  # invariant: stdout=PIPE
     s.reader = threading.Thread(target=_follow, name=f"follow-{spec.name}", daemon=True,
-                                args=(run_dir, s, on_init, grace_s, proc.stdout, sink))
+                                args=(run_dir, s, on_init, grace_s, proc.stdout, sink,
+                                      on_limit))
     s.reader.start()
     return s
 

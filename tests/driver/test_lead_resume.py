@@ -70,3 +70,55 @@ def test_killed_workers_are_named_in_the_notice(cfg: DriverConfig, tmp: Path,
     stream.write_text("".join(json.dumps(x) + "\n" for x in lines))
     d = Driver(cfg, run, checks_api, limits)
     assert d.killed_workers("lead") == ["bas-record branch", "valuation branch"]
+
+
+# --- Codex review of 6782794 ---------------------------------------------------------
+
+def _ran(run: Path, seconds: float) -> None:
+    """Record a lead session that ran `seconds`, as the driver's events would."""
+    from stemma.register import jsonl
+
+    jsonl.append(run / "events.jsonl",
+                 {"event": "session_launched", "role": "lead", "session": "lead",
+                  "at": "2099-01-01T00:00:00.000Z", "source": "driver"},
+                 {"event": "session_ended", "role": "lead", "session": "lead",
+                  "at": f"2099-01-01T00:00:{int(seconds):02d}.000Z", "source": "driver"})
+
+
+def test_a_resumed_lead_gets_only_its_remaining_time(cfg: DriverConfig, tmp: Path,
+                                                     fake: Fake, limits: Limits) -> None:
+    # Review #1: 100 s limit, 59 s already run: the resumed launch is stopped at 41 s
+    # of its own, never given the full 100 again.
+    lim = dataclasses.replace(limits, lead_max_s=100.0)
+    run = create_run(cfg, write_task(tmp), limits=lim)
+    _ran(run, 59)
+    d = Driver(cfg, run, checks_api, lim)
+    d.state["lead"].update({"session_id": "sid-1", "launches": 1})
+    fake.configure({"lead@resume": {"sleep_s": 0.2}})
+    d.start_lead(resume=True)
+    assert d.lead_budget_s is not None and 40.0 <= d.lead_budget_s <= 41.0
+    while d.live:
+        d.step()
+
+
+def test_a_usage_stop_while_the_notice_is_built_stops_the_resume(
+        cfg: DriverConfig, tmp: Path, fake: Fake, limits: Limits,
+        monkeypatch: Any) -> None:
+    # Review #4: the rejection lands between the decision and the launch.
+    lim = dataclasses.replace(limits, max_lead_resumes=2)
+    run = create_run(cfg, write_task(tmp), limits=lim)
+    d = Driver(cfg, run, checks_api, lim)
+    d.state["lead"].update({"session_id": "sid-1", "launches": 1, "running": False,
+                            "outcome": "completed", "name": "lead"})
+    import stemma.hooks.stop as stop_mod
+
+    def flight_then_reject(_run: Path) -> dict[str, list[str]]:
+        d._note_usage_stop(None)  # type: ignore[arg-type]  # a reader thread, meanwhile
+        return {}
+
+    monkeypatch.setattr(stop_mod, "in_flight", flight_then_reject)
+    d._resume_lead_if_ended()
+    assert not [c for c in fake.calls() if c["role"] == "lead"]
+    assert kinds(run, "lead_not_resumed")[0]["reason"].startswith("a usage stop")
+    persisted = json.loads((run / ".stemma/driver-state.json").read_text())
+    assert persisted["usage_limited"] is True  # persisted at once, for the Stop hook
