@@ -1,7 +1,7 @@
 """Run 4, CoreWeave from a frozen web: the real plugin, live, from the pre-registered task.
 
-Not collected by pytest. Needs STEMMA_RUNS, STEMMA_CLAUDE_BIN, STEMMA_CLAUDE_CONFIG and
-STEMMA_PYTHON (and STEMMA_SEC_IDENTITY for the SEC tools). Creates the run from the
+Not collected by pytest. Needs STEMMA_RUNS, STEMMA_CLAUDE_BIN, STEMMA_CLAUDE_CONFIG,
+STEMMA_PYTHON and STEMMA_RUN4_BRIEF (the brief's path; and STEMMA_SEC_IDENTITY for the SEC tools). Creates the run from the
 pre-registered task and resource limits, prints the run folder first, and runs it to the
 end through `run_to_end`, which resumes by itself after a usage stop .
 
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -45,7 +46,8 @@ TASK: dict[str, Any] = {
         "How much detail?": "a thorough memo with its supporting analysis",
         "What data do you hold?": "none; public sources only",
     },
-    "attachments": ["<HOME>/.private/stemma-design/build-2026-10/prereg/run4-brief.md"],
+    # The pre-registered brief stays outside the repository; its path comes from the shell.
+    "attachments": [os.environ.get("STEMMA_RUN4_BRIEF", "STEMMA_RUN4_BRIEF is not set")],
     "as_of": "2026-10-01",
     "second_family": True,
 }  # no switches, no roles: the defaults; no criteria: the lead drafts them (D4)
