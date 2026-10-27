@@ -20,7 +20,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from stemma.hooks import paths
-from stemma.register import roles
+from stemma.register import criteria, roles
 
 
 class GuardInputError(Exception):
@@ -104,6 +104,43 @@ def guard_agent(hook: dict[str, Any]) -> Decision:
     return Decision(allow=True, updated_input=ti, events=[event])
 
 
+# --- The lead reads no sources (D6) ------------------------------------------------
+
+# Tools the lead's own thread may not call: every source-reading tool, and Bash, whose
+# commands could read stored sources in ways no guard can parse. Its workers keep them.
+# Invariant: the owner's decision D6 (CONTRACTS v0.4 section 6).
+LEAD_DENIED_MCP = frozenset(roles.MCP_PREFIX + t for t in (
+    "capture", "capture_file", "sec_filings", "sec_capture", "sec_facts", "outline",
+    "read", "read_section", "search_store", "tables", "check_quote", "query_data"))
+LEAD_DENIED_BUILTIN = frozenset({"WebSearch", "WebFetch", "Bash"})
+# Run-folder places that hold sources, which the lead's own thread may not Read: the
+# evidence store and the user's attached files.
+_LEAD_HIDDEN = (("store",), ("task", "attachments"), ("task", "arrivals"))
+
+
+def is_lead_main_thread(hook: dict[str, Any]) -> bool:
+    return hook.get("agent_type") == roles.LEAD and not hook.get("agent_id")
+
+
+def guard_lead_tool(hook: dict[str, Any]) -> Decision | None:
+    """A refusal when the lead's own thread calls a source tool; None otherwise."""
+    tool = hook.get("tool_name")
+    if not is_lead_main_thread(hook):
+        return None
+    if tool in LEAD_DENIED_MCP or tool in LEAD_DENIED_BUILTIN:
+        short = str(tool).removeprefix(roles.MCP_PREFIX)
+        return refuse(hook, f"Refused: the lead does not call {short}; it reads branch "
+                            f"records, never sources.")
+    return None
+
+
+def lead_read_refusal(rel: PurePosixPath) -> str | None:
+    for hidden in _LEAD_HIDDEN:
+        if rel.parts[:len(hidden)] == hidden:
+            return f"Refused: the lead does not read {rel}; it reads branch records, never sources."
+    return None
+
+
 # --- Writes ------------------------------------------------------------------------
 
 
@@ -117,6 +154,9 @@ def guard_write(hook: dict[str, Any], run_dir: Path) -> Decision:
         return refuse(hook, f"Refused: {target} is outside the run folder.")
     if paths.is_tool_only(rel):
         return refuse(hook, f"Refused: {rel} is written only by Stemma's tools.")
+    if rel == PurePosixPath(criteria.CRITERIA_FILE) and criteria.from_task(run_dir):
+        return refuse(hook, f"Refused: {rel} holds the user's criteria and is written only "
+                            f"by Stemma's driver.")
     return ALLOW
 
 
@@ -198,6 +238,8 @@ def guard_read(hook: dict[str, Any], run_dir: Path, draft_version: str | None) -
         if len(rel.parts) < 2 or not own or rel.parts[1] != own:
             return refuse(hook, f"Refused: {rel} is another session's temporary output.")
     why = blind_read_refusal(role, rel, run_dir, draft_version)
+    if why is None and is_lead_main_thread(hook):
+        why = lead_read_refusal(rel)
     return refuse(hook, why) if why else ALLOW
 
 

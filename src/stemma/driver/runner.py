@@ -50,8 +50,12 @@ _ARTIFACT_RES: Final = tuple(re.compile(p) for p in (
     r"^branches/(.+/)?(order|restatement|record)\.md$", r"^branches/(.+/)?verdicts/[^/]+\.json$",
     r"^draft/answer\.v\d+\.md$", r"^reviews/v\d+/[^/]+\.md$",
     r"^deliverable/answer(\.reader)?\.md$", r"^retro\.md$", r"^tree\.json$",
+    r"^criteria\.md$", r"^branches/(.+/)?revision-\d+\.md$", r"^checks/doc-[^/]+\.json$",
 ))
 _SKIP_TOP: Final = frozenset({".stemma", ".claude", "store", "register", "task"})
+# The files a frame-only run ends on (CONTRACTS v0.4 section 9); the tree is tree.json.
+FRAME_FILES: Final = ("intake.md", "frame.md", "tree.json", "framer/critique.md",
+                      "framer/lead-response.md")
 
 
 class CheckRequestLike(Protocol):
@@ -146,6 +150,7 @@ OUTCOME_CODES: Final = {
     "release_withdrawn": 5,  # released, then a session it rested on was revoked
     "revocation_failed": 6,  # a wrong-model check could not be revoked: release blocked
     "usage_limited": 7,  # the account's usage limit stopped sessions; resume continues
+    "frame_complete": 8,  # a frame-only run: the frame, tree and critique response exist
     "driver_stopped": 130,  # SIGTERM or SIGINT reached the driver
 }
 
@@ -217,6 +222,10 @@ class Driver:
         self.milestones = usage.Milestones(self.run_dir / events.EVENTS)
         self._reg: Any = None  # the register, opened when a claim's branch is first needed
         self.exit_code = 0
+        # Frame-only runs (CONTRACTS v0.4 section 9): end once the frame is done.
+        self.stop_after: str = str(self.run.get("stop_after") or "full")
+        self._frame_sig: tuple[Any, ...] | None = None
+        self._frame_sig_at = 0.0
 
     # ----- state -------------------------------------------------------------------
     def _load_state(self) -> dict[str, Any]:
@@ -287,7 +296,9 @@ class Driver:
               request_id: str | None) -> LaunchSpec:
         m = self.models[role]
         tools: ToolSets = tools_for_role(role, self.tools)
-        deny_agent = role == "lead" and self.run["switches"]["s2_shape"] == "single_loop"
+        # The lead starts no worker under s2 single_loop, nor in a frame-only run.
+        deny_agent = role == "lead" and (self.run["switches"]["s2_shape"] == "single_loop"
+                                         or self.stop_after == "frame")
         return LaunchSpec(name, role, prompt, m["model"], m["effort"], session_id, resume,
                           tools, request_id, deny_agent)
 
@@ -429,7 +440,8 @@ class Driver:
             return "model_mismatch"
         if s.rate_limited is not None:
             return "rate_limited"
-        if s.killed_reason in ("canary_failed", "stopped_by_limit", "driver_stopped"):
+        if s.killed_reason in ("canary_failed", "stopped_by_limit", "driver_stopped",
+                               "frame_complete"):
             return s.killed_reason
         if s.init is None or s.killed_reason == "init_timeout":
             return "launch_failed"
@@ -728,6 +740,50 @@ class Driver:
                                                 landed, outcome or self.state.get("outcome"),
                                                 usage=self.usage_summary))
 
+    # ----- frame-only runs ---------------------------------------------------------------
+    def frame_failures(self) -> list[str]:
+        """What a frame-only run still lacks before it may end (empty: the frame is done)."""
+        from stemma.register.store import Register
+
+        return Register(self.run_dir).frame_failures()
+
+    def _frame_signature(self) -> tuple[Any, ...]:
+        out: list[Any] = []
+        for rel in FRAME_FILES:
+            try:
+                st = os.stat(self.run_dir / rel, follow_symlinks=False)
+                out.append((rel, st.st_mtime_ns, st.st_size))
+            except FileNotFoundError:
+                out.append((rel, None, None))
+        return tuple(out)
+
+    def _frame_settled(self, now: float) -> bool:
+        """The frame is done and has not changed for `frame_settle_s` (or the lead has
+        stopped working on it)."""
+        try:
+            missing = self.frame_failures()
+        except Exception as exc:  # noqa: BLE001 - loud: an unreadable register is not done
+            missing = [f"the register could not be read ({type(exc).__name__}: {exc})"]
+        self.state["frame_missing"] = missing
+        if missing:
+            self._frame_sig = None
+            return False
+        sig = self._frame_signature()
+        if sig != self._frame_sig:
+            self._frame_sig, self._frame_sig_at = sig, now
+        lead_running = any(lv.session.spec.role == "lead" for lv in self.live.values())
+        return not lead_running or now - self._frame_sig_at >= self.limits.frame_settle_s
+
+    def _end_frame_only(self) -> None:
+        events.emit(self.run_dir, "frame_complete", files=list(FRAME_FILES))
+        self.state["frame_complete"] = True
+        self._save_state()
+        for live in list(self.live.values()):
+            reason = "frame_complete" if live.session.spec.role == "lead" else "driver_stopped"
+            live.session.stop(reason, self.limits.stop_grace_s)
+        for name, live in list(self.live.items()):
+            self._end(name, live)
+
     def _live_checks(self) -> int:
         return sum(1 for lv in self.live.values() if lv.session.spec.request_id is not None)
 
@@ -753,6 +809,11 @@ class Driver:
             return False
         if any(lv.session.rate_limited is not None for lv in self.live.values()):
             self.state["usage_limited"] = True
+        if self.stop_after == "frame" and not self.state.get("frame_complete") \
+                and self._frame_settled(now):
+            self._end_frame_only()
+            self.write_status("stopped", "frame_complete")
+            return False
         if self.state.get("usage_limited"):
             # The account's usage limit refused a session: launching more only burns
             # checks into failures. Let live sessions end; resume continues the run.
@@ -815,6 +876,8 @@ class Driver:
         lead_outcome = self.state["lead"].get("outcome")
         if lead_outcome == "canary_failed":
             return "canary_failed"
+        if self.stop_after == "frame" and self.state.get("frame_complete"):
+            return "frame_complete"
         if self.state.get("usage_limited") and not self.released(self.run_dir):
             return "usage_limited"
         if self.state.get("release_blocked"):

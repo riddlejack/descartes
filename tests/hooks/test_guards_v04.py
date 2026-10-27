@@ -1,0 +1,114 @@
+"""v0.4 guards: the lead reads no sources (D6); the user's criteria are not rewritten (D4).
+Each through the real hook entry point, with attempts to get round it."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+from test_guards import call, events, pre
+
+from stemma.register import roles
+
+SOURCE_TOOLS = ["capture", "capture_file", "sec_filings", "sec_capture", "sec_facts", "outline",
+                "read", "read_section", "search_store", "tables", "check_quote", "query_data"]
+
+
+@pytest.fixture
+def run_dir(tmp_path: Path) -> Path:
+    d = tmp_path / "run"
+    for sub in ("register", "store/text", "task/attachments", "task/arrivals/1", "branches/b1",
+                "framer"):
+        (d / sub).mkdir(parents=True)
+    (d / "store/text/abc.txt").write_text("a stored source")
+    (d / "task/attachments/brief.pdf").write_text("the user's file")
+    (d / "task/arrivals/1/late.csv").write_text("a,b")
+    (d / "task/question.md").write_text("q")
+    (d / "branches/b1/record.md").write_text("record")
+    return d
+
+
+@pytest.mark.parametrize("tool", [roles.MCP_PREFIX + t for t in SOURCE_TOOLS]
+                         + ["WebSearch", "WebFetch", "Bash"])
+def test_the_leads_own_thread_cannot_call_a_source_tool(run_dir: Path, tool: str) -> None:
+    ti = {"command": "cat store/text/abc.txt"} if tool == "Bash" else {"sha256": "abc"}
+    r = call(run_dir, "pre", pre(run_dir, tool, ti))
+    assert r.returncode == 2 and "the lead does not call" in r.stderr
+    assert events(run_dir)[-1]["event"] == "denied"
+    # No identity stamp was written, so the MCP server would refuse the call as well.
+    assert not (run_dir / "register/calls").exists()
+
+
+@pytest.mark.parametrize("tool", [roles.MCP_PREFIX + "read", "Bash", "WebSearch"])
+def test_a_worker_under_the_lead_keeps_its_source_tools(run_dir: Path, tool: str) -> None:
+    ti = {"command": "ls"} if tool == "Bash" else {"sha256": "abc"}
+    r = call(run_dir, "pre", pre(run_dir, tool, ti, agent_type="stemma:worker",
+                                 agent_id="a1"))
+    assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.parametrize("agent_type", ["stemma:lead", "stemma:worker"])
+def test_a_lead_typed_subagent_is_not_the_leads_own_thread(run_dir: Path,
+                                                           agent_type: str) -> None:
+    # Identity comes from the harness: a subagent carries an agent_id.
+    r = call(run_dir, "pre", pre(run_dir, roles.MCP_PREFIX + "read", {"sha256": "x"},
+                                 agent_type=agent_type, agent_id="a9"))
+    assert r.returncode == 0
+
+
+@pytest.mark.parametrize("path", [
+    "store/text/abc.txt", "./store/text/abc.txt", "STORE/text/abc.txt", "Store/Text/ABC.txt",
+    "task/attachments/brief.pdf", "task/arrivals/1/late.csv", "store", "store/",
+])
+def test_the_lead_cannot_read_stored_sources(run_dir: Path, path: str) -> None:
+    for target in (path, str(run_dir / path)):
+        r = call(run_dir, "pre", pre(run_dir, "Read", {"file_path": target}))
+        assert r.returncode == 2 and "the lead does not read" in r.stderr, (target, r.stderr)
+
+
+def test_the_lead_cannot_read_a_source_through_a_symlink(run_dir: Path) -> None:
+    (run_dir / "branches/b1/notes.txt").symlink_to(run_dir / "store/text/abc.txt")
+    (run_dir / "jump").symlink_to(run_dir / "store")
+    for target in ("branches/b1/notes.txt", "jump/text/abc.txt"):
+        r = call(run_dir, "pre", pre(run_dir, "Read", {"file_path": target}))
+        assert r.returncode == 2, target
+
+
+@pytest.mark.parametrize("path", ["branches/b1/record.md", "task/question.md", "frame.md"])
+def test_the_lead_reads_records_and_its_own_files(run_dir: Path, path: str) -> None:
+    r = call(run_dir, "pre", pre(run_dir, "Read", {"file_path": path}))
+    assert r.returncode == 0, r.stderr
+
+
+def test_a_worker_may_read_the_store(run_dir: Path) -> None:
+    r = call(run_dir, "pre", pre(run_dir, "Read", {"file_path": "store/text/abc.txt"},
+                                 agent_type="stemma:worker", agent_id="a1"))
+    assert r.returncode == 0
+
+
+# --- criteria.md --------------------------------------------------------------------
+
+
+def _task(run_dir: Path, criteria: list[str]) -> None:
+    (run_dir / "task/task.json").write_text(json.dumps({"question": "q", "criteria": criteria}))
+
+
+@pytest.mark.parametrize("target", ["criteria.md", "CRITERIA.md", "./criteria.md"])
+def test_the_users_criteria_cannot_be_rewritten(run_dir: Path, target: str) -> None:
+    _task(run_dir, ["Says whether the target is met"])
+    for tool in ("Write", "Edit"):
+        r = call(run_dir, "pre", pre(run_dir, tool, {"file_path": target, "content": "x"}))
+        assert r.returncode == 2 and "user's criteria" in r.stderr
+
+
+def test_without_criteria_in_the_task_the_lead_writes_criteria_md(run_dir: Path) -> None:
+    _task(run_dir, [])
+    r = call(run_dir, "pre", pre(run_dir, "Write", {"file_path": "criteria.md", "content": "x"}))
+    assert r.returncode == 0, r.stderr
+
+
+def test_checks_folder_is_tool_only(run_dir: Path) -> None:
+    r = call(run_dir, "pre", pre(run_dir, "Write", {"file_path": "checks/doc-r1.json",
+                                                    "content": "{}"}))
+    assert r.returncode == 2 and "written only by Stemma's tools" in r.stderr

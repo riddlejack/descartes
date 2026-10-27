@@ -50,7 +50,7 @@ def _parts(rel: PurePosixPath) -> tuple[str, ...]:
 _TOOL_ONLY_TOP = frozenset(
     {"store", "register", "tree.json", "tree.md", "events.jsonl", "run.json", "status.json",
      "status.html", "usage.jsonl", "usage.md", "task", "claude.md", ".claude", ".stemma",
-     "reviews", "deliverable"}
+     "reviews", "deliverable", "checks"}
 )
 # Tool-written files inside an otherwise author-written folder (casefolded).
 _TOOL_ONLY_FILES = frozenset({("framer", "own-frame.md"), ("framer", "critique.md")})

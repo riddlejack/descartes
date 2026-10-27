@@ -168,17 +168,21 @@ def entity_review(ctx: Context[Any], action: str = "list", proposal_id: str = ""
 
 @server.tool()
 def tree_upsert(ctx: Context[Any], node: dict[str, Any]) -> dict[str, Any]:
-    """Create or change one tree node: {id, parent, kind (option|condition|rival|
-    open_lane), statement, doubt, settles_by, flip_point, crux, branch_id, status
-    (open|in_progress)}. Fields left out keep their values."""
+    """Create or change one tree node: {id, parent, kind (question|open_lane), statement,
+    doubt, settles_by, flip_point, crux, branch_id, status (open|in_progress), set_aside}.
+    Nodes are sub-questions of the question asked; options and rivals are never nodes.
+    Lead only: set_aside is the reason a node is set aside (neither possible answer could
+    change the headline), or null to bring it back; a set-aside node and everything under
+    it counts as closed and is listed by gate_status. Fields left out keep their values."""
     return _call(ctx, "tree_upsert", lambda r, c: r.tree_upsert(c, node))
 
 
 @server.tool()
 def get_tree(ctx: Context[Any]) -> list[dict[str, Any]]:
-    """The issue tree's nodes, each with how it closes (closes_by: "branch" for a leaf, a
-    condition, rival or open lane holding work; "children" for an option or any node with
-    children, whose status is derived; "nothing" for an empty open lane) and closed."""
+    """The issue tree's nodes, each with how it closes (closes_by: "branch" for a leaf
+    question or an open lane holding work; "children" for any node with children, whose
+    status is derived; "nothing" for an empty open lane; "set_aside" or
+    "ancestor_set_aside") and closed."""
     return _call(ctx, "get_tree", lambda r, c: r.tree_view())
 
 
@@ -193,16 +197,22 @@ def propose_branch_done(ctx: Context[Any], branch_id: str) -> dict[str, Any]:
 
 @server.tool()
 def record_branch_verdict(ctx: Context[Any], branch_id: str, verdict: str, reason: str,
-                          method: str | None = None,
-                          gap_type: str | None = None) -> dict[str, Any]:
+                          method: str | None = None, gap_type: str | None = None,
+                          points: list[dict[str, Any]] | None = None,
+                          resolutions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Branch reviewer only, judging the record snapshot of your round
     (register/branches/<id>/record.r<round>.md): answered | find_more (method) | analyse |
-    bound | ask_user
-    (the reason is the question for the user) | accept_gap (gap_type: user_held |
-    source_unavailable | method_exhausted | out_of_scope), with the reason."""
+    bound | ask_user (the reason is the question for the user) | accept_gap (gap_type:
+    user_held | source_unavailable | method_exhausted | out_of_scope), with the reason.
+    points: [{point, material, node (node id or null), criterion (C-id or null)}], at
+    least one of node and criterion set. find_more, analyse and bound send the branch back
+    and need a material point; a branch is sent back once. A later answered or
+    accept_gap gives resolutions: [{point_id, status: resolved | bounded | conditional |
+    disputed, note}] for every point sent back (bounded and conditional: the record names
+    the point id; disputed: a revision order of the branch names it)."""
     return _call(ctx, "record_branch_verdict",
                  lambda r, c: r.record_branch_verdict(c, branch_id, verdict, reason, method,
-                                                      gap_type))
+                                                      gap_type, points, resolutions))
 
 
 @server.tool()
@@ -254,17 +264,21 @@ def record_frame(ctx: Context[Any], kind: str, text: str) -> dict[str, Any]:
 def record_review(ctx: Context[Any], version: int, text: str,
                   points: list[dict[str, Any]]) -> dict[str, Any]:
     """Final reviewers only: record your review of draft <version> as markdown text, with
-    its points as a list of {point: text, material: true or false} (you judge which are
-    material). The register writes reviews/v<version>/<your file>; reviews are written by
-    this tool only. The draft under review is register/drafts/answer.v<version>.md."""
+    its points as a list of {point: text, material: true or false, node: tree node id or
+    null, criterion: criterion id (C1, ...) from criteria.md or null}, at least one of
+    node and criterion set (you judge which are material: would it change the answer, or
+    whether a criterion is met). Each point gets an id (v<version>.<you>.<n>). The register
+    writes reviews/v<version>/<your file>; reviews are written by this tool only. The
+    draft under review is register/drafts/answer.v<version>.md."""
     return _call(ctx, "record_review", lambda r, c: r.record_review(c, version, text, points))
 
 
 @server.tool()
 def gate_status(ctx: Context[Any], version: int) -> dict[str, Any]:
     """Lead only: read the release gate for draft <version> without releasing. Returns
-    every unmet condition, numbered one per line, the same list finish_run refuses with.
-    Call it after every review round."""
+    every unmet condition, numbered one per line, the same list finish_run refuses with;
+    the open material points of that version's reviews by criterion and by node; and the
+    nodes set aside, with their reasons. Call it after every review round."""
     return _call(ctx, "gate_status", lambda r, c: r.gate_status(c, version))
 
 

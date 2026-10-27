@@ -70,7 +70,7 @@ def test_full_run_argv_env_canary_and_status(cfg: DriverConfig, tmp: Path, fake:
     assert argv[:2] == ["-p", f"run:{run.name}"]
     assert argv[2:] == [
         "--output-format", "stream-json", "--verbose", "--agent", "stemma:lead",
-        "--model", "claude-opus-5-5", "--effort", "max", "--plugin-dir", plugin,
+        "--model", "claude-opus-5-5", "--effort", "high", "--plugin-dir", plugin,
         "--settings", str(run / ".stemma/settings/lead.json"),
         "--tools", "Agent,Bash,Read,Skill,ToolSearch,WebSearch,Write",
         f"--session-id={sid}"]
@@ -102,7 +102,7 @@ def test_full_run_argv_env_canary_and_status(cfg: DriverConfig, tmp: Path, fake:
     assert len(kinds(run, "canary_passed")) == 2 and not kinds(run, "canary_failed")
     resolved = kinds(run, "resolved_model_effort")
     assert {(r["session"], r["scope"], r["model"], r["effort"], r["match"]) for r in resolved} \
-        == {("lead", "main", "claude-opus-5-5", "max", True),
+        == {("lead", "main", "claude-opus-5-5", "high", True),
             ("lead", "subagent", "claude-opus-5-5", "high", True),
             (framer and f"check-{checks_api.request_id_for('blind-framer', 'frame:own')}-1",
              "main", "claude-opus-5-5", "high", True)}

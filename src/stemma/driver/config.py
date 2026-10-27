@@ -45,6 +45,7 @@ TOOL_ONLY: Final = (
     ".claude/",
     ".stemma/",
     "branches/**/verdicts/",
+    "checks/",
     "deliverable/",
     "reviews/",
     "framer/own-frame.md",
@@ -85,6 +86,9 @@ class Limits:
     # register refuses another round after this many and releases the last one with its
     # criticisms listed (CONTRACTS section 6, v0.3).
     max_review_rounds: int = 3
+    # Resource limit: in a frame-only run, seconds the finished frame (intake, frame, tree,
+    # the response to the critique) must stay unchanged before the driver ends the lead.
+    frame_settle_s: float = 60.0
     # Recorded beside the numbers in run.json, so no reader takes them for a quality bar.
     purpose: str = "resource limits only (time, sessions, bytes); never a quality bar"
 

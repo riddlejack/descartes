@@ -22,6 +22,8 @@ from stemma.driver.clean import merge_settings
 from stemma.driver.config import SESSIONS_DIR, TOOL_ONLY
 from stemma.driver.errors import AgentFileInvalid
 from stemma.register import roles
+from stemma.register.criteria import CRITERIA_FILE
+from stemma.register.criteria import from_task as criteria_from_task
 
 MCP_PREFIX: Final = roles.MCP_PREFIX
 # Kept in --tools and allowed for every session: harmless now that the plugin's MCP server
@@ -253,6 +255,10 @@ def stemma_settings_extra(run_dir: Path, role: str, prompt: str, tools: ToolSets
     for pat in TOOL_ONLY:
         deny += [_rule("Write", run_dir, pat), _rule("Edit", run_dir, pat)]
         deny_write_abs.append(_abs(run_dir, pat))
+    if criteria_from_task(run_dir):
+        # The user's criteria (D4), written by the driver: no agent changes them.
+        deny += [_rule("Write", run_dir, CRITERIA_FILE), _rule("Edit", run_dir, CRITERIA_FILE)]
+        deny_write_abs.append(_abs(run_dir, CRITERIA_FILE))
     if cache_dir is not None:
         # A later run is served the cache's entries, so no agent may write them.
         deny += [_rule_abs("Write", cache_dir, folder=True),

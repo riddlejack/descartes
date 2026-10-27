@@ -18,15 +18,17 @@ from stemma.register.store import Register, closure
 
 @pytest.fixture
 def reg(tmp_path: Path) -> Register:
+    (tmp_path / "run").mkdir()
+    (tmp_path / "run" / "criteria.md").write_text("- C1: The answer says whether the target is met.\n")
     return Register(tmp_path / "run", evidence=FakeEvidence())
 
 
 # --- 1. A cycle in the tree never lets the gate skip nodes ------------------------
 
 def test_reparenting_a_node_under_its_own_child_is_refused(reg: Register) -> None:
-    reg.tree_upsert(LEAD, {"id": "A", "kind": "condition", "statement": "a"})
-    reg.tree_upsert(LEAD, {"id": "B", "kind": "condition", "statement": "b", "parent": "A"})
-    reg.tree_upsert(LEAD, {"id": "C", "kind": "condition", "statement": "c", "parent": "B"})
+    reg.tree_upsert(LEAD, {"id": "A", "kind": "question", "statement": "a"})
+    reg.tree_upsert(LEAD, {"id": "B", "kind": "question", "statement": "b", "parent": "A"})
+    reg.tree_upsert(LEAD, {"id": "C", "kind": "question", "statement": "c", "parent": "B"})
     for parent in ("B", "C"):
         with pytest.raises(Refused, match="cannot be placed under its own descendant"):
             reg.tree_upsert(LEAD, {"id": "A", "parent": parent})
@@ -36,8 +38,8 @@ def test_a_planted_cycle_is_unreachable_and_unmet(reg: Register) -> None:
     # Before the fix: A under B under A, both open, both skipped as "derived".
     cid = ready_run(reg)
     reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
-    reg.tree_upsert(LEAD, {"id": "A", "kind": "condition", "statement": "a"})
-    reg.tree_upsert(LEAD, {"id": "B", "kind": "condition", "statement": "b", "parent": "A"})
+    reg.tree_upsert(LEAD, {"id": "A", "kind": "question", "statement": "a"})
+    reg.tree_upsert(LEAD, {"id": "B", "kind": "question", "statement": "b", "parent": "A"})
     a = next(n for n in reg.tree() if n["id"] == "A")
     reg._put_node({**a, "parent": "B"}, reg._src(LEAD))  # a write that bypassed the check
     failures = [f for f in reg.finish_failures(1) if f.startswith("node ")]
@@ -49,10 +51,10 @@ def test_a_planted_cycle_is_unreachable_and_unmet(reg: Register) -> None:
 
 
 def test_the_walk_visits_each_node_once_from_the_roots() -> None:
-    nodes = [{"id": "R", "kind": "condition", "parent": None, "status": "open"},
-             {"id": "X", "kind": "condition", "parent": "Y", "status": "answered"},
-             {"id": "Y", "kind": "condition", "parent": "X", "status": "answered"},
-             {"id": "Z", "kind": "rival", "parent": "gone", "status": "answered"}]
+    nodes = [{"id": "R", "kind": "question", "parent": None, "status": "open"},
+             {"id": "X", "kind": "question", "parent": "Y", "status": "answered"},
+             {"id": "Y", "kind": "question", "parent": "X", "status": "answered"},
+             {"id": "Z", "kind": "question", "parent": "gone", "status": "answered"}]
     c = closure(nodes)
     assert {k for k, v in c.items() if v["closes_by"] == "unreachable"} == {"X", "Y", "Z"}
     assert not any(c[k]["closed"] for k in ("X", "Y", "Z"))
@@ -172,7 +174,7 @@ def test_at_the_limit_an_older_version_or_pending_reviews_never_release(
         reg.finish_run(LEAD, 1)
     with pytest.raises(Refused, match="review of version 2 is not recorded"):
         reg.finish_run(LEAD, 2)
-    review(reg, 2, [{"point": "the pace figure omits Q4", "material": True}])
+    review(reg, 2, [{"point": "the pace figure omits Q4", "material": True, "criterion": "C1"}])
     out = reg.finish_run(LEAD, 2)  # at the limit a material point does not block
     text = (reg.run_dir / out["completion"]).read_text()
     assert "(no review recorded)" not in text
@@ -191,8 +193,10 @@ def test_gate_status_reads_the_same_list_finish_run_refuses_with(reg: Register) 
     assert str(exc.value).split("\n", 1)[1] == g["unmet"]
     assert not (reg.run_dir / "deliverable/answer.md").exists()  # reading released nothing
     reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
-    assert reg.gate_status(LEAD, 1) == {"version": 1, "releasable": True, "unmet_count": 0,
-                                        "unmet": ""}
+    assert reg.gate_status(LEAD, 1) == {
+        "version": 1, "releasable": True, "unmet_count": 0, "unmet": "",
+        "open_material_points": {"count": 0, "by_criterion": {}, "by_node": {}},
+        "set_aside": []}
     with pytest.raises(Refused, match="read the release gate"):
         reg.gate_status(WORKER, 1)
 
@@ -201,20 +205,32 @@ def test_a_material_point_blocks_release_below_the_limit(reg: Register) -> None:
     cid = ready_run(reg)
     reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
     draft(reg, 2, cid)
-    review(reg, 2, [{"point": "the headline count is a different universe", "material": True},
-                    {"point": "a typo in section 2", "material": False}])
+    review(reg, 2, [{"point": "the headline count is a different universe", "material": True,
+                     "criterion": "C1", "node": "n1"},
+                    {"point": "a typo in section 2", "material": False, "node": "n1",
+                     "criterion": None}])
     unmet = reg.finish_failures(2)
     assert unmet == [("the deciders-eye-reviewer review of version 2 raises a material "
-                      "point: the headline count is a different universe")]
+                      "point v2.de.1 (criterion C1, node n1): the headline count is a "
+                      "different universe")]
+    g = reg.gate_status(LEAD, 2)["open_material_points"]
+    assert g["count"] == 1 and [p["id"] for p in g["by_criterion"]["C1"]] == ["v2.de.1"]
+    assert [p["id"] for p in g["by_node"]["n1"]] == ["v2.de.1"]
     with pytest.raises(Refused, match="raises a material point"):
         reg.finish_run(LEAD, 2)
     facts = [r for r in reg._run_facts("review_recorded") if r["version"] == 2]
-    assert facts[0]["points"][1] == {"point": "a typo in section 2", "material": False}
+    assert facts[0]["points"][1] == {"id": "v2.de.2", "point": "a typo in section 2",
+                                     "material": False, "node": "n1", "criterion": None}
 
 
 @pytest.mark.parametrize("points", [None, "x", [{"point": "p"}], [{"point": "", "material": True}],
                                     [{"point": "p", "material": "yes"}],
-                                    [{"point": "p", "material": True, "extra": 1}]])
+                                    [{"point": "p", "material": True, "extra": 1}],
+                                    [{"point": "p", "material": True}],
+                                    [{"point": "p", "material": True, "node": None,
+                                      "criterion": None}],
+                                    [{"point": "p", "material": True, "node": "nope"}],
+                                    [{"point": "p", "material": True, "criterion": "C9"}]])
 def test_review_points_are_checked_for_shape(reg: Register, points: Any) -> None:
     cid = ready_run(reg)
     draft(reg, 2, cid)

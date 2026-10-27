@@ -1,5 +1,5 @@
-"""`stemma` (or `python -m stemma.driver`): start <task.json> | resume <run_dir> |
-status <run_dir> | attach <run_id> <file>."""
+"""`stemma` (or `python -m stemma.driver`): start [--frame-only] <task.json> |
+resume <run_dir> | status <run_dir> | attach <run_id> <file>."""
 
 from __future__ import annotations
 
@@ -21,6 +21,9 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     p_start = sub.add_parser("start", help="create a run from task.json and run it")
     p_start.add_argument("task", type=Path)
+    p_start.add_argument("--frame-only", action="store_true",
+                         help="end the run once the frame, the tree and the answer to the "
+                              "frame critique exist (stop_after = frame)")
     p_resume = sub.add_parser("resume", help="resume a stopped run")
     p_resume.add_argument("run_dir", type=Path)
     p_status = sub.add_parser("status", help="print a run's status")
@@ -34,7 +37,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         cfg = DriverConfig.from_env(args.plugin_src)
         if args.cmd == "start":
-            run_dir = create_run(cfg, args.task)
+            run_dir = create_run(cfg, args.task,
+                                 stop_after="frame" if args.frame_only else None)
             print(run_dir, flush=True)
             return start(cfg, run_dir)
         if args.cmd == "resume":

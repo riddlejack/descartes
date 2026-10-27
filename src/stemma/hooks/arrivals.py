@@ -90,7 +90,8 @@ def attach(run_dir: Path, src: Path) -> dict[str, Any]:
     try:
         with jsonl.exclusive(log):  # held only to number, publish (a rename) and queue
             records = jsonl.read_all(log)
-            n = 1 + max((int(r["n"]) for r in records if r["kind"] == "arrival"), default=0)
+            n = 1 + max((int(r["n"]) for r in records if r["kind"] in ("arrival", "notice")),
+                        default=0)
             rel = f"{ARRIVALS_DIR}/{n}/{name}"
             safeio.move(run_dir, staged, rel)
             rec = {"kind": "arrival", "n": n, "path": rel, "name": name, "bytes": len(data),
@@ -108,18 +109,38 @@ def attach(run_dir: Path, src: Path) -> dict[str, Any]:
     return rec
 
 
-def notice_text(arrivals: list[dict[str, Any]]) -> str:
-    lines = ["Stemma: new material arrived from the user during the run."]
-    for a in arrivals:
-        lines.append(f"- {a['path']} ({a['bytes']} bytes, sha256 {a['sha256'][:12]}, "
-                     f"arrived {a['at']}).")
-    lines.append("Capture each with capture_file and map it at once against the frame and "
-                 "tree, recording in intake.md what it changed.")
+def queue_notice(run_dir: Path, name: str, text: str) -> dict[str, Any]:
+    """Queue a driver notice for the lead's next tool call (delivered like an arrival,
+    once). Idempotent per name."""
+    log = _log(run_dir)
+    with jsonl.exclusive(log):
+        records = jsonl.read_all(log)
+        for r in records:
+            if r["kind"] == "notice" and r["name"] == name:
+                return r
+        n = 1 + max((int(r["n"]) for r in records if r["kind"] in ("arrival", "notice")),
+                    default=0)
+        rec = {"kind": "notice", "n": n, "name": name, "text": text, "at": _now()}
+        jsonl.append_unlocked(log, [rec])
+    return rec
+
+
+def notice_text(due: list[dict[str, Any]]) -> str:
+    lines = [r["text"] for r in due if r["kind"] == "notice"]
+    arrivals = [r for r in due if r["kind"] == "arrival"]
+    if arrivals:
+        lines.append("Stemma: new material arrived from the user during the run.")
+        for a in arrivals:
+            lines.append(f"- {a['path']} ({a['bytes']} bytes, sha256 {a['sha256'][:12]}, "
+                         f"arrived {a['at']}).")
+        # The lead reads no sources (D6): a worker captures each arrival.
+        lines.append("Have a worker capture each with capture_file, and map it at once "
+                     "against the frame and tree, recording in intake.md what it changed.")
     return "\n".join(lines)
 
 
 def is_lead_main_thread(hook: dict[str, Any]) -> bool:
-    return hook.get("agent_type") == roles.LEAD and not hook.get("agent_id")
+    return hook.get("agent_type") == roles.LEAD and not hook.get("agent_id")  # see guards
 
 
 @contextmanager
@@ -134,12 +155,15 @@ def held(run_dir: Path, hook: dict[str, Any]) -> Iterator[list[dict[str, Any]]]:
     with jsonl.exclusive(log):
         records = jsonl.read_all(log)
         delivered = {int(r["n"]) for r in records if r["kind"] == "delivered"}
-        yield [r for r in records if r["kind"] == "arrival" and int(r["n"]) not in delivered]
+        yield [r for r in records
+               if r["kind"] in ("arrival", "notice") and int(r["n"]) not in delivered]
 
 
 def delivery_events(due: list[dict[str, Any]], hook: dict[str, Any]) -> list[dict[str, Any]]:
     at = _now()
-    return [{"event": "arrival_notice_delivered", "at": at, "n": r["n"], "path": r["path"],
+    return [{"event": "arrival_notice_delivered" if r["kind"] == "arrival"
+             else "driver_notice_delivered", "at": at, "n": r["n"],
+             "path": r.get("path"), "name": r.get("name"),
              "session_id": hook.get("session_id"), "tool_use_id": hook.get("tool_use_id"),
              "tool": hook.get("tool_name")} for r in due]
 

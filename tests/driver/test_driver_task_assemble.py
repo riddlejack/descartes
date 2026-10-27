@@ -27,8 +27,8 @@ def test_defaults_filled() -> None:
     assert sw["s3_hypothesis_in_briefs"] is False and sw["s6_cross_family"] == "off"
     m = sw["s5_models"]
     assert {r: v["effort"] for r, v in m.items()} == {
-        "lead": "max", "deciders-eye-reviewer": "max", "evidence-auditor": "max",
-        "mechanical-reader": "max", "worker": "high", "blind-framer": "high",
+        "lead": "high", "deciders-eye-reviewer": "high", "evidence-auditor": "high",
+        "mechanical-reader": "high", "worker": "high", "blind-framer": "high",
         "claim-checker": "high", "branch-reviewer": "high", "retrospective-writer": "high"}
     assert {v["model"] for v in m.values()} == {"claude-opus-5-5"}
 
@@ -72,7 +72,7 @@ def test_create_run(cfg: DriverConfig, tmp: Path) -> None:
     rj = json.loads((run / "run.json").read_text())
     assert rj["as_of"] == "2026-01-31" and rj["switches"]["s1_method"] == "placebo"
     assert rj["harness"]["version"] == "2.1.308 (Claude Code)"
-    assert rj["models"]["lead"] == {"model": "claude-opus-5-5", "effort": "max"}
+    assert rj["models"]["lead"] == {"model": "claude-opus-5-5", "effort": "high"}
     assert rj["limits"]["max_concurrent_checks"] == 4
     assert (run / "task" / "attachments" / "memo.txt").read_text() == "invented attachment"
     assert "The board." in (run / "task" / "intake.md").read_text()
@@ -107,8 +107,8 @@ def test_lead_text_is_base_plus_fragments_in_order(plugin_src: Path, tmp: Path) 
 
 def test_model_and_effort_written_from_s5(plugin_src: Path, tmp: Path) -> None:
     a = _asm(plugin_src, tmp)
-    for name, effort in (("lead", "max"), ("worker", "high"), ("claim-checker", "high"),
-                         ("deciders-eye-reviewer", "max")):
+    for name, effort in (("lead", "high"), ("worker", "high"), ("claim-checker", "high"),
+                         ("deciders-eye-reviewer", "high")):
         f = frontmatter.parse((a.plugin_dir / "agents" / f"{name}.md").read_text(), name)
         assert f.scalar("model") == "claude-opus-5-5" and f.scalar("effort") == effort
 

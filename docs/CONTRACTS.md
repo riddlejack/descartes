@@ -1,4 +1,4 @@
-# Contracts between the parts (v0.3.1)
+# Contracts between the parts (v0.4)
 
 These are the interfaces the parts agree on, so they can be built in parallel. The
 design (`DESIGN-v1.md`, cited as "step n") says what the system does; this file says
@@ -9,6 +9,92 @@ tells the orchestrator with evidence; nobody works around a contract silently.
 v0.2 applies a blind pressure test of v0.1 (26 Oct). Items marked *(B verifies)* are
 facts about the pinned harness that a reviewer checked in the docs but not by a run;
 part B proves each with a tiny run before anything depends on it.
+
+v0.4 applies the owner's ten decisions after run 1 (`V2-CHANGES-2026-10-27.md`, cited
+D1 to D10); where an older line below disagrees, section 0 wins.
+
+## 0. What v0.4 changed, and why (each with its decision)
+- **task.json** (D1, D4, D2, D10; section 9) gains `scope` (`"question_only"`, the
+  default, or `"broader_decision"`), `criteria` (a list of strings, at most 12), `options`
+  (a list of at least two, only when the user named them), `roles` (`{<role>: {model,
+  effort}}`, the same thing as `switches.s5_models`, which a task may give instead but
+  not as well) and `stop_after` (`"full"`, the default, or `"frame"`). Every role, the
+  lead included, defaults to Opus 5.5 at **high** effort (D10). `run.json` records
+  `scope`, `options`, `stop_after`, the models, and `criteria: {source: "task" | "lead",
+  file, count}`.
+- **criteria.md** (D4) at the run folder's top: one line per criterion, `- C<n>: <text>`,
+  ids C1, C2, ... in order. When the task gives criteria the driver writes it and no
+  agent may change it (Write, Edit and the Bash sandbox deny it; a hostile test); when it
+  does not, the lead writes it during intake. The gate refuses a release without at
+  least one criterion. Whether a criterion is met is a reviewer's judgment, never code's.
+- **Tree** (D2, D5; section 5): node kinds are `question` and `open_lane` only; options,
+  rivals, gates and checks are never nodes (`tree_upsert` refuses any other kind). A node
+  gains `set_aside`: the lead (only) gives the reason a node is set aside, or null to
+  bring it back. A set-aside node, and every node under it, counts as closed (`closes_by`
+  `set_aside` or `ancestor_set_aside`, status `set_aside`); its reason shows in
+  `tree.md`, `gate_status` lists every set-aside node, and a branch under one needs no
+  review. Brought back, a node starts again (`open`, or `in_progress` with a branch).
+- **Review points** (D4; section 6): every point, final review or branch verdict, is
+  `{point, material, node, criterion}`: `node` a tree node id or null, `criterion` a
+  criterion id or null, at least one set, each checked to exist. The register gives each
+  an id: `v<version>.<de|ea|mr>.<n>` for final reviews, `<branch>.r<round>.<n>` for branch
+  verdicts. `gate_status(version)` returns, beside `unmet`, `open_material_points`
+  (`{count, by_criterion, by_node}`) and `set_aside`.
+- **A branch is sent back once** (D9): `record_branch_verdict` takes `points` and
+  `resolutions`. `find_more`, `analyse` and `bound` send a branch back and need at least
+  one material point; a branch already sent back (by a session not revoked) cannot be
+  sent back again. A closing verdict (`answered`, `accept_gap`) then gives a resolution
+  `{point_id, status, note}` for every point sent back: `resolved`; `bounded` or
+  `conditional` (the record snapshot must name the point id); or `disputed` (a revision
+  order of the branch must name it, the lead having decided). `ask_user` is not a
+  send-back. The gate re-checks that every sent-back point of a closed branch has a
+  resolution.
+- **Revision orders** (D6): `branches/<branch_id>/revision-<n>.md`, headings Finding;
+  Raised by; Is it right?; Fix. The lead writes the finding, the worker says whether it
+  is right (with evidence) and then fixes it, the lead decides disputes. After a
+  send-back, `propose_branch_done` refuses until a revision order with all four headings
+  names each point sent back.
+- **The lead reads no sources** (D6; section 6): its own thread may not call capture,
+  capture_file, sec_filings, sec_capture, sec_facts, outline, read, read_section,
+  search_store, tables, check_quote, query_data, WebSearch, WebFetch or Bash, nor Read
+  `store/`, `task/attachments/` or `task/arrivals/`. The PreToolUse guard refuses these
+  for the lead's main thread (agent type `stemma:lead`, no agent id); its workers keep
+  them. Bash is refused outright because a guard cannot parse every way a shell command
+  reads a file. Arrival notices tell the lead to have a worker capture the file.
+- **Claim checks** (D7; sections 2 and 6): filing a claim requests no check. After
+  `submit_draft(v)`, the register requests one claim checker per source document, prompt
+  `doc:<receipt_id>`, and writes `checks/doc-<receipt_id>.json` (tool-only) listing every
+  claim the frozen draft cites (by `[[c:…]]` tag) whose first support item is that
+  receipt and which has no verdict yet. A cited claim with no support document
+  (`estimated` without documents, `assumed`) keeps one checker of its own, prompt
+  `claim:<claim_id>`. Observed figures are still checked. A `doc:` checker records
+  verdicts only on the claims its list names. The host still starts every checker.
+- **Reviewer memory** (D8): the branch reviewer of a branch is resumed (`--resume` of
+  its previous session) for each re-review of that branch; a resumed session's earlier
+  verification no longer counts until the driver verifies it again. The final reviewers
+  are fresh each round; `submit_draft(v)` for v > 1 writes
+  `register/drafts/previous.v<v>.md` (the previous round's points with their ids, and the
+  lead's `draft/response.v<v>.md`), which each final reviewer may read; it refuses when
+  the previous round raised points and `draft/response.v<v>.md` does not name each id.
+- **Stopping** (D9): the answer is releasable when the latest round's final reviews
+  raise no material point (and the rest of the gate holds); at `max_review_rounds` (a
+  resource limit) the open points are listed in `deliverable/completion.md`, as before.
+  `finish_run` also writes `deliverable/record.json`: criteria, set-aside nodes,
+  assumptions taken, and the points left open, for the deliverable and the viewer.
+- **Frame-only runs** (section 9): `stop_after: "frame"` in task.json, or `stemma start
+  --frame-only`. The lead's first tool call carries a notice saying so, and the lead may
+  start no worker (Agent is denied). The driver ends the run once intake.md, criteria.md
+  (at least one criterion), frame.md, a tree, the blind framer's critique and a
+  `framer/lead-response.md` newer than it all exist and have not changed for
+  `frame_settle_s` (a resource limit, default 60 s), or the lead has stopped: it stops
+  the lead and any check and ends with outcome `frame_complete`, exit code 8. A lead
+  that stops before the frame is done ends as before (`ended_without_release`), with
+  what was missing in the driver state's `frame_missing`.
+- **Automatic resume after a usage stop** (section 9): when the account's limit stops a
+  run (`usage_limited`), the driver waits until the limit resets (the reset time the
+  harness reported, plus a margin) and resumes, at most `max_usage_resumes` times (a
+  resource limit in `run.json`, default 6), logging each wait as a `usage_wait` event
+  and each resume as `run_resumed`.
 
 ## 1. Parts and owners
 - **A. Evidence service:** `src/stemma/evidence/`, `tests/evidence/`.
@@ -57,8 +143,11 @@ ran" (commitment 3) made structural.
    server and hooks find the run folder and the interpreter through them.
 2. The driver watches the register and the tree, and launches each checking session
    with `--agent stemma:<role>` and a prompt holding only an id:
-   - `file_claim` → a claim checker, prompt `claim:<claim_id>`;
-   - `propose_branch_done` → a branch reviewer, prompt `branch:<branch_id>`;
+   - `submit_draft` → one claim checker per source document the draft's cited claims
+     rest on, prompt `doc:<receipt_id>` (v0.4, D7), and one per cited claim with no
+     source document, prompt `claim:<claim_id>`;
+   - `propose_branch_done` → a branch reviewer, prompt `branch:<branch_id>`, resumed
+     from its previous session on each later round (v0.4, D8);
    - run start → the blind framer, prompt `frame:own`; the lead's
      `request_frame_critique` → the framer again, prompt `frame:critique`;
    - the lead's `submit_draft` → the decider's-eye reviewer, the evidence auditor
@@ -86,6 +175,8 @@ marked *tool-only* are written by an MCP tool or the driver, never by an agent
   per role, harness version, plugin digest, resource limits.
 - `task/` (driver): the question, intake answers if supplied, attachments.
 - `intake.md` (lead): the five intake answers and the restated job (step 1).
+- `criteria.md` (driver from the task, or the lead at intake): what done means (v0.4).
+- `checks/doc-<receipt_id>.json` (*tool-only*): the claims a document's checker checks.
 - `frame.md` (lead, living): the frame of step 2, including the working answer, the
   rival, and the cards loaded with why. Earlier versions under `history/`.
 - `tree.json` (*tool-only*): the issue tree (section 5). `tree.md` is a rendering.
@@ -100,6 +191,7 @@ marked *tool-only* are written by an MCP tool or the driver, never by an agent
     Claims (ids); Model; Rival tested; Methods tried and what each returned; Gaps
     (typed); Implications for other branches; What was not checked.
   - `verdicts/<n>.json` (*tool-only*): branch reviewer verdicts.
+  - `revision-<n>.md` (lead and worker): revision orders (v0.4, D6).
   - `sub/<branch_id>/` for a branch lead's own branches, same shape.
 - `store/` (*tool-only*, A): the evidence store (section 4).
 - `register/` (*tool-only*, B): the claim register (section 5).
@@ -219,10 +311,10 @@ from the harness), `created_at`, each code check's result, `supersedes`,
   and that code holds no logic. That passing run is the hackathon's Engine test.
 - **Storage:** `register/log.jsonl`, append-only under an exclusive file lock (several
   processes write), and a derived SQLite index rebuilt from the log.
-- **Tree** (`tree.json`): nodes with `id`, `parent`, `kind` (`option`, `condition`,
-  `rival`, `open_lane`), `statement`, `doubt`, `settles_by`, `flip_point`, `crux`
-  (true for the one to three the decision turns on), `branch_id`, `status`. Every
-  change goes through a tool and leaves a history entry.
+- **Tree** (`tree.json`): nodes with `id`, `parent`, `kind` (`question`, `open_lane`;
+  v0.4), `statement`, `doubt`, `settles_by`, `flip_point`, `crux` (true for the one to
+  three the answer turns on), `branch_id`, `status`, `set_aside` (the reason, or null).
+  Every change goes through a tool and leaves a history entry.
   - Status: `open` → `in_progress` (lead dispatches) → `proposed_done` (worker) →
     by the branch reviewer's verdict: `answered`, `gap_accepted`, back to
     `in_progress` (`find_more` with the method named, `analyse`, `bound`), or
@@ -323,13 +415,15 @@ Each guard has a producer in the live path, or it would block every run.
   conditions, one per line. The lead calls it after every review round. `finish_run`
   releases when nothing is unmet, so it is never used to probe.
 - **Reviews carry structured points.** `record_review` takes the review text and a
-  list of points, each `{point, material: true|false}`; the reviewer judges
-  materiality, code only reads it.
+  list of points, each `{point, material: true|false, node, criterion}` (v0.4: at least
+  one of node and criterion set); the reviewer judges materiality, code only reads it.
 - **`finish_run` refuses** unless:
-  - every leaf node (`condition`, `rival`, and an `open_lane` that holds work) is
-    `answered`, `gap_accepted` or `stopped_by_limit`; an `option` or other parent node
-    closes when all its children have closed (derived, never set); an empty open lane
-    needs nothing. A leaf the lead does not research is still closed only by a branch
+  - `criteria.md` names at least one criterion (v0.4);
+  - every leaf node (a `question`, and an `open_lane` that holds work) not set aside is
+    `answered`, `gap_accepted` or `stopped_by_limit`; a parent node closes when all its
+    children have closed (derived, never set); an empty open lane needs nothing; a
+    set-aside node and its subtree count as closed (v0.4); every point sent back on a
+    closed branch has a resolution (v0.4). A leaf the lead does not research is still closed only by a branch
     review: the lead files it as a branch whose record says what was not done and why,
     and the reviewer may accept the gap or send it back;
   - `framer/critique.md` and `framer/lead-response.md` exist;
@@ -367,8 +461,8 @@ Each guard has a producer in the live path, or it would block every run.
 - `s3_hypothesis_in_briefs`: true | false; it needs workers, so with `single_loop`
   the driver records it `not_applicable` and loads no S3 fragment.
 - `s4_orientation`: `frame_first` | `basic_facts` | `primary_record`.
-- `s5_models`: model and effort per role (defaults: Opus 5.5; highest effort for the
-  lead and the final reviewers, high for the rest; never Haiku).
+- `s5_models`: model and effort per role (defaults, v0.4 D10: Opus 5.5 at high effort
+  for every role, the lead included; never Haiku). task.json's `roles` sets the same.
 - `s6_cross_family`: `off` | `during` | `final` (wired later).
 - **Assembly:** the lead's text is `plugin/lead/base.md` followed by one fragment per
   switch, `plugin/lead/<switch>.<value>.md` (an empty file where a value adds
@@ -402,7 +496,8 @@ Each guard has a producer in the live path, or it would block every run.
   sealed runs). `--strict-mcp-config` drops the plugin's own server and
   `--disable-slash-commands` drops the method skills, so Stemma runs use neither.
 - Input: `task.json` with `question`, optional `intake` answers, `attachments`,
-  optional `as_of`, optional `switches`. The sealed side adapts its task package to
+  optional `as_of`, optional `switches`, and (v0.4) optional `scope`, `criteria`,
+  `options`, `roles` and `stop_after` (section 0). The sealed side adapts its task package to
   this; the driver never reads benchmark material itself.
 - **Attachments mid-run** (design step 1: an attachment slot open at every stage; a
   client's question list arriving mid-run is mapped at once). `stemma attach <run_id>
@@ -416,7 +511,10 @@ Each guard has a producer in the live path, or it would block every run.
   effort of each (for the lead's subagents, from their transcripts, which land in
   the clean config's `projects/<cwd-slug>/`; a copied config folder is not signed
   in), waits, records artifact-landed events, keeps `status.json` and
-  `status.html`, and resumes a stopped run.
+  `status.html`, and resumes a stopped run, by itself after a usage stop (section 0).
+- Outcomes and exit codes: `released` 0, `ended_without_release` 1, `canary_failed` 2,
+  `stopped_by_limit` 3, `lead_failed` 4, `release_withdrawn` 5, `revocation_failed` 6,
+  `usage_limited` 7 (resumes left used up), `frame_complete` 8, `driver_stopped` 130.
 - It runs the system under test only through the isolated runner configuration, and
   reads only transcripts of sessions it launched.
 
