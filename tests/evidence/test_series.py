@@ -110,7 +110,9 @@ def test_a_poisoned_cache_entry_is_refused(make_service: Factory, run_dir: Path,
 
 @pytest.mark.parametrize("body,why", [
     (b"No data", "no data rows"), (b"Date,Close\n", "no data rows"),
-    (b"<html><body>Exceeded the daily hits limit</body></html>\n<p>x</p>", "not a date"),
+    (b"<html><body>Exceeded the daily hits limit</body></html>\n<p>x</p>", "a web page"),
+    ((b"<!DOCTYPE html><html><noscript>This site requires JavaScript to verify your "
+      b"browser.</noscript></html>"), "a web page"),
     (b"observation_date,DGS10\nSeptember 30,3.98\n", "YYYY-MM-DD"),
     (b"\xff\xfe\x00junk", "not UTF-8"),
 ])

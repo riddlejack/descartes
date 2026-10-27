@@ -1,0 +1,359 @@
+{
+ "as_of": "2026-10-01",
+ "cutoff_utc": "2026-10-01T00:00:00+00:00",
+ "at": "2026-10-27T17:55:07.025888+00:00",
+ "seed_attempts": [
+  {
+   "url": "https://investors.coreweave.com/",
+   "status": "no_snapshot_before_as_of",
+   "kind": "archive",
+   "detail": "CDX lists no capture",
+   "sha256": null,
+   "snapshot_timestamp": null,
+   "memento_datetime": null,
+   "snapshot_age_days": null,
+   "final_url": null,
+   "text_chars": null
+  },
+  {
+   "url": "https://investors.coreweave.com/news-events/press-releases",
+   "status": "no_snapshot_before_as_of",
+   "kind": "archive",
+   "detail": "CDX lists no capture",
+   "sha256": null,
+   "snapshot_timestamp": null,
+   "memento_datetime": null,
+   "snapshot_age_days": null,
+   "final_url": null,
+   "text_chars": null
+  },
+  {
+   "url": "https://www.coreweave.com/newsroom",
+   "status": "ok",
+   "kind": "archive",
+   "detail": null,
+   "sha256": "229c34030f2e7c2b145003f3afe94ac05b18a28912efffdb52198cdabf0fa1de",
+   "snapshot_timestamp": "20260924174621",
+   "memento_datetime": [
+    "Thu, 24 Sep 2026 17:46:21 GMT"
+   ],
+   "snapshot_age_days": 6,
+   "final_url": "https://web.archive.org/web/20260924174621id_/https://coreweave.com/newsroom",
+   "text_chars": 25176
+  }
+ ],
+ "seed": "https://www.coreweave.com/newsroom",
+ "links": {
+  "base_url": "https://coreweave.com/newsroom",
+  "count": 151,
+  "truncated": false,
+  "not_web_links": 0,
+  "first_40": [
+   {
+    "url": "https://www.coreweave.com/news/coreweave-becomes-the-only-provider-to-earn-semianalysis-platinum-clustermax-tm-rating-three-consecutive-times",
+    "text": "Read more"
+   },
+   {
+    "url": "https://coreweave.com/news/coreweave-becomes-the-only-provider-to-earn-semianalysis-platinum-clustermax-tm-rating-three-consecutive-times",
+    "text": ""
+   },
+   {
+    "url": "https://coreweave.com/",
+    "text": "Read more"
+   },
+   {
+    "url": "https://coreweave.com/newsroom",
+    "text": "Main menu"
+   },
+   {
+    "url": "https://coreweave.com/platform",
+    "text": "View the platform"
+   },
+   {
+    "url": "https://coreweave.com/why-coreweave",
+    "text": "Why CoreWeave?"
+   },
+   {
+    "url": "https://coreweave.com/coreweave-arena",
+    "text": "CoreWeave ARENA"
+   },
+   {
+    "url": "https://coreweave.com/trust",
+    "text": "Trust center"
+   },
+   {
+    "url": "https://coreweave.com/ai-data-centers",
+    "text": "Global AI data centers"
+   },
+   {
+    "url": "https://coreweave.com/resources/videos/the-coreweave-effect-powering-the-next-era-of-ai-innovation",
+    "text": ""
+   },
+   {
+    "url": "https://coreweave.com/products/gpu-compute",
+    "text": "GPU compute"
+   },
+   {
+    "url": "https://coreweave.com/products/nvidia-vera-rubin",
+    "text": "NVIDIA Vera Rubin"
+   },
+   {
+    "url": "https://coreweave.com/products/nvidia-blackwell",
+    "text": "NVIDIA Blackwell"
+   },
+   {
+    "url": "https://coreweave.com/products/hgx-h100-h200",
+    "text": "NVIDIA Hopper"
+   },
+   {
+    "url": "https://coreweave.com/products/cpu-compute",
+    "text": "CPU compute"
+   },
+   {
+    "url": "https://coreweave.com/products/bare-metal",
+    "text": "Bare metal servers"
+   },
+   {
+    "url": "https://coreweave.com/products/networking",
+    "text": "Networking"
+   },
+   {
+    "url": "https://coreweave.com/semianalysis",
+    "text": "See why we earned Platinum"
+   },
+   {
+    "url": "https://coreweave.com/products/storage",
+    "text": "AI Object storage"
+   },
+   {
+    "url": "https://coreweave.com/products/storage/dedicated-vast-storage",
+    "text": "Dedicated VAST Storage"
+   },
+   {
+    "url": "https://coreweave.com/products/storage/zero-egress-migration-program",
+    "text": "Get started today"
+   },
+   {
+    "url": "https://coreweave.com/products/coreweave-kubernetes-service",
+    "text": "Managed Kubernetes"
+   },
+   {
+    "url": "https://cdn.prod.website-files.com/62bc66d283fd9c34ffec780a/68f2ac6e70a9958b1fea8e70_COR_WP_00004_TheEssentialCloudForAI_WEB%20(1).pdf",
+    "text": ""
+   },
+   {
+    "url": "https://cdn.prod.website-files.com/62bc66d283fd9c34ffec780a/68f2ac6e70a9958b1fea8e70_COR_WP_00004_TheEssentialCloudForAI_WEB%20(1).pdf?utm_source=coreweave.com&utm_medium=site",
+    "text": "Download whitepaper"
+   },
+   {
+    "url": "https://coreweave.com/products/sunk",
+    "text": "SUNK"
+   },
+   {
+    "url": "https://coreweave.com/products/sunk/sunk-anywhere",
+    "text": "SUNK Anywhere"
+   },
+   {
+    "url": "https://wandb.ai/site/serverless-rl/",
+    "text": "Serverless RL"
+   },
+   {
+    "url": "https://coreweave.com/products/serverless-inference",
+    "text": "Serverless Inference"
+   },
+   {
+    "url": "https://coreweave.com/products/dedicated-inference",
+    "text": "Dedicated Inference"
+   },
+   {
+    "url": "https://coreweave.com/resources/whitepapers/scaling-frontier-class-ai-training-on-coreweave-a-deep-technical-analysis-of-mlperf-r-training-v6-0-results",
+    "text": "Download our report"
+   },
+   {
+    "url": "https://coreweave.com/products/coreweave-sandboxes",
+    "text": "CoreWeave Sandbox Preview"
+   },
+   {
+    "url": "https://wandb.ai/site/models/",
+    "text": "Training"
+   },
+   {
+    "url": "https://wandb.ai/site/wb-training/",
+    "text": "Fine-tuning"
+   },
+   {
+    "url": "https://wandb.ai/site/agent/",
+    "text": "ARIA - AI Research and Iteration Agent"
+   },
+   {
+    "url": "https://wandb.ai/site/weave/",
+    "text": "Monitor"
+   },
+   {
+    "url": "https://coreweave.com/mission-control",
+    "text": "Mission Control"
+   },
+   {
+    "url": "https://coreweave.com/observability",
+    "text": "Observability"
+   },
+   {
+    "url": "https://coreweave.com/security",
+    "text": "Security"
+   },
+   {
+    "url": "https://coreweave.com/solutions/ai-inference",
+    "text": "Tensorizer"
+   },
+   {
+    "url": "https://coreweave.com/solutions/ai-model-training",
+    "text": "AI model training Train large-scale AI models with purpose-built GPU infrastructure"
+   }
+  ]
+ },
+ "followed": [
+  {
+   "url": "https://www.coreweave.com/news/coreweave-becomes-the-only-provider-to-earn-semianalysis-platinum-clustermax-tm-rating-three-consecutive-times",
+   "status": "ok",
+   "kind": "archive",
+   "detail": null,
+   "sha256": "b33a2e280a7ff1c6d9834fdffee9ded405f642d756564c8f2e6fa811e18c277e",
+   "snapshot_timestamp": "20260929182229",
+   "memento_datetime": [
+    "Tue, 29 Sep 2026 18:22:29 GMT"
+   ],
+   "snapshot_age_days": 1,
+   "final_url": "https://web.archive.org/web/20260929182229id_/https://www.coreweave.com/news/coreweave-becomes-the-only-provider-to-earn-semianalysis-platinum-clustermax-tm-rating-three-consecutive-times",
+   "text_chars": 21611
+  },
+  {
+   "url": "https://coreweave.com/news/coreweave-becomes-the-only-provider-to-earn-semianalysis-platinum-clustermax-tm-rating-three-consecutive-times",
+   "status": "ok",
+   "kind": "archive",
+   "detail": null,
+   "sha256": "b33a2e280a7ff1c6d9834fdffee9ded405f642d756564c8f2e6fa811e18c277e",
+   "snapshot_timestamp": "20260929182229",
+   "memento_datetime": [
+    "Tue, 29 Sep 2026 18:22:29 GMT"
+   ],
+   "snapshot_age_days": 1,
+   "final_url": "https://web.archive.org/web/20260929182229id_/https://www.coreweave.com/news/coreweave-becomes-the-only-provider-to-earn-semianalysis-platinum-clustermax-tm-rating-three-consecutive-times",
+   "text_chars": 21611
+  },
+  {
+   "url": "https://coreweave.com/newsroom",
+   "status": "ok",
+   "kind": "archive",
+   "detail": null,
+   "sha256": "229c34030f2e7c2b145003f3afe94ac05b18a28912efffdb52198cdabf0fa1de",
+   "snapshot_timestamp": "20260924174621",
+   "memento_datetime": [
+    "Thu, 24 Sep 2026 17:46:21 GMT"
+   ],
+   "snapshot_age_days": 6,
+   "final_url": "https://web.archive.org/web/20260924174621id_/https://coreweave.com/newsroom",
+   "text_chars": 25176
+  }
+ ],
+ "sec_search": [
+  {
+   "args": [
+    "CoreWeave",
+    null,
+    null,
+    1
+   ],
+   "error": {
+    "error": "sec_identity_not_configured",
+    "message": "SEC requires a contact identity; STEMMA_SEC_IDENTITY is not set"
+   }
+  },
+  {
+   "args": [
+    "CoreWeave",
+    [
+     "S-1",
+     "424B4",
+     "10-Q",
+     "8-K"
+    ],
+    null,
+    1
+   ],
+   "error": {
+    "error": "sec_identity_not_configured",
+    "message": "SEC requires a contact identity; STEMMA_SEC_IDENTITY is not set"
+   }
+  },
+  {
+   "args": [
+    "CoreWeave",
+    null,
+    "1769628",
+    1
+   ],
+   "error": {
+    "error": "sec_identity_not_configured",
+    "message": "SEC requires a contact identity; STEMMA_SEC_IDENTITY is not set"
+   }
+  }
+ ],
+ "series": [
+  {
+   "source": "stooq",
+   "symbol": "crwv.us",
+   "status": "series_unreadable",
+   "detail": "unreadable: the first column is not a date",
+   "rows": null,
+   "first_date": null,
+   "last_date": null,
+   "requested_url": "https://stooq.com/q/d/l/?s=crwv.us&i=d&d1=19000101&d2=20260930",
+   "sha256": null
+  },
+  {
+   "source": "stooq",
+   "symbol": "nvda.us",
+   "status": "series_unreadable",
+   "detail": "unreadable: the first column is not a date",
+   "rows": null,
+   "first_date": null,
+   "last_date": null,
+   "requested_url": "https://stooq.com/q/d/l/?s=nvda.us&i=d&d1=19000101&d2=20260930",
+   "sha256": null
+  },
+  {
+   "source": "fred",
+   "symbol": "DGS10",
+   "status": "ok",
+   "detail": null,
+   "rows": 16892,
+   "first_date": "1962-01-02",
+   "last_date": "2026-09-30",
+   "requested_url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10&coed=2026-09-30",
+   "sha256": "bddfe0bd82ba14663bc36fb07b825db9f6c5c5bed75dc050e9822f18f5ae5dca"
+  },
+  {
+   "source": "fred",
+   "symbol": "BAMLH0A0HYM2",
+   "status": "ok",
+   "detail": null,
+   "rows": 774,
+   "first_date": "2023-10-30",
+   "last_date": "2026-09-30",
+   "requested_url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=BAMLH0A0HYM2&coed=2026-09-30",
+   "sha256": "31da066ece2d8b190502e9b8db97c0a8928b399115d21341b03899b74301c7c6"
+  },
+  {
+   "source": "fred",
+   "symbol": "SOFR",
+   "status": "ok",
+   "detail": null,
+   "rows": 2217,
+   "first_date": "2018-04-03",
+   "last_date": "2026-09-30",
+   "requested_url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=SOFR&coed=2026-09-30",
+   "sha256": "c27bdda93270133213b6420e316a359d0e58125706d853c40b59920e0e6c45f9"
+  }
+ ],
+ "violations": []
+}

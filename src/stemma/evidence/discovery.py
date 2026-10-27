@@ -186,6 +186,9 @@ def series_rows(body: bytes, as_of: str | None) -> tuple[dict[str, Any] | None, 
         text = body.decode("utf-8-sig")
     except UnicodeDecodeError:
         return None, "unreadable: not UTF-8 text"
+    if text.lstrip()[:1] == "<":
+        return None, ("unreadable: the source answered with a web page, not CSV (a "
+                      "browser check or an error page)")
     lines = [ln for ln in text.splitlines() if ln.strip()]
     if len(lines) < 2:
         return None, "unreadable: no data rows"
