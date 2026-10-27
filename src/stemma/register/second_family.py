@@ -204,11 +204,20 @@ def parse(text: str | None) -> tuple[str, str]:
     value) is never the verdict. Anything else is a typed error."""
     if not text:
         raise ValueError("the answer is empty")
-    body = re.sub(r"<think>.*?</think>", " ", text, flags=re.DOTALL | re.IGNORECASE)
-    if re.search(r"<think>", body, re.IGNORECASE) or re.search(r"</think>", body,
-                                                                re.IGNORECASE):
+    # A reasoning model's reply is its reasoning, closed by `</think>` (the opening tag
+    # may be the chat template's, not in the reply), then its answer: only what follows
+    # the last `</think>` is the answer, and it must be the object alone. A `<think>`
+    # with no close after it is unfinished reasoning (seen live on nemotron-3-ultra).
+    closes = [m.end() for m in re.finditer(r"</think>", text, re.IGNORECASE)]
+    after = text[closes[-1]:] if closes else text
+    if re.search(r"<think>", after, re.IGNORECASE):
         raise ValueError("the answer holds unfinished reasoning")
-    body = _FENCE_END.sub("", body.rstrip()).rstrip()
+    body = _FENCE_END.sub("", after.rstrip()).rstrip()
+    if closes:
+        body = _FENCE_START.sub("", body.lstrip()) if body.lstrip().startswith("```") \
+            else body.lstrip()
+        if not body.startswith("{"):
+            raise ValueError("after the reasoning, the answer is not one JSON object")
     if not body.endswith("}"):
         raise ValueError("the answer does not end with a JSON object")
     decoder = json.JSONDecoder()
@@ -222,8 +231,8 @@ def parse(text: str | None) -> tuple[str, str]:
         if end == len(body):
             found, start = obj, m.start()
             break
-    if not isinstance(found, dict):
-        raise ValueError("the answer does not end with one complete JSON object")  # noqa: TRY004
+    if not isinstance(found, dict) or (closes and start != 0):
+        raise ValueError("the answer does not end with one complete JSON object")
     if not set(found) <= {"verdict", "reason"} or found.get("verdict") not in ANSWERS:
         raise ValueError("the final object is not {verdict: one of "
                          f"{', '.join(ANSWERS)}, reason: text}}")

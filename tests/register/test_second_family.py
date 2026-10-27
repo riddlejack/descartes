@@ -451,3 +451,16 @@ def test_eligibility_is_the_drivers(reg: Register) -> None:
     assert not reg.second_family_eligible(cid)  # unverified session
     checks_api.mark_verified(reg.run_dir, "s-u", "claude-opus-5-5", "high")
     assert reg.second_family_eligible(cid)
+
+
+def test_nemotron_ultras_shape_is_read_from_after_its_reasoning() -> None:
+    # Seen live: reasoning with no opening tag, closed by </think>, then the object.
+    text = ('The user wants me to verify a claim. I might say {"verdict": "supports"} but '
+            'the year differs.\n\nI\'ll output JSON.</think>'
+            '{"verdict": "does_not_support", "reason": "the passage is FY2024"}')
+    assert sf.parse(text) == ("does_not_support", "the passage is FY2024")
+    for bad in ('reasoning</think>Sure: {"verdict": "supports", "reason": "x"}',
+                'reasoning</think>{"verdict": "supports", "reason": "x"} more',
+                'reasoning</think><think>more {"verdict": "supports", "reason": "x"}'):
+        with pytest.raises((ValueError, json.JSONDecodeError)):
+            sf.parse(bad)
