@@ -11,6 +11,7 @@
     python run.py verify RUN_DIR           re-check a recorded run offline: hashes, quotes, sums
     python run.py report RUN_DIR OUT_DIR   a static report of a run (index.html, for GitHub Pages)
     python run.py tamper RUN_DIR           change one byte of a copy; watch verify refuse it
+    python run.py new "QUESTION"           onboarding: scope, readings, criteria -> task.json
 
 A replay is never shown as live: every recorded line is marked [replay] with its file's
 SHA-256, and only what runs now (the conformance suite, the data layer over the replayed
@@ -178,7 +179,16 @@ def cmd_tamper(run_dir: Path, what: str, keep: bool, baseline: bool) -> int:
                         *([] if baseline else ["--no-baseline"])])
 
 
+def cmd_new(rest: list[str]) -> int:
+    from stemma.onboard.new import main as new_main
+
+    return new_main(rest)
+
+
 def main(argv: list[str] | None = None) -> int:
+    args_in = sys.argv[1:] if argv is None else argv
+    if args_in[:1] == ["new"]:  # onboarding has its own options; see `run.py new -h`
+        return cmd_new(args_in[1:])
     ap = argparse.ArgumentParser(prog="python run.py", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd")
