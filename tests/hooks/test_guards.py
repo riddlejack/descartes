@@ -54,16 +54,34 @@ def events(run_dir: Path) -> list[dict[str, Any]]:
 # --- Agent calls -------------------------------------------------------------------
 
 
-def test_worker_subagent_allowed(run_dir: Path) -> None:
-    r = call(run_dir, "pre", pre(run_dir, "Agent", {"subagent_type": "stemma:worker",
-                                                    "prompt": "go"}))
+@pytest.mark.parametrize("sub", ["stemma:worker", "stemma:idea-generator"])
+def test_worker_subagent_allowed(run_dir: Path, sub: str) -> None:
+    r = call(run_dir, "pre", pre(run_dir, "Agent", {"subagent_type": sub, "prompt": "go"}))
     assert (r.returncode, r.stdout, r.stderr) == (0, "", "")
+
+
+def test_idea_generator_writes_its_ideas_but_not_the_framers_files(run_dir: Path) -> None:
+    def write(name: str) -> subprocess.CompletedProcess[str]:
+        return call(run_dir, "pre", pre(run_dir, "Write", {
+            "file_path": str(run_dir / "framer" / name), "content": "x"},
+            agent_type="stemma:idea-generator", agent_id="a-1"))
+    assert write("ideas.md").returncode == 0
+    for tool_only in ("critique.md", "own-frame.md"):
+        r = write(tool_only)
+        assert r.returncode == 2 and "written only by Stemma's tools" in r.stderr
+
+
+def test_the_blind_frame_cannot_read_the_idea_list(run_dir: Path) -> None:
+    from stemma.driver import settings as st
+    assert "framer/ideas.md" in st.read_denials(run_dir, "blind-framer", "frame:own")
+    assert "framer/ideas.md" not in st.read_denials(run_dir, "blind-framer", "frame:critique")
 
 
 @pytest.mark.parametrize("sub", [None, "fork", "general-purpose", "Explore", "Plan",
                                  "stemma:claim-checker", "stemma:branch-reviewer",
                                  "stemma:blind-framer", "Stemma:worker", "stemma:worker ",
-                                 "stemma:lead", "worker"])
+                                 "stemma:lead", "worker", "idea-generator",
+                                 "Stemma:idea-generator", "stemma:idea-generator "])
 def test_hostile_subagent_types_refused(run_dir: Path, sub: str | None) -> None:
     ti: dict[str, Any] = {"prompt": "go"}
     if sub is not None:

@@ -40,14 +40,15 @@ _TOOL = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\(.*\))?$")
 
 # What the blind roles may not read (section 6), as run-relative patterns. A trailing "/"
 # is a folder, "**" any depth. Beyond the contract's list: `history/` holds earlier frames,
-# `tree.md` renders `tree.json`, and the final deliverable is a draft in final form.
+# `tree.md` renders `tree.json`, the final deliverable is a draft in final form, and
+# `framer/ideas.md` is the idea generator's tree, which the blind frame must not see.
 CLAIM_CHECKER_DENY: Final = (
     "frame.md", "history/", "framer/", "draft/", "deliverable/", "reviews/", "register/",
     "branches/**/record.md", "branches/**/order.md", "branches/**/restatement.md",
 )
 FRAMER_OWN_DENY: Final = (
     "frame.md", "history/", "tree.json", "tree.md", "branches/", "draft/", "deliverable/",
-    "reviews/", "analysis/", "register/",
+    "reviews/", "analysis/", "register/", "framer/ideas.md",
 )
 # The decider's-eye reviewer reads only task/, intake.md, criteria.md and the draft under
 # review, and from round 2 on the previous round (D8): reviews/v<n-1>/, the lead's

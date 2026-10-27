@@ -29,7 +29,8 @@ def test_defaults_filled() -> None:
     assert {r: v["effort"] for r, v in m.items()} == {
         "lead": "high", "deciders-eye-reviewer": "high", "evidence-auditor": "high",
         "mechanical-reader": "high", "worker": "high", "blind-framer": "high",
-        "claim-checker": "high", "branch-reviewer": "high", "retrospective-writer": "high"}
+        "claim-checker": "high", "branch-reviewer": "high", "retrospective-writer": "high",
+            "idea-generator": "high"}
     assert {v["model"] for v in m.values()} == {"claude-opus-5-5"}
 
 
