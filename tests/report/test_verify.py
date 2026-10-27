@@ -14,8 +14,8 @@ from report_fixture import fresh_copy, release, seal
 from stemma.register.derivation import DerivationError
 from stemma.report import verify
 
-RUN1 = Path(os.environ.get("STEMMA_RUN1_DIR") or Path.home() / ".private/runs/"
-            "stemma2-walking-skeleton/20261026-070412-2b3c98")
+# Run 1's recorded folder, kept outside the repository; these tests skip without it.
+RUN1 = Path(os.environ.get("STEMMA_RUN1_DIR") or "/nonexistent-stemma-run1")
 needs_sandbox = pytest.mark.skipif(sys.platform != "darwin", reason="sandbox-exec is macOS's")
 
 
@@ -402,7 +402,8 @@ def test_a_folder_that_is_not_a_run_is_a_loud_error(tmp_path: Path) -> None:
 
 
 @needs_sandbox
-@pytest.mark.skipif(not (RUN1 / "run.json").exists(), reason="run 1's folder is not here")
+@pytest.mark.skipif(not (RUN1 / "run.json").exists(),
+                    reason="set STEMMA_RUN1_DIR to run 1's folder")
 def test_run_one_verifies_in_under_a_minute_and_names_its_differences() -> None:
     """Run 1's real folder: every capture, quotation and fingerprint holds; the
     calculations whose scripts were edited after filing are named (a real finding)."""

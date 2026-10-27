@@ -329,7 +329,7 @@ The texts now follow D1 to D10 of `V2-CHANGES-2026-10-27.md`; each changed line'
 comment cites the decision and the run 1 diagnosis section behind it. Lines whose
 failure no longer exists came out: "make it a choice", options and their conditions
 as the tree, the rival node, "options close through their conditions", "never
-dropping or thinning", and phrase about a past error (its failure,
+dropping or thinning", and a phrase naming a past error by its origin (its failure,
 a striking claim on a sampled universe, is kept).
 
 ### What is shown
@@ -527,7 +527,7 @@ skipped.
 
 ## Tree-skill fix (Orchestrator 3, 27 October)
 
-Evidence: `~/.private/stemma-design/build-2026-10/tree-skill/DIAGNOSIS.md`. The method
+Evidence: the tree-skill diagnosis, a private design record. The method
 body is the orchestrator's text verbatim; the role lint forced no wording change. The
 sentence splitter takes rule 4's bold head ("Go deeper where a node still has parts") as
 its own sentence, so `skill-evidence.md` lists it and its continuation separately.
