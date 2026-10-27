@@ -133,3 +133,33 @@ structural tree edits.
   `set_aside` field and `closes_by` values `set_aside` and `ancestor_set_aside` in
   `tree.json`, outcome `frame_complete` (exit 8), and the status state
   `waiting_for_usage_reset` with `resume_at`.
+
+## N1, the second model family: what run 1 showed (27 Oct)
+
+Run live on run 1, with the strict parser and Nemotron Ultra pinned by name, N1 asked
+the 49 cited claims the driver itself would ask: 40 agreed with Claude and 9 disagreed
+(Claude holds, Nemotron does not support). That cost 251,000 Nemotron tokens, about
+18 s per answer, and 505 s of wall time at two in flight. The third look then put each
+of the 9 to a fresh Claude claim checker through the driver's own launch path
+(`tests/e2e/third_look.py`). All 9 recorded holds and none changed a verdict. That cost
+9 Opus sessions, 113 s, about $2.72. The two models did not see the same evidence: the
+checker reads the whole stored document, while Nemotron sees each quotation with 600
+characters of context. Every figure Nemotron called missing lay outside its window and
+inside the stored source.
+- (a) Claude wrong: none.
+- (b) The claim is right but its cited span is too narrow: 1e303d628b04, 36ae5c7f938a,
+  5d140c4f1fc5, 85787f92ad95, a9652819d902 and c33701ec451f, each supported elsewhere
+  in the documents it cites; and 05375029d056, which leans on two other registered
+  claims (a414f6a87516, 22cd53b36d42) that its own support does not cite.
+- (c) Nemotron wrong because N1 asked the wrong question: 02dddcd40aa2 and
+  19a446a5cf30, both estimates, whose value is their derivation's. Estimated claims
+  are therefore no longer N1-eligible; their observed inputs are asked on their own.
+
+The orchestrator's recommendation, recorded here for the owner and the next
+orchestrator, who decide: N1 as built does not catch Claude errors (none on run 1), but
+it does measure something the reader experiences. That is whether the cited span
+alone shows what the claim says, which is exactly what a reader sees when the report
+viewer opens a citation. The honest feature is therefore a citation-precision check:
+Nemotron sees only what the reader will see, and its finding goes back to the claim's
+author as "widen or fix the cited span", not to a full third look. The routing change
+is not built.

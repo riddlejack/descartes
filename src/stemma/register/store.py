@@ -369,10 +369,14 @@ class Register:
 
     def second_family_eligible(self, cid: str) -> bool:
         """Whether a claim is one the second family looks at (shared with the replay):
-        not superseded, resting on a source passage, with a Claude verdict from a
-        verified session."""
+        not superseded, not an estimate, resting on a source passage, with a Claude
+        verdict from a verified session."""
         rec = self._claim_record(cid)
         if rec["superseded_by"] or not rec.get("support") or rec["verdict"] is None:
+            return False
+        if rec.get("tier") == "estimated":
+            # An estimate's value comes from its derivation, not a passage; its observed
+            # inputs are asked on their own (run 1's third looks, 27 Oct).
             return False
         return rec["verdict_session"] in self._verified()
 

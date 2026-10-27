@@ -464,3 +464,19 @@ def test_nemotron_ultras_shape_is_read_from_after_its_reasoning() -> None:
                 'reasoning</think><think>more {"verdict": "supports", "reason": "x"}'):
         with pytest.raises((ValueError, json.JSONDecodeError)):
             sf.parse(bad)
+
+
+def test_an_estimate_is_not_asked(reg: Register) -> None:
+    # Run 1's third looks: an estimate's value is its derivation's, not a passage's.
+    from test_contracts_v04 import _estimate
+
+    base = reg.file_claim(WORKER, claim())["claim_id"]
+    e = _estimate(reg, base)
+    rec = reg.get_claim(e)
+    assert rec["tier"] == "estimated"
+    reg._claim_record = lambda cid, _r=reg._claim_record: {  # type: ignore[method-assign]
+        **_r(cid), **({"support": [{"receipt_id": "r1", "quote": "q"}],
+                       "verdict": {"verdict": "holds"}, "verdict_session": "s"}
+                      if cid == e else {})}
+    reg._verified = lambda: frozenset({"s"})  # type: ignore[method-assign]
+    assert not reg.second_family_eligible(e)
