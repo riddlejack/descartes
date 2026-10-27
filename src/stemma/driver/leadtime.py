@@ -54,3 +54,31 @@ def lead_time_used(run_dir: Path, now: float | None = None) -> float:
 
 def lead_time_left(run_dir: Path, lead_max_s: float, now: float | None = None) -> float:
     return lead_max_s - lead_time_used(run_dir, now)
+
+
+def close_orphaned_lead(run_dir: Path) -> dict[str, object] | None:
+    """Record the end of a lead session that never recorded one (its driver died), at
+    the last activity the log holds, so a resume's own events do not stretch it through
+    the downtime. Returns the record written, or None when no lead session is open."""
+    open_name: str | None = None
+    last_at: str | None = None
+    last_t = 0.0
+    for e in jsonl.read_all(run_dir / "events.jsonl"):
+        t = _ts(e.get("at"))
+        if t is None:
+            continue
+        if e.get("role") == "lead" and e.get("event") == "session_launched":
+            open_name = str(e.get("session"))
+        elif (e.get("role") == "lead" and e.get("event") == "session_ended"
+              and str(e.get("session")) == open_name):
+            open_name = None
+        if t >= last_t:
+            last_t, last_at = t, str(e.get("at"))
+    if open_name is None or last_at is None:
+        return None
+    record: dict[str, object] = {
+        "event": "session_ended", "at": last_at, "source": "driver", "role": "lead",
+        "session": open_name, "outcome": "not recorded (driver stopped)",
+        "recovered": True, "closed_at": "the last activity in events.jsonl"}
+    jsonl.append(run_dir / "events.jsonl", record)
+    return record

@@ -243,8 +243,13 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   down); every launch gets only what is left of `lead_max_s`, and the Stop hook, the
   resume of an ended lead and the automatic resume all read the same count.
 - **A usage stop is shared at once:** any session's usage rejection sets one stop flag
-  and persists `usage_limited` under the lock every lead launch decision takes; the Stop
-  hook then lets the lead stop, so the supervisor recovers the run after the reset.
+  and persists `usage_limited` under the lock every lead launch decision takes (a
+  session already marked rate-limited counts, even while its reader waits to persist
+  it, and the flag is read again right before the launch); the Stop hook then lets the
+  lead stop, so the supervisor recovers the run after the reset. A resume clears the old
+  stop, in memory and on disk, under the same lock, before the lead launches.
+- **A crashed driver's lead session** (no `session_ended`) is closed at the last activity
+  the log holds before a resume logs anything, so the downtime is never lead time.
 - **Deliberate stops:** a lead stopped on purpose (SIGTERM or SIGINT sent to its
   process, not by the driver) ends `lead_cancelled` (exit code 9) and is never resumed.
 - **Notices name every unfinished worker:** confirmed kills, and workers started with no

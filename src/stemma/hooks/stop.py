@@ -161,7 +161,9 @@ def decide(hook: dict[str, Any], run_dir: Path, *, clock: Callable[[], float] = 
     limit = float((run.get("limits") or {}).get("lead_max_s", 24 * 3600.0))
     # The lead's cumulative execution time, as the driver counts it: pauses between
     # sessions (usage waits) are not work (review #2).
-    left = lead_time_left(run_dir, limit, now=clock())
+    t0 = clock()
+    left = lead_time_left(run_dir, limit, now=t0)
+    limit_at = t0 + left  # from the account once: scanning time is not added back (#6)
     if left <= 0:
         return StopDecision(False, "", {"why": "the lead's time limit has passed"})
     previous = _read_json(run_dir / HOOK_STATE) or {}
@@ -170,14 +172,15 @@ def decide(hook: dict[str, Any], run_dir: Path, *, clock: Callable[[], float] = 
         previous = {}  # a new driver-authorised launch starts its idle count afresh (#7)
     before = progress_signature(run_dir)
     flight = in_flight(run_dir)
-    limit_at = clock() + left
     if any(flight.values()):
-        deadline = min(clock() + wait_s, limit_at)
+        deadline = min(t0 + wait_s, limit_at)
         while clock() < deadline and progress_signature(run_dir) == before:
             if _usage_stopped(run_dir):
                 return StopDecision(False, "", {"why": "a usage stop: the supervisor recovers"})
             sleep(max(0.0, min(POLL_S, deadline - clock())))  # never past the deadline (#6)
         flight = in_flight(run_dir)
+    if _usage_stopped(run_dir):  # a stop that arrived during the last sleep (#3)
+        return StopDecision(False, "", {"why": "a usage stop: the supervisor recovers"})
     if clock() >= limit_at:
         return StopDecision(False, "", {"why": "the lead's time limit has passed"})
     after = progress_signature(run_dir)

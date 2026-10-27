@@ -180,3 +180,66 @@ def test_workers_started_and_never_ended_are_named(cfg: DriverConfig, tmp: Path,
     stream.write_text("".join(json.dumps(x) + "\n" for x in lines))
     d = Driver(cfg, run, checks_api, limits)
     assert d.worker_ends("lead") == (["b"], ["a"])
+
+
+def test_the_old_usage_stop_is_cleared_on_disk_before_the_lead_launches(
+        cfg: DriverConfig, tmp: Path, fake: Fake, limits: Limits, monkeypatch: Any) -> None:
+    # Re-check A: the resumed lead's Stop hook must not read the old stop.
+    from stemma.driver import runner
+
+    run = create_run(cfg, write_task(tmp), limits=limits)
+    st = {"run_id": run.name, "lead": {"session_id": "sid-1", "launches": 1,
+                                        "running": False, "outcome": "rate_limited"},
+          "artifacts": {}, "check_attempts": {}, "usage_limited": True,
+          "outcome": "usage_limited"}
+    (run / ".stemma/driver-state.json").write_text(json.dumps(st))
+    seen: list[bool] = []
+    real = runner.Driver.start_lead
+
+    def spy(self: Any, resume: bool) -> None:
+        seen.append(json.loads((run / ".stemma/driver-state.json").read_text())
+                    ["usage_limited"])
+        real(self, resume)
+
+    monkeypatch.setattr(runner.Driver, "start_lead", spy)
+    fake.configure({"lead@resume": {"sleep_s": 0.1}})
+    runner.resume(cfg, run, checks_api, limits)
+    assert seen == [False]
+
+
+def test_crash_downtime_is_not_charged_to_the_lead(cfg: DriverConfig, tmp: Path,
+                                                   limits: Limits) -> None:
+    # Re-check B: launch at 0, last activity at 10, no end recorded, resume at 1000.
+    from stemma.driver import leadtime
+    from stemma.register import jsonl
+
+    run = create_run(cfg, write_task(tmp), limits=limits)
+    (run / "events.jsonl").write_text("")
+    jsonl.append(run / "events.jsonl",
+                 {"event": "session_launched", "role": "lead", "session": "lead",
+                  "at": "2099-01-01T00:00:00.000Z"},
+                 {"event": "artifact_landed", "path": "intake.md",
+                  "at": "2099-01-01T00:00:10.000Z"})
+    rec = leadtime.close_orphaned_lead(run)
+    assert rec is not None and rec["at"] == "2099-01-01T00:00:10.000Z"
+    jsonl.append(run / "events.jsonl", {"event": "run_resumed",
+                                        "at": "2099-01-01T00:16:40.000Z"})
+    assert leadtime.lead_time_used(run) == 10.0
+    assert leadtime.close_orphaned_lead(run) is None  # closed once
+
+
+def test_a_rejection_being_persisted_blocks_the_launch(cfg: DriverConfig, tmp: Path,
+                                                       limits: Limits) -> None:
+    # Re-check #4: a reader thread has marked its session rate-limited and waits for the
+    # lock to persist it; the launch decision must already see it.
+    from types import SimpleNamespace
+
+    from stemma.driver.runner import Live
+
+    run = create_run(cfg, write_task(tmp), limits=limits)
+    d = Driver(cfg, run, checks_api, limits)
+    assert d._launch_allowed()
+    sess = SimpleNamespace(rate_limited={"status": "rejected"},
+                           spec=SimpleNamespace(request_id="r1", role="claim-checker"))
+    d.live["check-x"] = Live(sess)  # type: ignore[arg-type]
+    assert not d._launch_allowed()
