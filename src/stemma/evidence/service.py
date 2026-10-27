@@ -20,6 +20,7 @@ from typing import Any
 from stemma.evidence import charset, limits, sec_outline
 from stemma.evidence.archive import Archive
 from stemma.evidence.cache import RequestCache, request_key
+from stemma.evidence.discovery import edgar_hits, edgar_search_url, page_links
 from stemma.evidence.errors import HAS_TEXT, CaptureStatus, EvidenceError
 from stemma.evidence.extract import (
     HTML_TYPES,
@@ -32,6 +33,7 @@ from stemma.evidence.extract import (
     sniff_content_type,
 )
 from stemma.evidence.fetch import Fetcher, FetchResult
+from stemma.evidence.netpolicy import Url
 from stemma.evidence.quotes import find_quote
 from stemma.evidence.sec import (
     EdgarToolsBackend,
@@ -717,6 +719,53 @@ class EvidenceService:
                 "warnings": warnings}
 
     # Reading in parts ------------------------------------------------------------------
+
+    def archived_links(self, sha256: str) -> dict[str, Any]:
+        """The links of a stored HTML page, absolute, each with its text (CONTRACTS 0d):
+        how a worker browses from an archived page in an `as_of` run."""
+        check_sha256(sha256)
+        if not self.store.bytes_path(sha256).exists():
+            raise EvidenceError("unknown_sha256", f"no stored bytes {sha256}")
+        rid = self.store.first_receipt_for(sha256)
+        if rid is None:
+            raise EvidenceError("no_receipt", f"{sha256[:12]} has no receipt to say where it came from")
+        receipt = self.store.get_receipt(rid)
+        media = str(receipt.get("content_type") or "").split(";")[0].strip().lower()
+        if media not in HTML_TYPES:
+            raise EvidenceError("not_html", f"{sha256[:12]} is {media or 'of no stated type'}, "
+                                            f"not an HTML page")
+        if self.as_of is not None and receipt.get("kind") == "web":
+            raise EvidenceError("captured_live", f"{sha256[:12]} was captured from the live "
+                                                 f"web, not from an archive dated before as_of")
+        base = receipt.get("final_url") or receipt.get("requested_url")
+        if not isinstance(base, str) or not base:
+            raise EvidenceError("no_page_url", f"{sha256[:12]} has no page URL to resolve links")
+        found = page_links(self.store.get_bytes(sha256), receipt.get("charset"), base)
+        return {"sha256": sha256, "receipt_id": rid, "kind": receipt.get("kind"),
+                "snapshot_timestamp": (receipt.get("archive") or {}).get("snapshot_timestamp"),
+                **found}
+
+    def sec_search(self, query: str, forms: list[str] | None = None, cik: str | None = None,
+                   page: int = 1) -> dict[str, Any]:
+        """EDGAR full-text search over filings' text; in an `as_of` run only filings
+        filed before `as_of`, the bound set here from run.json (CONTRACTS 0d)."""
+        self._require_sec_identity()
+        as_of = self.as_of
+        url = edgar_search_url(query, as_of, forms, cik, page)
+
+        def hop_check(hop: Url) -> str | None:
+            return None if hop.host == "efts.sec.gov" else f"search redirected to {hop.host}"
+
+        fetched = self.fetcher.fetch(url, hop_check=hop_check)
+        if fetched.failure is not None or fetched.http_status != 200 or fetched.body is None:
+            raise EvidenceError("search_unavailable", "EDGAR full-text search failed: "
+                                + _printable(fetched.detail or f"HTTP {fetched.http_status}"))
+        warnings = []
+        if as_of is not None:
+            warnings.append("filer names are EDGAR's names today, which may differ from "
+                            "the names on the filing date")
+        return {"query": query.strip(), "filed_before": as_of, "page": page,
+                "hits": edgar_hits(fetched.body, as_of), "warnings": warnings}
 
     def outline(self, sha256: str) -> dict[str, Any]:
         check_text_id(sha256)

@@ -81,6 +81,26 @@ def sec_facts(company: str, concept: str, filed_before: str | None = None,
     return result
 
 
+def sec_search(query: str, forms: list[str] | None = None, cik: str | None = None,
+               page: int = 1) -> dict[str, Any]:
+    """Search the full text of SEC filings (EDGAR full-text search, filings since 2001).
+    `forms` keeps only those form codes (e.g. ["S-1", "10-K"]); `cik` only that filer;
+    `page` (1 to 20, 100 hits each) pages on until a page comes back empty. Each hit
+    gives accession, form, filing date, filers and the matching document; capture it
+    with sec_capture. When the run has an as_of date, only filings filed before it."""
+    result: dict[str, Any] = _call(lambda s: s.sec_search(query, forms, cik, page))
+    return result
+
+
+def archived_links(sha256: str) -> dict[str, Any]:
+    """The links of a captured HTML page, absolute, each with its text: browse from a
+    captured page (a front page, a press or investor page) to the pages it links to,
+    and capture those. When the run has an as_of date, every page was captured from an
+    archive dated before it, and so is each link you capture next."""
+    result: dict[str, Any] = _call(lambda s: s.archived_links(sha256))
+    return result
+
+
 def outline(sha256: str) -> dict[str, Any]:
     """A stored document's outline: headings or pages, each with start and end offsets."""
     result: dict[str, Any] = _call(lambda s: s.outline(sha256))
@@ -126,8 +146,8 @@ def tables(sha256: str) -> dict[str, Any]:
 
 
 TOOLS: tuple[Callable[..., dict[str, Any]], ...] = (
-    capture, capture_file, sec_filings, sec_capture, sec_facts, outline, read,
-    read_section, search_store, check_quote, tables,
+    capture, capture_file, sec_filings, sec_capture, sec_facts, sec_search, archived_links,
+    outline, read, read_section, search_store, check_quote, tables,
 )
 
 
