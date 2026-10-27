@@ -202,12 +202,38 @@ class NightshiftClient:
             raise NightshiftOffline(s.detail)
         return s.models
 
+    def _listed(self) -> tuple[str, ...]:
+        """Every model id `GET /v1/models` lists (asked once per client)."""
+        if getattr(self, "_listed_ids", None) is None:
+            ans = self.transport("GET", f"{self.base_url}/models", None,  # offline: raises
+                                 self._headers(False), PROBE_TIMEOUT_S)
+            if ans.status in (401, 403):
+                raise NightshiftUnauthorized(f"HTTP {ans.status}")
+            try:
+                data = json.loads(ans.body.decode("utf-8"))
+                ids = tuple(str(m["id"]) for m in data["data"]
+                            if isinstance(m, dict) and "id" in m)
+            except (ValueError, KeyError, TypeError) as exc:
+                raise NightshiftError("GET /v1/models did not answer a model list") from exc
+            self._listed_ids: tuple[str, ...] | None = ids
+        assert self._listed_ids is not None  # invariant: set above
+        return self._listed_ids
+
     def chat(self, messages: Sequence[Mapping[str, Any]], route: str = "meterless/deep",
              tools: Sequence[Mapping[str, Any]] | None = None, purpose: str = "chat",
              **params: Any) -> ChatResult:
-        """One chat completion through the runtime, with a logged receipt."""
-        if not route.startswith("meterless/"):
-            raise NightshiftError(f"{route!r} is not a meterless routing mode")
+        """One chat completion through the runtime, with a logged receipt. `route` is a
+        `meterless/*` routing mode, or a provider model id pinned by name (for example
+        `nvidia/nemotron-3-ultra-550b-a55b`), which is sent only when `GET /v1/models`
+        lists it; the receipt then says `pinned` and the caller compares the model the
+        answer names with it."""
+        pinned = not route.startswith("meterless/")
+        if pinned:
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._:-]*", route):
+                raise NightshiftError(f"{route!r} is neither a meterless routing mode nor a "
+                                      f"provider model id")
+            if route not in self._listed():
+                raise NightshiftError(f"{route} is not listed by GET /v1/models")
         body: dict[str, Any] = {"model": route, "messages": list(messages), **params}
         if tools:
             body["tools"] = list(tools)
@@ -215,7 +241,8 @@ class NightshiftClient:
         local_id = str(uuid.uuid4())
         receipt: dict[str, Any] = {
             "provider": "nightshift", "contract": CONTRACT, "purpose": purpose,
-            "local_request_id": local_id, "route": route, "base_url": self.base_url,
+            "local_request_id": local_id, "route": route, "pinned": pinned,
+            "base_url": self.base_url,
             "request_sha256": hashlib.sha256(payload).hexdigest(),
             "request_bytes": len(payload), "messages": len(body["messages"]),
             "tools": len(body.get("tools", [])),

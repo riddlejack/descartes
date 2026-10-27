@@ -9,6 +9,7 @@ from its transcript, and its end recorded. A stopped run resumes: the lead with
 
 from __future__ import annotations
 
+import concurrent.futures
 import fcntl
 import importlib
 import json
@@ -228,6 +229,11 @@ class Driver:
         self.stop_after: str = str(self.run.get("stop_after") or "full")
         self._frame_sig: tuple[Any, ...] | None = None
         self._frame_sig_at = 0.0
+        # The second family (N1): asked from a small pool, recorded in this loop.
+        self.second: dict[str, Any] = dict(self.run.get("second_family") or {"enabled": False})
+        self._sf_pool: concurrent.futures.ThreadPoolExecutor | None = None
+        self._sf_futures: dict[str, concurrent.futures.Future[Any]] = {}
+        self._sf_asker: Any = None
         # The lead's remaining permitted wall time on an automatic resume (run_to_end):
         # lead_max_s less what its sessions have already run. None: a session's own limit.
         self.lead_budget_s: float | None = None
@@ -884,12 +890,105 @@ class Driver:
                 events.emit(self.run_dir, "check_relaunch", request_id=req.request_id,
                             previous_session_id=again[1], previous_outcome=again[2])
             self._launch_check(req, relaunch=again is not None)
+        self._second_family_step()
         self._scan_artifacts()
         pending = [r for r in self.api.pending_checks(self.run_dir)
                    if r.request_id not in self.skipped]
-        busy = bool(self.live) or bool(pending) or bool(self.relaunch_due)
+        busy = (bool(self.live) or bool(pending) or bool(self.relaunch_due)
+                or bool(self._sf_futures))
         self.write_status("running" if busy else "stopped")
         return busy
+
+    # ----- the second family (N1) -----------------------------------------------------
+    def _sf_unavailable(self, reason: str) -> None:
+        """Loud, recorded once, and never a stop: the run carries on without it."""
+        self.state["second_family_unavailable"] = reason
+        self._save_state()
+        events.emit(self.run_dir, "second_family_unavailable", reason=reason[:2000])
+        try:
+            self._sf_reg().second_family_unavailable(reason)
+        except Exception as exc:  # noqa: BLE001 - loud, never fatal
+            events.emit(self.run_dir, "second_family_not_recorded",
+                        error=f"{type(exc).__name__}: {exc}")
+
+    def _sf_reg(self) -> Any:
+        if self._reg is None:
+            from stemma.register.store import open_register
+
+            self._reg = open_register(self.run_dir)
+        return self._reg
+
+    def _second_family_step(self) -> None:
+        """Record each answer that came back; then, while the run is not released and
+        the second family is on and reachable, ask about every cited claim that has a
+        verified Claude verdict and no second look yet (at most `max_second_family`
+        questions at once, a resource limit). Any failure here is loud and never stops
+        the run or blocks its release."""
+        if not self.second.get("enabled"):
+            return
+        from stemma.register import second_family as sf
+
+        for cid, fut in list(self._sf_futures.items()):
+            if not fut.done():
+                continue
+            del self._sf_futures[cid]
+            try:
+                answer = fut.result()
+            except sf.SecondFamilyUnavailable as exc:
+                self._sf_unavailable(str(exc))
+                continue
+            except sf.SecondFamilyFailed as exc:
+                events.emit(self.run_dir, "second_family_failed", claim_id=cid, error=str(exc))
+                if not self.released(self.run_dir):
+                    try:
+                        self._sf_reg().record_second_family_failure(cid, str(exc))
+                    except Exception as exc2:  # noqa: BLE001 - loud, never fatal
+                        events.emit(self.run_dir, "second_family_not_recorded", claim_id=cid,
+                                    error=f"{type(exc2).__name__}: {exc2}")
+                continue
+            except Exception as exc:  # noqa: BLE001 - loud, never fatal
+                events.emit(self.run_dir, "second_family_failed", claim_id=cid,
+                            error=f"{type(exc).__name__}: {exc}")
+                continue
+            if self.released(self.run_dir):
+                events.emit(self.run_dir, "second_family_after_release", claim_id=cid,
+                            verdict=answer.verdict)  # the sealed record stays as it was
+                continue
+            try:
+                body = self._sf_reg().record_second_family(cid, answer)
+            except Exception as exc:  # noqa: BLE001 - loud, never fatal
+                events.emit(self.run_dir, "second_family_not_recorded", claim_id=cid,
+                            error=f"{type(exc).__name__}: {exc}")
+                continue
+            events.emit(self.run_dir, "second_family_answered", claim_id=cid,
+                        verdict=body["verdict"], served_model=body.get("served_model"),
+                        claude=body["compared_with"]["verdict"],
+                        disagrees=body["disagrees"])
+        if self.state.get("second_family_unavailable") or self.released(self.run_dir):
+            return
+        try:
+            reg = self._sf_reg()
+            due = [c for c in reg.second_family_due() if c not in self._sf_futures]
+        except Exception as exc:  # noqa: BLE001 - loud, never fatal
+            events.emit(self.run_dir, "second_family_failed", error=f"{type(exc).__name__}: {exc}")
+            return
+        if not due:
+            return
+        if self._sf_asker is None:
+            try:
+                self._sf_asker = make_asker(self.run_dir)
+            except sf.SecondFamilyUnavailable as exc:
+                self._sf_unavailable(str(exc))
+                return
+        if self._sf_pool is None:
+            self._sf_pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=self.limits.max_second_family, thread_name_prefix="second-family")
+        models = tuple(self.second.get("models") or (sf.PRIMARY_MODEL, sf.FALLBACK_MODEL))
+        for cid in due[: max(0, self.limits.max_second_family - len(self._sf_futures))]:
+            claim = reg.get_claim(cid)
+            self._sf_futures[cid] = self._sf_pool.submit(
+                sf.ask, self._sf_asker, self.run_dir, claim, reg.evidence, models)
+            events.emit(self.run_dir, "second_family_asked", claim_id=cid, models=list(models))
 
     def watch(self) -> int:
         def handler(signum: int, _frame: FrameType | None) -> None:
@@ -946,6 +1045,8 @@ class Driver:
         return "ended_without_release"
 
     def _finish(self, outcome: str) -> int:
+        if self._sf_pool is not None:  # unanswered questions are dropped, never recorded
+            self._sf_pool.shutdown(wait=False, cancel_futures=True)
         from stemma.driver.launch import host_secrets_path
 
         try:  # the secrets live only while sessions may run; a resume writes them again
@@ -1029,6 +1130,23 @@ def show_status(cfg: DriverConfig, run_dir: Path, api: ChecksApi | None = None) 
 
 
 Sleep = Callable[[float], None]
+
+
+def make_asker(run_dir: Path) -> Any:
+    """The second family's asker: Nightshift from the host's own settings (its token
+    stays in the driver process, never in a session). No configuration, or a refusal,
+    is SecondFamilyUnavailable."""
+    from stemma.datalayer.querylog import QueryLog
+    from stemma.providers.nightshift import NightshiftClient, NightshiftError
+    from stemma.register import second_family as sf
+
+    # Outside the sealed record: the receipts the register keeps are what counts.
+    log = QueryLog(Path(".stemma/second-family-requests.jsonl"), root=run_dir)
+    try:
+        client = NightshiftClient.from_env(log)
+    except NightshiftError as exc:
+        raise sf.SecondFamilyUnavailable(f"nightshift_not_configured: {exc}") from exc
+    return sf.nightshift_asker(client)
 
 
 def usage_reset_at(run_dir: Path, since: str | None) -> float | None:

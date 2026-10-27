@@ -345,7 +345,146 @@ class Register:
             out[(f"doc:{r['receipt_id']}", int(r["round"]))] = list(r["claims"])
         for r in self._run_facts("derivation_check_listed"):
             out[(str(r["prompt"]), int(r["round"]))] = list(r["claims"])
+        for r in self._run_facts("recheck_listed"):
+            out[(str(r["prompt"]), int(r["round"]))] = list(r["claims"])
         return out
+
+    # ------------------------------------------------------- second family (N1)
+    def cited_claims(self) -> list[str]:
+        """Every claim a submitted draft cites (by its frozen text), oldest draft first."""
+        out: list[str] = []
+        for v in self.submitted_versions():
+            try:
+                text = safeio.read_text(self.run_dir, frozen_draft(v))
+            except (OSError, UnicodeDecodeError, safeio.UnsafePath):
+                continue
+            for short in dict.fromkeys(tags.claim_tags(text)):
+                try:
+                    cid = self.resolve_claim_id(short)
+                except Refused:
+                    continue
+                if cid not in out:
+                    out.append(cid)
+        return out
+
+    def second_family_due(self) -> list[str]:
+        """Cited claims a second family should look at now: not superseded, resting on a
+        source passage, with a Claude verdict from a verified session, and not looked at
+        yet."""
+        self.wm.refresh()
+        verified = self._verified()
+        due = []
+        for cid in self.cited_claims():
+            rec = self._claim_record(cid)
+            if rec["superseded_by"] or not rec.get("support") or rec["verdict"] is None:
+                continue
+            if rec["verdict_session"] not in verified:
+                continue
+            if self._live_facts(claim_entity(cid), "second_family"):
+                continue
+            due.append(cid)
+        return due
+
+    def record_second_family(self, cid: str, answer: Any) -> dict[str, Any]:
+        """Host only (the driver): a second family's answer on a cited claim, beside the
+        Claude verdict it was compared with. On a disagreement the host asks one fresh
+        Claude checker for a third look, prompt `recheck:<claim_id>`, with both opinions
+        in its assignment; its verdict, the newest, decides."""
+        from stemma.register import second_family as sf
+
+        with self._exclusive():
+            self.wm.refresh()
+            rec = self._claim_record(cid)
+            claude = rec["verdict"] or {}
+            body = {"verdict": answer.verdict, "reason": answer.reason,
+                    "model_asked": answer.model_asked, "served_model": answer.served_model,
+                    "receipt": answer.receipt,
+                    "compared_with": {"verdict": claude.get("verdict"),
+                                      "session": rec["verdict_session"]},
+                    "disagrees": sf.disagrees(claude.get("verdict"), answer.verdict),
+                    "at": now()}
+            source = {"kind": "register", "at": now(), "by": "stemma:host-second-family"}
+            self.wm.assertFact({"about": claim_entity(cid), "predicate": "second_family",
+                                "value": body, "source": source})
+            if body["disagrees"]:
+                prompt = f"recheck:{cid}"
+                rnd = len(checks_api.for_prompt(self.run_dir, "claim-checker", prompt,
+                                                records=self._ck_records)) + 1
+                listing = {
+                    "claim_id": cid, "round": rnd, "statement": rec["statement"],
+                    "value": rec.get("value"), "support": rec.get("support"),
+                    "claude_verdict": {"verdict": claude.get("verdict"),
+                                       "evidence": claude.get("evidence")},
+                    "second_family": {"verdict": answer.verdict, "reason": answer.reason,
+                                      "model": answer.served_model or answer.model_asked},
+                    "claims": [cid],
+                }
+                self._write_once(assignment_file(prompt, rnd),
+                                 json.dumps(listing, indent=2, ensure_ascii=False), prompt, rnd)
+                self._ensure_entity(RUN_ENTITY, "run", "run", source)
+                self.wm.assertFact({"about": RUN_ENTITY, "predicate": "recheck_listed",
+                                    "value": {"prompt": prompt, "round": rnd, "claims": [cid]},
+                                    "source": source})
+                body["recheck_requested"] = checks_api.request_check(
+                    self.run_dir, roles.CLAIM_CHECKER, prompt, "second_family_disagrees",
+                    round_no=rnd).request_id
+            self.rebuild_index()
+        return body
+
+    def record_second_family_failure(self, cid: str, reason: str) -> None:
+        """Host only: this claim got no usable second-family answer (unreadable, or a
+        model other than the one pinned answered). Recorded on the claim, loudly; the
+        claim is not asked again and its Claude verdict stands."""
+        with self._exclusive():
+            self.wm.refresh()
+            source = {"kind": "register", "at": now(), "by": "stemma:host-second-family"}
+            self.wm.assertFact({"about": claim_entity(cid), "predicate": "second_family",
+                                "value": {"verdict": None, "failed": reason[:2000],
+                                          "disagrees": False, "at": now(),
+                                          "compared_with": {"verdict": None,
+                                                            "session": None}},
+                                "source": source})
+
+    def second_family_unavailable(self, reason: str) -> None:
+        """Host only: the second family could not be asked; recorded loudly, never a
+        refusal of the release."""
+        with self._exclusive():
+            self.wm.refresh()
+            source = {"kind": "register", "at": now(), "by": "stemma:host-second-family"}
+            self._ensure_entity(RUN_ENTITY, "run", "run", source)
+            self.wm.assertFact({"about": RUN_ENTITY, "predicate": "second_family_unavailable",
+                                "value": {"reason": reason[:2000], "at": now()},
+                                "source": source})
+
+    def second_family_record(self) -> dict[str, Any]:
+        """For the deliverable and the viewer: every second-family answer, each
+        disagreement with what the third look decided, and any unavailability."""
+        self.wm.refresh()
+        states = checks_api.states(self.run_dir, records=self._ck_records)
+        looked, disagreements = [], []
+        for cid in self.cited_claims():
+            facts = self._live_facts(claim_entity(cid), "second_family")
+            if not facts:
+                continue
+            v = facts[-1]["value"]
+            looked.append({"claim_id": cid, "verdict": v["verdict"],
+                           "served_model": v.get("served_model"),
+                           "claude": v["compared_with"]["verdict"],
+                           **({"failed": v["failed"]} if v.get("failed") else {})})
+            if v.get("disagrees"):
+                rec = self._claim_record(cid)
+                checks = [st for st in states.values()
+                          if st.request.prompt == f"recheck:{cid}"]
+                third = None
+                if any(st.session_id == rec["verdict_session"] for st in checks):
+                    third = (rec["verdict"] or {}).get("verdict")
+                disagreements.append({
+                    "claim_id": cid, "claude": v["compared_with"]["verdict"],
+                    "second_family": v["verdict"], "reason": v.get("reason"),
+                    "third_look": third,
+                    "third_look_status": checks[-1].status if checks else "not_requested"})
+        return {"looked": looked, "disagreements": disagreements,
+                "unavailable": self._run_facts("second_family_unavailable")}
 
     def _due_for_checking(self, cited: list[str]) -> list[str]:
         """The cited claims and, for each cited estimate, its input claims (through
@@ -1787,12 +1926,19 @@ class Register:
             failures.append(f"deliverable line {line}: malformed tag {raw!r}")
         for seg in tags.untagged_number_segments(text):
             failures.append(f"deliverable line {seg.line}: untagged number in {seg.text[:60]!r}")
+        states_now = checks_api.states(self.run_dir, records=self._ck_records)
         for short in dict.fromkeys(tags.claim_tags(text)):
             try:
                 rec = self.get_claim(short)
             except Refused:
                 failures.append(f"tag c:{short} names no claim")
                 continue
+            sf = self._live_facts(claim_entity(rec["claim_id"]), "second_family")
+            if sf and sf[-1]["value"].get("disagrees") and any(
+                    st.request.prompt == f"recheck:{rec['claim_id']}"
+                    and st.status != "ended" for st in states_now.values()):
+                failures.append(f"claim {short}: Claude's and the second family's verdicts "
+                                f"disagree; the third look has not landed")
             if rec["superseded_by"]:
                 failures.append(f"claim {short} is superseded")
             verdict = (rec["verdict"] or {}).get("verdict")
@@ -1877,6 +2023,7 @@ class Register:
         return {"version": version, "criteria": self.criteria(),
                 "set_aside": self.set_aside_nodes(), "assumptions": self.assumptions(),
                 "branch_limits": self.branch_limits(),
+                "second_family": self.second_family_record(),
                 "open_material_points": self.open_material_points(version),
                 "review_rounds": {"used": len(self.submitted_versions()),
                                   "limit": self.max_review_rounds(),
@@ -2134,6 +2281,8 @@ def assignment_file(prompt: str, round_no: int) -> str:
         return f"checks/doc-{ident}.r{round_no}.json"
     if kind == "derivations":
         return f"checks/derivations-{ident}.r{round_no}.json"
+    if kind == "recheck":
+        return f"checks/recheck-{ident}.r{round_no}.json"
     raise ValueError(f"{prompt} is not a claim check prompt")
 
 
