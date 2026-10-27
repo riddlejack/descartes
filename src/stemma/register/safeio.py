@@ -63,6 +63,18 @@ def folder_fd(run_dir: Path, rel: str | PurePosixPath) -> AbstractContextManager
     return _dir_fd(run_dir, _parts(rel), create=False)
 
 
+def exists_nofollow(run_dir: Path, rel: str | PurePosixPath) -> bool:
+    """True when anything (a file, a folder, a link) has the name rel; no link is
+    followed on the way, and a link on the way is UnsafePath."""
+    parts = _parts(rel)
+    try:
+        with _dir_fd(run_dir, parts[:-1], create=False) as dfd:
+            os.stat(parts[-1], dir_fd=dfd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def move(run_dir: Path, src: str | PurePosixPath, dst: str | PurePosixPath) -> None:
     """Rename run_dir/src to run_dir/dst, following no symlink; dst's folders are made,
     and an existing dst is refused (the caller holds the lock that makes dst fresh)."""

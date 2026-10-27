@@ -106,6 +106,7 @@ def test_without_criteria_the_lead_writes_them(cfg: DriverConfig, tmp: Path,
 def seed_frame(run: Path, *, respond: bool) -> None:
     """What the lead and the blind framer would have done through their tools."""
     reg = Register(run)
+    (run / "criteria.md").write_text("- C1: a\n")  # the lead's, at intake
     reg.tree_upsert(LEAD, {"id": "q1", "kind": "question", "statement": "Today's count?"})
     (run / "framer").mkdir(exist_ok=True)
     checks_api.request_check(run, "blind-framer", "frame:own", "run_start")

@@ -275,7 +275,9 @@ def stemma_settings_extra(run_dir: Path, role: str, prompt: str, tools: ToolSets
     if criteria_from_task(run_dir):
         # The user's criteria (D4), written by the driver: no agent changes them.
         deny += [_rule("Write", run_dir, CRITERIA_FILE), _rule("Edit", run_dir, CRITERIA_FILE)]
-        deny_write_abs.append(_abs(run_dir, CRITERIA_FILE))
+    # Only the lead's Write and Edit tools write criteria.md (the guard decides when);
+    # no shell ever does (Codex review #3).
+    deny_write_abs.append(_abs(run_dir, CRITERIA_FILE))
     if cache_dir is not None:
         # A later run is served the cache's entries, so no agent may write them.
         deny += [_rule_abs("Write", cache_dir, folder=True),

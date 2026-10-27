@@ -234,7 +234,8 @@ def test_changing_an_answered_node_reopens_it(reg: Register, change: dict[str, A
     write_record(reg, "b1")
     reg.propose_branch_done(WORKER, "b1")
     reg.record_branch_verdict(reviewer_for(reg, "b1"), "b1", "answered", "done")
-    out = reg.tree_upsert(WORKER, {"id": "n1", **change})
+    who = LEAD if "branch_id" in change else WORKER  # only the lead reassigns (v0.4)
+    out = reg.tree_upsert(who, {"id": "n1", **change})
     assert out["status"] == "in_progress" and out["reopened_from"] == "answered"
     assert "node n1 is in_progress" in " ".join(reg.finish_failures())
 

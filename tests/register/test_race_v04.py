@@ -7,7 +7,7 @@ import multiprocessing as mp
 from pathlib import Path
 from typing import Any
 
-from test_store import LEAD, WORKER, FakeEvidence, claim
+from test_store import LEAD, WORKER, FakeEvidence, claim, finish_reviews
 
 from stemma.register import checks_api, jsonl
 from stemma.register.store import Caller, Register
@@ -46,6 +46,7 @@ def test_submission_and_verdicts_at_once(tmp_path: Path) -> None:
         req = next(x for x in checks_api.pending_checks(run) if x.prompt == f"doc:{r}")
         checks_api.mark_launched(run, req.request_id, f"s-{r}", "claude-opus-5-5", "high")
     (run / "draft/answer.v2.md").write_text(body)
+    finish_reviews(reg, 1)
     ctx = mp.get_context("spawn")
     barrier = ctx.Barrier(3)
     procs = [ctx.Process(target=_submit, args=(str(run), barrier))] + [

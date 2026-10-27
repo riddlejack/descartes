@@ -21,7 +21,7 @@ import anyio
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from stemma.register import jsonl
+from stemma.register import analysis_run, jsonl
 from stemma.register.evidence_port import EvidenceUnavailable
 from stemma.register.filing import Refused
 from stemma.register.store import Caller, Register, now
@@ -97,7 +97,8 @@ def _call_as[T](caller: Caller, tool: str, fn: Callable[[Register, Caller], T]) 
 WRITE_TOOLS = frozenset({"file_claim", "record_claim_verdict", "entity_review", "tree_upsert",
                          "propose_branch_done", "record_branch_verdict",
                          "request_frame_critique", "submit_draft", "finish_run",
-                         "proceed_on_assumption", "record_frame", "record_review"})
+                         "proceed_on_assumption", "record_frame", "record_review",
+                         "revise_criteria"})
 
 
 @server.tool()
@@ -127,6 +128,41 @@ def record_claim_verdict(ctx: Context[Any], claim_id: str, verdict: str, evidenc
     return _call(ctx, "record_claim_verdict",
                  lambda r, c: r.record_claim_verdict(c, claim_id, verdict, evidence,
                                                      corrected_claim))
+
+
+@server.tool()
+async def run_analysis(ctx: Context[Any], script: str, inputs: list[str] | None = None,
+                       documents: list[str] | None = None) -> dict[str, Any]:
+    """Lead and workers: run a script under analysis/ ("analysis/<file>.py") exactly as
+    file_claim re-runs it: with the modules under its folder it imports, no network, no
+    writes outside a temporary folder, a time limit. inputs: the claim ids it reads with
+    stemma.analysis.inputs(); documents: the receipt ids it reads with document().
+    Returns result (the exact value passed to result(), or null), stdout (capped),
+    exit_code, stderr_tail and the bundle's hash and files. Writes nothing to the run."""
+    caller = caller_of(ctx)  # read before leaving the request's task
+
+    def go() -> dict[str, Any]:
+        return _call_as(caller, "run_analysis",
+                        lambda r, c: analysis_run.run_for(r, c, script, inputs, documents))
+
+    return await anyio.to_thread.run_sync(go)
+
+
+@server.tool()
+def check_assignment(ctx: Context[Any]) -> dict[str, Any]:
+    """Claim checker only: the exact list of claims your session was started for (your
+    prompt, doc:<receipt_id> or derivations:v<n>, and its round), with the file that holds
+    it. Record a verdict for each; you may judge no other claim."""
+    return _call(ctx, "check_assignment", lambda r, c: r.check_assignment(c))
+
+
+@server.tool()
+def revise_criteria(ctx: Context[Any], text: str, reason: str) -> dict[str, Any]:
+    """Lead only: replace criteria.md (one line per criterion, "- C1: ...") once the
+    criteria are frozen (they freeze when the first review is asked for), stating why.
+    Final reviews made against the earlier criteria no longer count. The user's own
+    criteria, from the task, are never revised."""
+    return _call(ctx, "revise_criteria", lambda r, c: r.revise_criteria(c, text, reason))
 
 
 @server.tool()

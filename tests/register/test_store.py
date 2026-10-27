@@ -281,6 +281,18 @@ def launched(reg: Register, role: str, prompt: str, session: str) -> Caller:
     return Caller(f"stemma:{role}", None, session)
 
 
+def finish_reviews(reg: Register, version: int) -> None:
+    """The final reviews of `version` end without recording (as the driver records a
+    session that ended): the round is finished, so the next version may be submitted."""
+    for role in ("deciders-eye-reviewer", "evidence-auditor", "mechanical-reader"):
+        for st in checks_api.for_prompt(reg.run_dir, role, f"draft:{version}"):
+            if st.status == "pending":
+                checks_api.mark_launched(reg.run_dir, st.request.request_id,
+                                         f"s-fin-{version}-{role}", "claude-opus-5-5", "high")
+            if st.status != "ended":
+                checks_api.mark_ended(reg.run_dir, st.request.request_id, 0, "completed")
+
+
 def frames_and_reviews(reg: Register, version: int = 1) -> None:
     """The framer's frame and critique, and the three reviews, through their tools."""
     if not reg._recorded_frames("own"):
@@ -457,6 +469,7 @@ def test_waiting_user_branch_proceeds_on_assumption(reg: Register) -> None:
     assert "does not list the assumption taken for branch b1" in " ".join(reg.finish_failures(1))
     (reg.run_dir / "draft/answer.v2.md").write_text(
         "# Answer\n\nThe answer holds. We assume Europe only.\n")
+    finish_reviews(reg, 1)
     reg.submit_draft(LEAD, 2)
     assert "assumption" not in " ".join(reg.finish_failures(2))
 

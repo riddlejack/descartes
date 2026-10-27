@@ -154,9 +154,16 @@ def guard_write(hook: dict[str, Any], run_dir: Path) -> Decision:
         return refuse(hook, f"Refused: {target} is outside the run folder.")
     if paths.is_tool_only(rel):
         return refuse(hook, f"Refused: {rel} is written only by Stemma's tools.")
-    if rel == PurePosixPath(criteria.CRITERIA_FILE) and criteria.from_task(run_dir):
-        return refuse(hook, f"Refused: {rel} holds the user's criteria and is written only "
-                            f"by Stemma's driver.")
+    if rel == PurePosixPath(criteria.CRITERIA_FILE):
+        if criteria.from_task(run_dir):
+            return refuse(hook, f"Refused: {rel} holds the user's criteria and is written "
+                                f"only by Stemma's driver.")
+        if not is_lead_main_thread(hook):
+            return refuse(hook, f"Refused: only the lead writes {rel}, at intake.")
+        if (run_dir / "register" / "criteria").exists():
+            # Frozen at the first review asked for (Codex review #3).
+            return refuse(hook, f"Refused: {rel} is frozen; the lead revises it with "
+                                f"revise_criteria.")
     return ALLOW
 
 

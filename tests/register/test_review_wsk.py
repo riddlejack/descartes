@@ -11,7 +11,7 @@ from test_filing import RATIO, check, estimated, lookup_ab
 from test_store import LEAD, WORKER, FakeEvidence, checker_for, claim, launched, ready_run
 
 from stemma.register import derivation
-from stemma.register.derivation import DerivationError, read_code, rerun
+from stemma.register.derivation import DerivationError, build_bundle, rerun
 from stemma.register.filing import Refused
 from stemma.register.store import Register, closure
 
@@ -96,7 +96,7 @@ def test_a_linked_folder_on_the_way_to_the_script_is_refused(tmp_path: Path) -> 
 
 def test_a_hard_linked_helper_is_refused(tmp_path: Path) -> None:
     (tmp_path / "analysis").mkdir()
-    (tmp_path / "analysis" / "calc.py").write_text(RATIO)
+    (tmp_path / "analysis" / "calc.py").write_text("import helper\n" + RATIO)
     secret = tmp_path / "elsewhere.py"
     secret.write_text("KEY = 'not for the sandbox'\n")
     (tmp_path / "analysis" / "helper.py").hardlink_to(secret)
@@ -108,23 +108,23 @@ def test_a_hard_linked_helper_is_refused(tmp_path: Path) -> None:
 def test_code_limits_are_checked_before_copying(tmp_path: Path,
                                                 monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "analysis").mkdir()
-    (tmp_path / "analysis" / "calc.py").write_text(RATIO)
+    (tmp_path / "analysis" / "calc.py").write_text("import h0, h1, h2\n" + RATIO)
     for i in range(3):
         (tmp_path / "analysis" / f"h{i}.py").write_text("x = 1\n" * 100)
     monkeypatch.setattr(derivation, "CODE_MAX_FILES", 3)
-    with pytest.raises(DerivationError, match="more than the 3 a re-run copies"):
-        read_code(tmp_path, "analysis/calc.py")
+    with pytest.raises(DerivationError, match="more than the 3 Python files a re-run copies"):
+        build_bundle(tmp_path, "analysis/calc.py")
     monkeypatch.setattr(derivation, "CODE_MAX_FILES", 64)
     monkeypatch.setattr(derivation, "CODE_MAX_BYTES", 1000)
     with pytest.raises(DerivationError, match="larger than 1000 bytes together"):
-        read_code(tmp_path, "analysis/calc.py")
+        build_bundle(tmp_path, "analysis/calc.py")
 
 
 def test_document_limits_are_checked_before_copying(tmp_path: Path,
                                                     monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "analysis").mkdir()
     (tmp_path / "analysis" / "calc.py").write_text(RATIO)
-    code = read_code(tmp_path, "analysis/calc.py")
+    code = build_bundle(tmp_path, "analysis/calc.py")
     monkeypatch.setattr(derivation, "DOCUMENTS_MAX", 2)
     with pytest.raises(DerivationError, match="3 documents named, more than 2"):
         rerun(code, {}, {"r1": "a", "r2": "b", "r3": "c"})
@@ -196,7 +196,7 @@ def test_gate_status_reads_the_same_list_finish_run_refuses_with(reg: Register) 
     assert reg.gate_status(LEAD, 1) == {
         "version": 1, "releasable": True, "unmet_count": 0, "unmet": "",
         "open_material_points": {"count": 0, "by_criterion": {}, "by_node": {}},
-        "set_aside": []}
+        "set_aside": [], "branch_limits": []}
     with pytest.raises(Refused, match="read the release gate"):
         reg.gate_status(WORKER, 1)
 

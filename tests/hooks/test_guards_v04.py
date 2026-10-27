@@ -149,3 +149,14 @@ def test_the_other_final_reviewers_read_the_previous_round(tmp_path: Path, role:
         hook = {"tool_name": "Read", "tool_input": {"file_path": str(rd / rel)},
                 "agent_type": role, "session_id": "s", "tool_use_id": "t", "cwd": str(rd)}
         assert guards.guard_read(hook, rd, None).allow, rel
+
+
+def test_only_the_lead_writes_criteria_and_not_once_frozen(run_dir: Path) -> None:
+    _task(run_dir, [])
+    r = call(run_dir, "pre", pre(run_dir, "Write", {"file_path": "criteria.md", "content": "x"},
+                                 agent_type="stemma:worker", agent_id="a1"))
+    assert r.returncode == 2 and "only the lead writes" in r.stderr
+    (run_dir / "register/criteria").mkdir(parents=True)
+    r = call(run_dir, "pre", pre(run_dir, "Edit", {"file_path": "criteria.md", "old_string": "a",
+                                                   "new_string": "b"}))
+    assert r.returncode == 2 and "frozen" in r.stderr

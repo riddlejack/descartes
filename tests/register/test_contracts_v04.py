@@ -22,7 +22,7 @@ from test_store import (
     write_record,
 )
 
-from stemma.register import checks_api, criteria
+from stemma.register import checks_api, criteria, jsonl
 from stemma.register.filing import Refused
 from stemma.register.store import Caller, Register, closure
 
@@ -70,12 +70,13 @@ def test_criteria_ids_run_in_order_without_repeats(text: str) -> None:
 def test_release_needs_criteria(reg: Register) -> None:
     cid = ready_run(reg)
     reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
+    changed = "criteria.md differs from the frozen criteria; only revise_criteria changes them"
     (reg.run_dir / "criteria.md").write_text("# Criteria\n\nnone yet\n")
-    assert reg.finish_failures(1) == ["criteria.md names no criterion (- C1: ...)"]
+    assert reg.finish_failures(1) == ["criteria.md names no criterion (- C1: ...)", changed]
     (reg.run_dir / "criteria.md").unlink()
-    assert reg.finish_failures(1) == ["criteria.md names no criterion (- C1: ...)"]
+    assert reg.finish_failures(1) == ["criteria.md names no criterion (- C1: ...)", changed]
     (reg.run_dir / "criteria.md").write_text("- C1: a\n- C1: b\n")
-    assert reg.finish_failures(1) == ["criteria.md names C1 twice"]
+    assert reg.finish_failures(1) == ["criteria.md names C1 twice", changed]
 
 
 # --- D4: review points name a node or a criterion -----------------------------------
@@ -282,6 +283,10 @@ def test_frame_failures_name_what_is_missing_until_the_frame_is_done(reg: Regist
 # --- D7: claim checks per source document, only for cited claims --------------------
 
 def _cite(reg: Register, version: int, *cids: str) -> None:
+    from test_store import finish_reviews
+
+    if version > 1:
+        finish_reviews(reg, version - 1)
     (reg.run_dir / "draft").mkdir(exist_ok=True)
     body = "".join(f"Figure {i} [[c:{c[:12]}]].\n" for i, c in enumerate(cids, start=1))
     (reg.run_dir / f"draft/answer.v{version}.md").write_text("# Answer\n\n" + body)
@@ -303,7 +308,7 @@ def test_submit_starts_one_checker_per_cited_document(reg: Register) -> None:
     prompts = sorted(r.prompt for r in checks_api.pending_checks(reg.run_dir)
                      if r.role == "claim-checker")
     assert prompts == ["derivations:v1", "doc:r1", "doc:r2"]  # no claim: route (v0.4)
-    listing = json.loads((reg.run_dir / "checks/doc-r1.json").read_text())
+    listing = json.loads((reg.run_dir / "checks/doc-r1.r1.json").read_text())
     assert listing["claims"] == [a] and listing["round"] == 1 and listing["draft_version"] == 1
     assert unused not in json.dumps(listing)
     # A document's checker judges only the claims its list names.
@@ -326,8 +331,10 @@ def test_a_later_draft_checks_only_what_has_no_verdict(reg: Register) -> None:
     _cite(reg, 1, a)
     reg.record_claim_verdict(launched(reg, "claim-checker", "doc:r1", "s-d1"), a, "holds", "ok")
     _cite(reg, 2, a, c)
-    listing = json.loads((reg.run_dir / "checks/doc-r1.json").read_text())
+    listing = json.loads((reg.run_dir / "checks/doc-r1.r2.json").read_text())
     assert listing["claims"] == [c] and listing["round"] == 2
+    # Round 1's assignment is untouched (Codex review #5).
+    assert json.loads((reg.run_dir / "checks/doc-r1.r1.json").read_text())["claims"] == [a]
     # The round-1 session cannot judge round 2's claim; round 2's can.
     with pytest.raises(Refused, match="not started for"):
         reg.record_claim_verdict(Caller("stemma:claim-checker", None, "s-d1"), c, "holds", "x")
@@ -353,22 +360,40 @@ def test_a_planted_link_never_redirects_the_listing(reg: Register, tmp_path: Pat
     a = reg.file_claim(WORKER, claim())["claim_id"]
     (reg.run_dir / "checks").mkdir()
     (reg.run_dir / "elsewhere.json").write_text("{}")
-    (reg.run_dir / "checks/doc-r1.json").symlink_to(reg.run_dir / "elsewhere.json")
-    _cite(reg, 1, a)  # the link is replaced, never followed
+    (reg.run_dir / "checks/doc-r1.r1.json").symlink_to(reg.run_dir / "elsewhere.json")
+    with pytest.raises(Refused, match="already exists; an assignment is never rewritten"):
+        _cite(reg, 1, a)
     assert (reg.run_dir / "elsewhere.json").read_text() == "{}"
-    assert not (reg.run_dir / "checks/doc-r1.json").is_symlink()
+    assert reg.submitted_versions() == []  # the refused submission recorded nothing
     # A linked checks folder is refused outright.
-    b = reg.file_claim(WORKER, claim(statement="Also 1.2bn in fiscal 2025."))["claim_id"]
+    (reg.run_dir / "checks/doc-r1.r1.json").unlink()
+    (reg.run_dir / "checks").rmdir()
     outside = tmp_path / "outside"
     outside.mkdir()
-    for f in (reg.run_dir / "checks").iterdir():
-        f.unlink()
-    (reg.run_dir / "checks").rmdir()
     (reg.run_dir / "checks").symlink_to(outside)
     with pytest.raises(Refused, match="cannot be written safely"):
-        _cite(reg, 2, b)
+        _cite(reg, 1, a)
     assert list(outside.iterdir()) == []
-    assert reg.submitted_versions() == [1]  # the refused submission recorded nothing
+
+
+def test_a_running_checkers_assignment_never_changes(reg: Register) -> None:
+    from test_store import claim
+
+    a = reg.file_claim(WORKER, claim())["claim_id"]
+    _cite(reg, 1, a)
+    chk = launched(reg, "claim-checker", "doc:r1", "s-d1")  # running
+    before = (reg.run_dir / "checks/doc-r1.r1.json").read_bytes()
+    b = reg.file_claim(WORKER, claim(statement="New 1.2bn claim."))["claim_id"]
+    _cite(reg, 2, a, b)
+    assert (reg.run_dir / "checks/doc-r1.r1.json").read_bytes() == before
+    mine = reg.check_assignment(chk)
+    assert (mine["prompt"], mine["round"], mine["claims"]) == ("doc:r1", 1, [a])
+    two = reg.check_assignment(launched(reg, "claim-checker", "doc:r1", "s-d2"))
+    assert two["round"] == 2 and two["claims"] == [b]
+    with pytest.raises(Refused, match="not started for"):
+        reg.record_claim_verdict(chk, b, "holds", "x")
+    with pytest.raises(Refused, match="do not read check assignments"):
+        reg.check_assignment(LEAD)
 
 
 # --- D8: final reviewers see the previous round's points and the lead's response ----
@@ -377,7 +402,7 @@ def test_a_new_round_shows_the_previous_points_and_needs_a_response(reg: Registe
     cid = ready_run(reg)  # v1 reviewed, no points
     reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
     (reg.run_dir / "draft/answer.v2.md").write_text("# v2\n")
-    reg.submit_draft(LEAD, 2)
+    reg.submit_draft(LEAD, 2)  # v1's three reviews are recorded, with no points
     shown = (reg.run_dir / "register/drafts/previous.v2.md").read_text()
     assert "- none" in shown and "(none written)" in shown
     for i, role in enumerate(("deciders-eye-reviewer", "evidence-auditor", "mechanical-reader")):
@@ -387,11 +412,12 @@ def test_a_new_round_shows_the_previous_points_and_needs_a_response(reg: Registe
     (reg.run_dir / "draft/answer.v3.md").write_text("# v3\n")
     with pytest.raises(Refused, match="answers them before version 3"):
         reg.submit_draft(LEAD, 3)
-    (reg.run_dir / "draft/response.v3.md").write_text("Fixed the typo only.")
-    with pytest.raises(Refused, match="does not name point v2.de.1"):
+    (reg.run_dir / "draft/response.v3.md").write_text("v2.de.2: fixed the typo.")
+    with pytest.raises(Refused, match="does not name points v2.de.1"):
         reg.submit_draft(LEAD, 3)
     assert reg.submitted_versions() == [1, 2]
-    (reg.run_dir / "draft/response.v3.md").write_text("v2.de.1: now ports throughout.")
+    (reg.run_dir / "draft/response.v3.md").write_text(
+        "v2.de.1: now ports throughout.\nv2.de.2: fixed the typo.")
     reg.submit_draft(LEAD, 3)
     shown = (reg.run_dir / "register/drafts/previous.v3.md").read_text()
     assert "- v2.de.1 (material; criterion C2, node n1): the count mixes" in shown
@@ -487,7 +513,7 @@ def test_an_estimate_on_no_document_goes_to_the_derivations_check(reg: Register)
         f"- Over 3 years [[c:{assumed[:12]}]] it holds.\n\n"
         f"Again, 3 years [[c:{assumed[:12]}]] is assumed.\n")
     reg.submit_draft(LEAD, 1)
-    der = json.loads((reg.run_dir / "checks/derivations-v1.json").read_text())
+    der = json.loads((reg.run_dir / "checks/derivations-v1.r1.json").read_text())
     by = {c["claim_id"]: c for c in der["claims"]}
     assert set(by) == {e, assumed}
     assert by[e]["tier"] == "estimated" and by[assumed]["tier"] == "assumed"
@@ -495,7 +521,7 @@ def test_an_estimate_on_no_document_goes_to_the_derivations_check(reg: Register)
     assert len(by[assumed]["sentences"]) == 2  # cited twice, both sentences listed
     assert "doubled" not in json.dumps(by[assumed])  # blind to the rest of the draft
     # The estimate's input is checked through its own document, though no draft cites it.
-    assert json.loads((reg.run_dir / "checks/doc-r1.json").read_text())["claims"] == [base]
+    assert json.loads((reg.run_dir / "checks/doc-r1.r1.json").read_text())["claims"] == [base]
     chk = launched(reg, "claim-checker", "derivations:v1", "s-der")
     with pytest.raises(Refused, match="not started for"):
         reg.record_claim_verdict(chk, base, "holds", "x")
@@ -557,3 +583,129 @@ def test_new_material_points_on_a_closing_verdict_stay_as_open_limits(reg: Regis
     reg.finish_run(LEAD, 1)
     rec_json = json.loads((reg.run_dir / "deliverable/record.json").read_text())
     assert rec_json["branch_limits"] == limits
+
+
+def test_a_later_version_waits_for_the_previous_round(reg: Register) -> None:
+    from test_store import finish_reviews
+
+    ready_run(reg)  # v1's reviews recorded
+    (reg.run_dir / "draft/answer.v2.md").write_text("# v2\n")
+    reg.submit_draft(LEAD, 2)
+    (reg.run_dir / "draft/answer.v3.md").write_text("# v3\n")
+    with pytest.raises(Refused, match="reviews of version 2 have not finished"):
+        reg.submit_draft(LEAD, 3)
+    # A review whose session the usage limit ended is rerun on resume: not finished.
+    req = next(r for r in checks_api.pending_checks(reg.run_dir)
+               if r.prompt == "draft:2" and r.role == "evidence-auditor")
+    checks_api.mark_launched(reg.run_dir, req.request_id, "s-u", "claude-opus-5-5", "high")
+    checks_api.mark_ended(reg.run_dir, req.request_id, 1, "rate_limited")
+    with pytest.raises(Refused, match="evidence-auditor"):
+        reg.submit_draft(LEAD, 3)
+    finish_reviews(reg, 2)
+    with pytest.raises(Refused, match="evidence-auditor"):
+        reg.submit_draft(LEAD, 3)  # still rate_limited: rerun, not finished
+    checks_api.mark_launched(reg.run_dir, req.request_id, "s-u2", "claude-opus-5-5", "high",
+                             relaunch=True)
+    checks_api.mark_ended(reg.run_dir, req.request_id, 0, "completed")
+    reg.submit_draft(LEAD, 3)
+
+
+def test_obligations_follow_a_node_to_another_branch(reg: Register) -> None:
+    _proposed(reg)
+    reg.record_branch_verdict(reviewer_for(reg, "b1", "s-r1"), "b1", "analyse", "x",
+                              points=[mat(node="n1")])
+    with pytest.raises(Refused, match="only the lead moves node n1"):
+        reg.tree_upsert(WORKER, {"id": "n1", "branch_id": "b2"})
+    reg.tree_upsert(LEAD, {"id": "n1", "branch_id": "b2"})
+    assert [p["id"] for p in reg.sent_back("b2")] == ["b1.r1.1"]
+    write_record(reg, "b2")
+    with pytest.raises(Refused, match="points b1.r1.1 were sent back"):
+        reg.propose_branch_done(WORKER, "b2")
+    revision(reg, "b2", 1, "b1.r1.1 disputed")
+    reg.propose_branch_done(WORKER, "b2")
+    rev = reviewer_for(reg, "b2", "s-r2")
+    with pytest.raises(Refused, match="a branch is sent back once"):
+        reg.record_branch_verdict(rev, "b2", "bound", "again", points=[mat(node="n1")])
+    with pytest.raises(Refused, match="b1.r1.1 was sent back on this branch"):
+        reg.record_branch_verdict(rev, "b2", "answered", "ok")
+
+
+def test_a_worker_cannot_hide_work_under_a_set_aside_node(reg: Register) -> None:
+    reg.tree_upsert(LEAD, {"id": "q", "kind": "question", "statement": "x",
+                           "set_aside": "moot"})
+    with pytest.raises(Refused, match="under a node set aside"):
+        reg.tree_upsert(WORKER, {"id": "w1", "kind": "question", "statement": "y",
+                                 "parent": "q", "branch_id": "b1"})
+    reg.tree_upsert(WORKER, {"id": "w2", "kind": "question", "statement": "z"})
+    with pytest.raises(Refused, match="only the lead moves node w2"):
+        reg.tree_upsert(WORKER, {"id": "w2", "parent": "q"})
+
+
+# --- Codex review #3: the criteria are frozen before any review -----------------------
+
+def test_criteria_freeze_at_the_first_review_and_reviews_bind_them(reg: Register) -> None:
+    cid = ready_run(reg)  # proposing b1 froze the criteria
+    reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
+    frozen = reg.frozen_criteria()
+    assert frozen is not None and frozen["round"] == 1
+    assert (reg.run_dir / frozen["file"]).read_text() == C
+    # A hand edit after freezing blocks the release.
+    (reg.run_dir / "criteria.md").write_text("- C1: Something nobody reviewed.\n")
+    assert any("differs from the frozen criteria" in f for f in reg.finish_failures(1))
+    (reg.run_dir / "criteria.md").write_text(C)
+    assert reg.finish_failures(1) == []
+    # A revision by the lead is allowed, and the reviews made before it stop counting.
+    with pytest.raises(Refused, match="do not revise the criteria"):
+        reg.revise_criteria(WORKER, "- C1: x\n", "why")
+    with pytest.raises(Refused, match="states its reason"):
+        reg.revise_criteria(LEAD, "- C1: x\n", " ")
+    with pytest.raises(Refused, match="name no criterion"):
+        reg.revise_criteria(LEAD, "nothing here\n", "why")
+    out = reg.revise_criteria(LEAD, C + "- C3: Names its sources.\n", "the critique asked")
+    assert out["round"] == 2 and "C3" in out["criteria"]
+    unmet = reg.finish_failures(1)
+    assert len([f for f in unmet if "judged criteria since revised" in f]) == 3
+
+
+def test_the_users_criteria_are_never_revised(reg: Register) -> None:
+    (reg.run_dir / "task").mkdir()
+    (reg.run_dir / "task/task.json").write_text(json.dumps({"question": "q",
+                                                            "criteria": ["a"]}))
+    with pytest.raises(Refused, match="the user's criteria"):
+        reg.revise_criteria(LEAD, "- C1: b\n", "why")
+
+
+def test_no_review_starts_without_criteria(reg: Register) -> None:
+    (reg.run_dir / "criteria.md").unlink()
+    reg.tree_upsert(LEAD, {"id": "n1", "kind": "question", "statement": "x", "branch_id": "b1"})
+    write_record(reg, "b1")
+    with pytest.raises(Refused, match="write it at intake, before any review"):
+        reg.propose_branch_done(WORKER, "b1")
+
+
+# --- The sealed release ------------------------------------------------------------
+
+def test_finish_run_seals_the_run_and_a_changed_byte_fails_the_check(reg: Register) -> None:
+    from stemma.register import manifest
+
+    cid = ready_run(reg)
+    reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
+    out = reg.finish_run(LEAD, 1)
+    assert out["manifest"] == "release/manifest.json"
+    assert manifest.check(reg.run_dir, out["manifest_sha256"]) == []
+    sealed = [e for e in jsonl.read_all(reg.run_dir / "events.jsonl")
+              if e.get("event") == "release_sealed"]
+    assert sealed[0]["manifest_sha256"] == out["manifest_sha256"]
+    rec = reg.run_dir / "branches/b1/record.md"
+    rec.write_bytes(rec.read_bytes()[:-1] + b"y")
+    assert manifest.check(reg.run_dir, out["manifest_sha256"])
+
+
+def test_a_run_holding_a_link_is_not_released(reg: Register) -> None:
+    cid = ready_run(reg)
+    reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
+    (reg.run_dir / "analysis").mkdir(exist_ok=True)
+    (reg.run_dir / "analysis/elsewhere.py").symlink_to("/etc/hosts")
+    with pytest.raises(Refused, match="could not be sealed"):
+        reg.finish_run(LEAD, 1)
+    assert reg.release_state() == "withdrawn"

@@ -341,7 +341,7 @@ class Register:
             listing = {"receipt_id": rid, "round": rnd, "draft_version": version,
                        "claims": sorted(ids),
                        "statements": {c: self._claim_record(c)["statement"] for c in ids}}
-            self._write(f"checks/doc-{rid}.json", json.dumps(listing, indent=2))
+            self._write_once(assignment_file(prompt, rnd), json.dumps(listing, indent=2))
             self.wm.assertFact({"about": RUN_ENTITY, "predicate": "doc_check_listed",
                                 "value": {"receipt_id": rid, "round": rnd,
                                           "claims": sorted(ids), "version": version},
@@ -361,8 +361,8 @@ class Register:
                     "value": rec.get("value"), "derivation": rec.get("derivation"),
                     "sentences": [sg.text for sg in segs if tag in sg.text]})
             listing2 = {"draft_version": version, "round": rnd, "claims": entries}
-            self._write(f"checks/derivations-v{version}.json",
-                        json.dumps(listing2, indent=2, ensure_ascii=False))
+            self._write_once(assignment_file(prompt, rnd),
+                             json.dumps(listing2, indent=2, ensure_ascii=False))
             self.wm.assertFact({"about": RUN_ENTITY, "predicate": "derivation_check_listed",
                                 "value": {"prompt": prompt, "round": rnd, "version": version,
                                           "claims": no_doc},
@@ -370,6 +370,35 @@ class Register:
             out.append(checks_api.request_check(self.run_dir, roles.CLAIM_CHECKER, prompt,
                                                 event, round_no=rnd).request_id)
         return out
+
+    def _write_once(self, rel: str, text: str) -> None:
+        """A checker's assignment: written once and never changed while it runs (Codex
+        review #5); a name already taken is a loud refusal, never an overwrite."""
+        try:
+            taken = safeio.exists_nofollow(self.run_dir, rel)
+        except (safeio.UnsafePath, NotADirectoryError) as exc:
+            raise Refused(f"Refused: {rel} cannot be written safely.") from exc
+        if taken:
+            raise Refused(f"Refused: {rel} already exists; an assignment is never rewritten.")
+        self._write(rel, text)
+
+    def check_assignment(self, caller: Caller) -> dict[str, Any]:
+        """A claim checker's own assignment: the list its session was launched for (its
+        prompt and round), with the file that holds it."""
+        self._require(caller, frozenset({roles.CLAIM_CHECKER}), "read check assignments")
+        if caller.agent_id:
+            raise Refused("Refused: this session was not started for a claim check.")
+        self.wm.refresh()
+        state = checks_api.state_for_session(self.run_dir, caller.session_id)
+        if state is None or state.request.role != "claim-checker":
+            raise Refused("Refused: this session was not started for a claim check.")
+        prompt, rnd = state.request.prompt, state.request.round
+        rel = assignment_file(prompt, rnd)
+        try:
+            listing = json.loads(safeio.read_text(self.run_dir, rel))
+        except (FileNotFoundError, ValueError, safeio.UnsafePath) as exc:
+            raise Refused(f"Refused: the assignment {rel} cannot be read.") from exc
+        return {"prompt": prompt, "round": rnd, "file": rel, **listing}
 
     @staticmethod
     def home_document(rec: dict[str, Any]) -> str | None:
@@ -827,6 +856,17 @@ class Register:
                                        or not _SAFE_ID.fullmatch(branch)):
                 raise Refused("Refused: branch_id is not a plain id.")
             old = existing.get(nid) or {}
+            if caller.agent_type != roles.LEAD or caller.agent_id:
+                # Structure is the lead's (Codex review #4): an author below it may add a
+                # node, never move one, reassign its branch, or place work where a
+                # set-aside node above would close it unreviewed.
+                if old and any(merged.get(k) != old.get(k) for k in ("parent", "branch_id")):
+                    raise Refused(f"Refused: only the lead moves node {nid} or changes its "
+                                  f"branch.")
+                if not old and parent is not None and closure(
+                        [*existing.values(), merged])[nid]["closes_by"] == "ancestor_set_aside":
+                    raise Refused(f"Refused: node {nid} would sit under a node set aside; only "
+                                  f"the lead places work there.")
             old_status = old.get("status")
             if ("status" in node and node["status"] != old_status
                     and node["status"] not in SETTABLE_BY_AUTHORS):
@@ -913,6 +953,7 @@ class Register:
                               f"(revision-<n>.md with the headings "
                               f"{'; '.join(REVISION_HEADINGS)}) names them.")
             source = self._src(caller)
+            self._freeze_criteria(caller, "first review asked for")
             prior = checks_api.for_prompt(self.run_dir, "branch-reviewer", f"branch:{branch_id}")
             rnd = len(prior) + 1
             # The reviewer is given this snapshot; its verdict binds to these bytes.
@@ -1023,7 +1064,8 @@ class Register:
                                       f"branch {branch_id}.")
             pts = [{"id": f"{branch_id}.r{rnd}.{i}", **pt}
                    for i, pt in enumerate(checked, start=1)]
-            body = {"branch_id": branch_id, "round": rnd, "verdict": verdict, "reason": reason,
+            body = {"branch_id": branch_id, "nodes": sorted(str(n["id"]) for n in nodes),
+                    "round": rnd, "verdict": verdict, "reason": reason,
                     "method": method, "gap_type": gap_type, "points": pts,
                     "resolutions": res_in, "record_digest": frozen["sha256"],
                     "record_snapshot": frozen["snapshot"], "by": caller.agent_type,
@@ -1049,6 +1091,59 @@ class Register:
             raise Refused(f"Refused: {exc}.") from exc
         except (safeio.UnsafePath, NotADirectoryError) as exc:
             raise Refused("Refused: criteria.md is not a plain file.") from exc
+
+    def frozen_criteria(self) -> dict[str, Any] | None:
+        """The latest frozen criteria (Codex review #3): `{round, sha256, file, reason}`,
+        or None before the first review was asked for."""
+        got = self._run_facts("criteria_frozen")
+        return got[-1] if got else None
+
+    def _freeze_criteria(self, caller: Caller, reason: str, text: str | None = None) -> None:
+        """Freeze criteria.md before any review (the first frame critique, branch
+        proposal or draft submission): a copy under register/criteria/ and its digest.
+        Once frozen, criteria.md changes only through revise_criteria. Call under the
+        lock. `text` given: the lead's revision, written to criteria.md first."""
+        if text is None and self.frozen_criteria() is not None:
+            return
+        if text is not None:
+            try:
+                parsed = criteria_mod.parse(text)
+            except criteria_mod.CriteriaInvalid as exc:
+                raise Refused(f"Refused: {exc}.") from exc
+            if not parsed:
+                raise Refused("Refused: the criteria name no criterion (- C1: ...).")
+            self._write(criteria_mod.CRITERIA_FILE, text)
+        if not self.criteria():
+            raise Refused("Refused: criteria.md names no criterion (- C1: ...); write it at "
+                          "intake, before any review.")
+        data = self._read(criteria_mod.CRITERIA_FILE)
+        rnd = len(self._run_facts("criteria_frozen")) + 1
+        rel = f"register/criteria/criteria.r{rnd}.md"
+        try:
+            safeio.write_bytes(self.run_dir, rel, data)
+        except safeio.UnsafePath as exc:
+            raise Refused("Refused: the frozen criteria cannot be written safely.") from exc
+        self._run_fact(caller, "criteria_frozen", {"round": rnd, "sha256": sha256_bytes(data),
+                                                   "file": rel, "reason": reason})
+
+    def revise_criteria(self, caller: Caller, text: str, reason: str) -> dict[str, Any]:
+        """Lead only, after the criteria are frozen: replace criteria.md with `text`, for
+        the stated reason. Final reviews made against the earlier criteria stop counting,
+        and the user's own criteria (from the task) are never revised."""
+        self._require(caller, frozenset({roles.LEAD}), "revise the criteria")
+        if caller.agent_id:
+            raise Refused("Refused: only the lead's own thread revises the criteria.")
+        if criteria_mod.from_task(self.run_dir):
+            raise Refused("Refused: these are the user's criteria, from the task.")
+        if not isinstance(reason, str) or not reason.strip():
+            raise Refused("Refused: a revision of the criteria states its reason.")
+        if not isinstance(text, str):
+            raise Refused("Refused: the criteria are text, one line per criterion.")
+        with jsonl.exclusive(self._lock):
+            self.wm.refresh()
+            self._freeze_criteria(caller, f"revised: {reason.strip()}", text)
+            frozen = self.frozen_criteria()
+        return {"criteria": self.criteria(), **(frozen or {})}
 
     def _check_points(self, points: Any) -> list[dict[str, Any]]:
         """Each point is {point, material, node, criterion}: node a tree node id or null,
@@ -1101,13 +1196,24 @@ class Register:
                         "note": r.get("note", "")})
         return out
 
-    def sent_back(self, branch_id: str) -> list[dict[str, Any]]:
-        """The material points sent back on a branch (by a session not revoked), each with
-        its id and round; empty when the branch was never sent back."""
+    def sent_back(self, branch_id: str, nodes: list[str] | None = None) -> list[dict[str, Any]]:
+        """The material points sent back (by a session not revoked) on a branch or on any
+        of its nodes, each with its id and round; empty when none was. Obligations follow
+        the node as well as the branch id, so reassigning a node to another branch carries
+        them along (Codex review #4)."""
+        if nodes is None:
+            nodes = [str(n["id"]) for n in self.tree() if n.get("branch_id") == branch_id]
         out: list[dict[str, Any]] = []
+        seen: set[str] = set()
         for v in self._run_facts("branch_verdict_recorded"):
-            if v["branch_id"] == branch_id and v["verdict"] in SEND_BACK:
-                out += [{**pt, "round": v["round"]} for pt in v["points"] if pt["material"]]
+            if v["verdict"] not in SEND_BACK:
+                continue
+            if v["branch_id"] != branch_id and not set(v.get("nodes") or []) & set(nodes):
+                continue
+            for pt in v["points"]:
+                if pt["material"] and pt["id"] not in seen:
+                    seen.add(pt["id"])
+                    out.append({**pt, "round": v["round"]})
         return out
 
     def _require_resolutions(self, branch_id: str, sent: list[dict[str, Any]],
@@ -1243,6 +1349,7 @@ class Register:
             raise Refused("Refused: the blind framer's own frame has not landed.")
         with jsonl.exclusive(self._lock):
             self.wm.refresh()
+            self._freeze_criteria(caller, "first review asked for")
             prior = checks_api.for_prompt(self.run_dir, "blind-framer", "frame:critique")
             req = checks_api.request_check(self.run_dir, roles.BLIND_FRAMER, "frame:critique",
                                            "request_frame_critique", round_no=len(prior) + 1)
@@ -1303,6 +1410,7 @@ class Register:
         data = self._read(f"draft/answer.v{version}.md")
         with jsonl.exclusive(self._lock):
             done = self.submitted_versions()
+            self._freeze_criteria(caller, "first review asked for")
             if done and version <= max(done):
                 raise Refused(f"Refused: version {version} is not after version {max(done)}.")
             limit = self.max_review_rounds()
@@ -1338,8 +1446,23 @@ class Register:
     def _previous_round(self, version: int, last: int) -> str:
         """What the final reviewers of `version` are shown (D8): the points the reviews of
         the last submitted version raised, with their ids, and the lead's response,
-        `draft/response.v<version>.md`, which must name each material point's id."""
+        `draft/response.v<version>.md`, which must name every point's id. Refused until
+        that round has finished: each of its three reviews recorded, or its check ended
+        for good (not an end that resume reruns)."""
         have = self._recorded_reviews(last)
+        unfinished = []
+        for role in roles.FINAL_REVIEWERS:
+            if role in have:
+                continue
+            rounds = checks_api.for_prompt(self.run_dir, role, f"draft:{last}")
+            ended = bool(rounds) and all(
+                st.status == "ended" and st.outcome not in checks_api.RETRYABLE_OUTCOMES
+                for st in rounds)
+            if not ended:
+                unfinished.append(roles.short(role))
+        if unfinished:
+            raise Refused(f"Refused: the reviews of version {last} have not finished "
+                          f"({', '.join(unfinished)}); version {version} follows them.")
         points = [pt for role in roles.FINAL_REVIEWERS
                   for pt in have.get(role, {}).get("points", [])]
         try:
@@ -1349,15 +1472,15 @@ class Register:
         except (OSError, UnicodeDecodeError, safeio.UnsafePath) as exc:
             raise Refused(f"Refused: draft/response.v{version}.md is not a plain text "
                           f"file.") from exc
-        material = [pt for pt in points if pt["material"]]
-        if material and response is None:
-            raise Refused(f"Refused: version {last}'s reviews raised material points; "
+        if points and response is None:
+            raise Refused(f"Refused: version {last}'s reviews raised points; "
                           f"draft/response.v{version}.md answers them before version "
                           f"{version} is submitted.")
-        for pt in material:
-            if pt.get("id") and pt["id"] not in (response or ""):
-                raise Refused(f"Refused: draft/response.v{version}.md does not name point "
-                              f"{pt['id']}.")
+        unanswered = [pt["id"] for pt in points
+                      if pt.get("id") and pt["id"] not in (response or "")]
+        if unanswered:
+            raise Refused(f"Refused: draft/response.v{version}.md does not name points "
+                          f"{', '.join(unanswered)}.")
         lines = [f"# The previous round: the reviews of version {last}", ""]
         missing = [roles.short(r) for r in roles.FINAL_REVIEWERS if r not in have]
         if missing:
@@ -1422,8 +1545,10 @@ class Register:
                 raise Refused("Refused: this review is already recorded.")
             self._write(rel, text)
             abbr = REVIEW_ABBR[caller.agent_type]
+            frozen = self.frozen_criteria() or {}
             record = {"version": version, "role": caller.agent_type,
                       "sha256": sha256_bytes(text.encode("utf-8")), "session": caller.session_id,
+                      "criteria_sha256": frozen.get("sha256"),
                       "points": [{"id": f"v{version}.{abbr}.{i}", **pt}
                                  for i, pt in enumerate(checked, start=1)]}
             self._run_fact(caller, "review_recorded", record)
@@ -1452,6 +1577,15 @@ class Register:
                 failures.append("criteria.md names no criterion (- C1: ...)")
         except Refused as exc:
             failures.append(str(exc).removeprefix("Refused: ").rstrip("."))
+        frozen = self.frozen_criteria()  # None until a review was asked for
+        if frozen is not None:
+            try:
+                live = sha256_bytes(safeio.read_bytes(self.run_dir, criteria_mod.CRITERIA_FILE))
+            except (FileNotFoundError, safeio.UnsafePath, NotADirectoryError):
+                live = None
+            if live != frozen["sha256"]:
+                failures.append("criteria.md differs from the frozen criteria; only "
+                                "revise_criteria changes them")
         nodes = self.tree_view()
         if not nodes:
             failures.append("the tree has no nodes")
@@ -1475,7 +1609,7 @@ class Register:
                              f"the branch verdict for node {n['id']}")
                     resolved = {r["point_id"] for r in facts[-1]["value"].get("resolutions")
                                 or []}
-                    for pt in self.sent_back(str(n.get("branch_id"))):
+                    for pt in self.sent_back(str(n.get("branch_id")), [str(n["id"])]):
                         if pt["id"] not in resolved:
                             failures.append(f"node {n['id']}: point {pt['id']} sent back on "
                                             f"branch {n['branch_id']} has no resolution")
@@ -1506,6 +1640,9 @@ class Register:
                                 f"is not recorded")
                 continue
             rests_on(have[role]["session"], f"the {roles.short(role)} review")
+            if frozen is not None and have[role].get("criteria_sha256") != frozen["sha256"]:
+                failures.append(f"the {roles.short(role)} review of version {version} judged "
+                                f"criteria since revised")
             if not at_limit:
                 for pt in have[role].get("points", []):
                     if pt["material"]:
@@ -1684,9 +1821,33 @@ class Register:
                                                 "sessions": self._relied, **extra})
             req = checks_api.request_check(self.run_dir, roles.RETRO_WRITER, "retro:run",
                                            "finish_run")
+            sealed = self._seal(version)
         return {"finished": True, "version": version, "deliverable": "deliverable/answer.md",
                 "reader": "deliverable/answer.reader.md", "check_requested": req.request_id,
+                "manifest": sealed["manifest"], "manifest_sha256": sealed["manifest_sha256"],
                 **extra}
+
+    def _seal(self, version: int) -> dict[str, Any]:
+        """Seal the released run (`release/manifest.json`, after the finished fact). The
+        manifest's own digest goes to events.jsonl, never the sealed log. A run that
+        cannot be sealed (a link or special file in it) has its release blocked, so it
+        does not stand, and the refusal says why. Call under the lock."""
+        from stemma.register import manifest
+
+        try:
+            run_id = json.loads(safeio.read_text(self.run_dir, "run.json"))["run_id"]
+        except (FileNotFoundError, ValueError, KeyError, TypeError, safeio.UnsafePath):
+            run_id = self.run_dir.name
+        try:
+            sealed = manifest.seal(self.run_dir, version, str(run_id))
+        except (manifest.ManifestError, manifest.LogError) as exc:
+            checks_api.block_release(self.run_dir, f"the release could not be sealed: {exc}")
+            raise Refused(f"Refused: finish_run: the run could not be sealed ({exc}); the "
+                          f"release does not stand.") from exc
+        jsonl.append(self.run_dir / "events.jsonl", {
+            "event": "release_sealed", "at": now(), "source": "register", "version": version,
+            "manifest": sealed["manifest"], "manifest_sha256": sealed["manifest_sha256"]})
+        return sealed
 
     def _render_reader(self, text: str) -> str:
         order: dict[str, int] = {}
@@ -1819,6 +1980,17 @@ class Register:
 def frozen_record(branch_id: str, round_no: int) -> str:
     """The record snapshot a branch reviewer is given for a round (tool-only)."""
     return f"register/branches/{branch_id}/record.r{round_no}.md"
+
+
+def assignment_file(prompt: str, round_no: int) -> str:
+    """Where a claim check's assignment lives (tool-only, written once per round):
+    `checks/doc-<receipt_id>.r<n>.json` or `checks/derivations-v<v>.r<n>.json`."""
+    kind, _, ident = prompt.partition(":")
+    if kind == "doc":
+        return f"checks/doc-{ident}.r{round_no}.json"
+    if kind == "derivations":
+        return f"checks/derivations-{ident}.r{round_no}.json"
+    raise ValueError(f"{prompt} is not a claim check prompt")
 
 
 def previous_round_file(version: int) -> str:
