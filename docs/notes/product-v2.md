@@ -314,3 +314,46 @@ Two modules, in `hackathon/headtohead/`:
 - *Calculated figures are counted apart.* No page can contain an estimate, so figures
   whose cited claim is a recorded calculation are counted separately. That count is
   Stemma's only, outside the shared comparison.
+
+## Codex review of the head-to-head harness: twelve fixes
+
+Each fix below has a test named after it, built from the review's probe.
+
+**The five high-severity findings.**
+1. *An unrelated number counted as support.* Containment is now only a diagnostic.
+   Every figure taken from a source is judged against every resolved source it cites,
+   whether code found its number there or not.
+2. *A missing judgment counted as no contradiction.* Each figure the judge is asked
+   about needs exactly one valid verdict. A missing, duplicated or invalid verdict, an
+   empty reply, or an unfindable quotation leaves the figure unjudged. Unjudged figures
+   are counted and reported, never taken as zero.
+3. *Text could steer the judge.* The answer's and the source's text now sit between
+   random markers, and the prompt says to ignore any instruction inside them. Arm names
+   never reach the judge, and each call has its own folder holding only its own
+   document. Quotations are still checked by code.
+4. *A failed bare run was accepted as an answer.* Now an answer counts only when the
+   canary passed, the session exited 0 without being stopped, its result is a success
+   and not an error, and the answer has text.
+5. *Computed figures counted against sources.* The judge now asks one question of both
+   answers: was this figure taken from a source or computed? Computed figures are left
+   out of the source counts. Stemma's computed figures are re-run as verify does; the
+   bare answer has no recorded calculations to re-run.
+
+**The seven medium-severity findings.**
+
+6. *Formatting changed the figures.* Numbers are parsed into value, sign, unit, scale
+   and stated precision. Years are recognised by their context, and reference lists are
+   left out.
+7. *Citations were lost in sentences and tables.* Citations are now resolved per block,
+   before sentences are split, and each figure takes the markers that follow it.
+8. *Some of Stemma's citation routes were dropped.* A claim's provenance now also
+   follows its derivation's documents, and unresolved routes are reported.
+9. *An empty page counted as resolved.* A source resolves only with an eligible status
+   and some text, and the extractor's flagged ranges are used in every quotation check.
+10. *One gap could count several times.* Each admitted gap is an answer item, counted
+    once.
+11. *A silent session could run on forever.* A reader thread enforces the start-up and
+    session deadlines, then terminates and kills the process with bounded waits.
+12. *Tools were limited but the filesystem was not.* The bare arm's tools are confined
+    and proven at launch by the scope canary. That the harness process itself runs as
+    the owner is a stated limit.

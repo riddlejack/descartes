@@ -29,6 +29,12 @@ all three and that neither the marker's random token nor the page reached appear
 anywhere in its stream. Otherwise the bare arm is refused and the real session never
 starts.
 
+Confinement is of the session's tools, enforced by the harness and proven at launch by
+the scope canary; the harness process itself runs as the owner, as every Stemma session
+does. An operating-system boundary around the whole harness process is not added: the
+harness applies its own sandbox to Bash, and a second sandbox around it would stop that
+one from starting. This is a stated limit of the comparison.
+
 Stated deviation from a plain user: the prompt asks the bare arm to cite a source for
 every figure (a plain user may not ask); without it the citation counts would measure
 nothing.
@@ -54,6 +60,10 @@ DEFAULT_ROOT: Final = Path.home() / ".private" / "runs" / "stemma2-run3" / "bare
 MODEL: Final = "claude-opus-5-5"  # the pre-registration: Opus 5.5 at high effort
 EFFORT: Final = "high"
 TOOLS: Final = ("WebSearch", "WebFetch", "Bash", "Read", "Write")  # see the module's note
+# Resource limits: seconds between checks of a session's deadlines, and seconds a
+# stopped or ending session is given to exit before it is killed.
+POLL_S: Final = 1.0
+STOP_GRACE_S: Final = 10.0
 # The scope canary's own resource limit: seconds it may run.
 CANARY_MAX_S: Final = 600
 CANARY_PAGE: Final = "https://example.com"
@@ -172,11 +182,30 @@ def _write(path: Path, data: str) -> None:
     path.write_text(data, encoding="utf-8")
 
 
+def _stop(proc: Any) -> int | None:
+    """Terminate, then kill, reaping with bounded waits (resource limit: STOP_GRACE_S)."""
+    for signal_it in (proc.terminate, proc.kill):
+        try:
+            signal_it()
+        except (OSError, AttributeError):
+            pass
+        try:
+            return int(proc.wait(timeout=STOP_GRACE_S))
+        except (subprocess.TimeoutExpired, TypeError):
+            continue
+    return None
+
+
 def _session(folder: Path, prompt: str, stream_name: str, binary: Path, config: Path,
              version: str, settings: dict[str, Any], popen: Any,
              max_s: float) -> tuple[dict[str, Any], dict[str, Any] | None, str]:
     """One headless session in `folder`: (outcome, result message, the whole stream).
-    The init message's canary is checked first; a failed canary stops the session."""
+    The init message's canary is checked first; a failed canary stops the session. A
+    reader thread hands lines over, so the start-up deadline (INIT_TIMEOUT_S) and the
+    session deadline (`max_s`) stop a silent or stuck child too."""
+    import queue
+    import threading
+
     from stemma.driver.clean import bare_expectation, check_canary, clean_launch
 
     cl = clean_launch(binary, config, prompt, cwd=folder, model=MODEL, effort=EFFORT,
@@ -190,40 +219,88 @@ def _session(folder: Path, prompt: str, stream_name: str, binary: Path, config: 
     outcome: dict[str, Any] = {"canary": None, "exit_code": None}
     result: dict[str, Any] | None = None
     seen: list[str] = []
+    lines: queue.Queue[str | None] = queue.Queue()
     with open(folder / stream_name, "w", encoding="utf-8") as stream:
         proc = popen(cl.argv, env=cl.env, cwd=folder, stdin=subprocess.DEVNULL,
                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-        try:
-            for line in proc.stdout:
-                stream.write(line)
-                stream.flush()
-                seen.append(line)
-                try:
-                    msg = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(msg, dict):
-                    continue
-                if msg.get("type") == "system" and msg.get("subtype") == "init" \
-                        and outcome["canary"] is None:
-                    problems = check_canary(msg, bare_expectation(
-                        cwd=folder, tools=list(TOOLS), harness_version=version,
-                        session_id=msg.get("session_id") if isinstance(
-                            msg.get("session_id"), str) else None))
-                    outcome["canary"] = problems or "passed"
-                    if problems:
-                        proc.kill()
-                        break
-                elif msg.get("type") == "result":
-                    result = msg
-                if time.monotonic() - started > max_s:
-                    outcome["stopped"] = f"ran past {max_s:.0f} s (a resource limit)"
-                    proc.kill()
+
+        def pump() -> None:
+            try:
+                for ln in proc.stdout:
+                    lines.put(ln)
+            finally:
+                lines.put(None)
+
+        threading.Thread(target=pump, daemon=True).start()
+        ended = False
+        while not ended:
+            now = time.monotonic() - started
+            if outcome["canary"] is None and now > INIT_TIMEOUT_S:
+                outcome["stopped"] = f"no init message within {INIT_TIMEOUT_S} s"
+                break
+            if now > max_s:
+                outcome["stopped"] = f"ran past {max_s:.0f} s (a resource limit)"
+                break
+            try:
+                line = lines.get(timeout=POLL_S)
+            except queue.Empty:
+                continue
+            if line is None:
+                ended = True
+                break
+            stream.write(line)
+            stream.flush()
+            seen.append(line)
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("type") == "system" and msg.get("subtype") == "init" \
+                    and outcome["canary"] is None:
+                problems = check_canary(msg, bare_expectation(
+                    cwd=folder, tools=list(TOOLS), harness_version=version,
+                    session_id=msg.get("session_id") if isinstance(
+                        msg.get("session_id"), str) else None))
+                outcome["canary"] = problems or "passed"
+                if problems:
                     break
-        finally:
-            outcome["exit_code"] = proc.wait()
+            elif msg.get("type") == "result":
+                result = msg
+        if ended:
+            try:
+                outcome["exit_code"] = int(proc.wait(timeout=STOP_GRACE_S))
+            except subprocess.TimeoutExpired:
+                outcome["exit_code"] = _stop(proc)
+        else:
+            outcome["exit_code"] = _stop(proc)
+            outcome.setdefault("stopped", "stopped by the launcher")
     outcome["wall_s"] = round(time.monotonic() - started, 1)
     return outcome, result, "".join(seen)
+
+
+def eligible(outcome: dict[str, Any], result: dict[str, Any] | None) -> list[str]:
+    """Why a session's answer may not be scored (empty: it may): a clean start, a
+    natural exit 0, no stop, a successful result that is not an error, and an answer
+    with text."""
+    why = []
+    if outcome.get("canary") != "passed":
+        why.append(f"the init canary did not pass ({outcome.get('canary')})")
+    if outcome.get("stopped"):
+        why.append(f"the session was stopped: {outcome['stopped']}")
+    if outcome.get("exit_code") != 0:
+        why.append(f"the session exited {outcome.get('exit_code')}")
+    if result is None:
+        why.append("the session gave no result")
+    else:
+        if result.get("subtype") != "success":
+            why.append(f"its result is {result.get('subtype')!r}, not 'success'")
+        if result.get("is_error") is not False:
+            why.append("its result is marked as an error")
+        if not isinstance(result.get("result"), str) or not result["result"].strip():
+            why.append("its answer is empty")
+    return why
 
 
 def _tool_uses(stream: str) -> list[dict[str, Any]]:
@@ -308,13 +385,13 @@ def launch(root: Path, t: dict[str, Any], popen: Any = subprocess.Popen,
 
     outcome, result, _stream = _session(folder, prompt, "stream.jsonl", binary, config,
                                         version, settings, popen, SESSION_MAX_S)
-    if outcome["canary"] != "passed":
+    why = eligible(outcome, result)
+    outcome["eligible"] = not why
+    outcome["not_eligible_because"] = why
+    if why or result is None:
         _write(folder / "outcome.json", json.dumps(outcome, indent=1))
-        raise BareError(f"the session did not start clean, so nothing it wrote is used: "
-                        f"{outcome['canary']}")
-    if result is None or not isinstance(result.get("result"), str):
-        _write(folder / "outcome.json", json.dumps(outcome, indent=1))
-        raise BareError("the session ended without an answer; see stream.jsonl")
+        raise BareError("the bare answer is not eligible for scoring, and no answer.md "
+                        "was written: " + "; ".join(why))
     _write(folder / "answer.md", result["result"])
     _write(folder / "usage.json", json.dumps({
         k: result.get(k) for k in ("usage", "modelUsage", "total_cost_usd", "duration_ms",
