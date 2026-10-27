@@ -4,6 +4,7 @@ Whole-file writes go through `stemma.register.safeio` (temporary files in the to
 `register/tmp/`, renamed into place relative to directory descriptors opened
 `O_NOFOLLOW`). Appends (session streams) and the driver's lock open their file the same
 way: every folder on the path a real folder, the last component opened `O_NOFOLLOW`.
+Both are safe when several processes make the same new folders or file at once.
 """
 
 from __future__ import annotations
@@ -18,7 +19,16 @@ from stemma.register.safeio import UnsafePath
 
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
-__all__ = ["UnsafePath", "open_nofollow", "write_bytes", "write_json", "write_text"]
+# Resource limit: creates of one file tried before giving up, when each answers ENOENT
+# (the macOS race in `_create`; one retry has sufficed in every stress run).
+_CREATE_TRIES = 20
+
+__all__ = ["CreateFailed", "UnsafePath", "open_nofollow", "write_bytes", "write_json",
+           "write_text"]
+
+
+class CreateFailed(Exception):
+    """A file could not be created: every try answered 'no such file'."""
 
 
 def write_text(run_dir: Path, rel: str, text: str) -> None:
@@ -46,20 +56,40 @@ def open_nofollow(run_dir: Path, rel: str, flags: int) -> int:
             try:
                 nxt = os.open(name, _DIR_FLAGS, dir_fd=fd)
             except FileNotFoundError:
-                os.mkdir(name, 0o755, dir_fd=fd)
-                nxt = os.open(name, _DIR_FLAGS, dir_fd=fd)
+                try:
+                    os.mkdir(name, 0o755, dir_fd=fd)
+                except FileExistsError:
+                    pass  # another process made it first: open what is there, below
+                # Whoever made it, it is opened without following a link: a link or a
+                # file swapped in at the name is ELOOP / ENOTDIR, refused here.
+                try:
+                    nxt = os.open(name, _DIR_FLAGS, dir_fd=fd)
+                except OSError as exc:
+                    raise UnsafePath(f"{rel}: {name} is not a plain folder") from exc
             except OSError as exc:
                 raise UnsafePath(f"{rel}: {name} is not a plain folder") from exc
             os.close(fd)
             fd = nxt
-        try:
-            return os.open(parts[-1], flags | os.O_CREAT | os.O_NOFOLLOW, 0o644, dir_fd=fd)
-        except OSError as exc:
-            if isinstance(exc, FileNotFoundError):
-                raise
-            raise UnsafePath(f"{rel} is not a plain file") from exc
+        return _create(fd, parts[-1], flags, rel)
     finally:
         os.close(fd)
+
+
+def _create(fd_dir: int, name: str, flags: int, rel: str) -> int:
+    """`name` in `fd_dir` opened with `flags | O_CREAT | O_NOFOLLOW`.
+
+    On macOS, openat(dir_fd, name, O_CREAT) can answer ENOENT while other processes
+    create the same new file (the race W3 found in datalayer/, 27 Oct); an open by path
+    does not. The create is tried again: once a racer has made the file, it opens."""
+    for _ in range(_CREATE_TRIES):
+        try:
+            return os.open(name, flags | os.O_CREAT | os.O_NOFOLLOW, 0o644, dir_fd=fd_dir)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:  # ELOOP: the file is a link
+            raise UnsafePath(f"{rel} is not a plain file") from exc
+    raise CreateFailed(f"{rel}: creating it answered 'no such file' {_CREATE_TRIES} times; "
+                       f"its folder may have been removed")
 
 
 def open_append(run_dir: Path, rel: str) -> IO[bytes]:
