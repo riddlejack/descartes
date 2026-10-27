@@ -252,3 +252,51 @@ refuses every write. No private register attribute is touched any more.
 
 A manifest that does not seal `checks.jsonl` is now a failure: format
 `stemma-release-manifest/2` always seals it.
+
+## The head-to-head harness for run 3 (hypothesis H5)
+
+Two modules, in `hackathon/headtohead/`:
+
+- **`bare.py`, the bare arm's launcher.** Not launched yet; the orchestrator launches it
+  after Stemma's run ends, so the two never share a usage window.
+  - It takes run 3's question, named options, onboarding answers and as-of date from
+    `tests/e2e/run3_demo.py` itself, and `--question-file` replaces the question the
+    same way that launcher does.
+  - It launches one session through `clean_launch`, with the canary checked: Opus 5.5 at
+    high effort, no plugin, no MCP server, no slash commands.
+  - Its tools are WebSearch and WebFetch only. Read, Write or Bash in an unattended
+    session could read the owner's files, run 3's folder included.
+  - Its prompt asks it to cite a source for every figure; the exact prompt is saved
+    with its answer.
+  - It writes prompt.txt, launch.json, stream.jsonl, answer.md, usage.json and
+    outcome.json into a new folder under `~/.private/runs/stemma2-run3/bare/`.
+  - `--dry-run` creates nothing.
+
+- **`score.py`, the scorer.** It counts both answers by the same rules, which are also
+  written into `score.json`:
+  - A figure is a number token, found by the register's own tokenizer.
+  - A figure's sources are the ones cited in its own sentence.
+  - Every cited page is fetched now through the evidence service, with the cache off,
+    and kept as a capture.
+  - Code decides whether a source resolves and whether it contains the figure.
+  - A cross-family judge (Codex `gpt-6-astra`, read-only) decides two things: which
+    figures a source contradicts, and which gaps and limits an answer admits. Each of
+    its answers counts only when code finds its quotation. Every prompt and reply is
+    recorded.
+  - It writes `summary.txt`, which gives the counts in sentences, because the owner
+    reads no tables.
+
+**Live trial: run 1's v11 draft against an invented bare answer.**
+- It took 22 minutes: 81 captures and 72 judge calls.
+- Stemma: 386 figures, 150 contained in a cited source, 80 of 80 cited sources resolve,
+  67 gaps and limits admitted.
+- The invented bare answer: 6 figures, 1 contained, 2 of 3 sources resolve.
+
+**Two rules came out of the trial.**
+- *Drift is not a contradiction.* Both "contradictions" the judge found on Stemma's side
+  were the AFDC station count, which has moved since the run (268,116 then, 268,137
+  now). The judge is now told that a quantity that changes over time and differs only
+  because the page is newer is not a contradiction.
+- *Calculated figures are counted apart.* No page can contain an estimate, so figures
+  whose cited claim is a recorded calculation are counted separately. That count is
+  Stemma's only, outside the shared comparison.
