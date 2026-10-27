@@ -27,6 +27,17 @@ class UnsafePath(DataLayerError):
     code = "unsafe_path"
 
 
+class AppendFailed(DataLayerError):
+    """A log line could not be appended: its file could not be created."""
+
+    code = "append_failed"
+
+
+# Resource limit: creates of one log file tried before giving up, when each answers
+# ENOENT (the macOS race in `_open_append`; one retry has sufficed in every stress run).
+_CREATE_TRIES = 20
+
+
 def _parts(rel: str | PurePosixPath) -> list[str]:
     p = PurePosixPath(rel)
     parts = list(p.parts)
@@ -68,15 +79,29 @@ def ensure_dir(root: Path, rel: str | PurePosixPath) -> Path:
     return Path(os.path.realpath(root)).joinpath(*_parts(rel))
 
 
+def _open_append(fd_dir: int, name: str, rel: str | PurePosixPath) -> int:
+    """`name` in `fd_dir`, opened to append (created if missing), following no link.
+
+    On macOS, openat(dir_fd, name, O_CREAT) can answer ENOENT while other processes
+    create the same new file (W3's flaky concurrent sync, 27 Oct); an open by path does
+    not. The create is tried again: once a racer has made the file, the open succeeds."""
+    for _ in range(_CREATE_TRIES):
+        try:
+            return os.open(name, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
+                           0o644, dir_fd=fd_dir)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:  # ELOOP: the file is a link
+            raise UnsafePath(f"{rel} cannot be opened without following a link") from exc
+    raise AppendFailed(f"{rel}: creating it answered 'no such file' {_CREATE_TRIES} times; "
+                       f"its folder may have been removed")
+
+
 def append_line(root: Path, rel: str | PurePosixPath, line: str) -> None:
     parts = _parts(rel)
     fd_dir = _open_dir(root, parts[:-1], create=True)
     try:
-        try:
-            fd = os.open(parts[-1], os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
-                         0o644, dir_fd=fd_dir)
-        except OSError as exc:
-            raise UnsafePath(f"{rel} cannot be opened without following a link") from exc
+        fd = _open_append(fd_dir, parts[-1], rel)
         try:
             data = (line + "\n").encode("utf-8")
             while data:
