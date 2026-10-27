@@ -242,6 +242,13 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   sum of its sessions, never the gaps between them (usage waits, a driver that was
   down); every launch gets only what is left of `lead_max_s`, and the Stop hook, the
   resume of an ended lead and the automatic resume all read the same count.
+- **Running-time notices** (27 Oct): at each fraction in `limits.lead_notice_fractions`
+  (run.json, a resource limit, default 0.6 and 0.8) of `lead_max_s`, the driver queues a
+  notice for a running lead of an unreleased run, delivered like an arrival on its next
+  tool call: how many minutes it has run and how many remain; the last says to submit
+  its draft and call `finish_run` before the limit, since a lead stopped at the limit
+  ends the run with no deliverable. Each fraction is told once, across resumes; a lead
+  that has ended, or a run already released, is told nothing. Event: `lead_time_notice`.
 - **A usage stop is shared at once:** any session's usage rejection sets one stop flag
   and persists `usage_limited` under the lock every lead launch decision takes (a
   session already marked rate-limited counts, even while its reader waits to persist

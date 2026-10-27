@@ -989,6 +989,41 @@ class Driver:
     def _live_checks(self) -> int:
         return sum(1 for lv in self.live.values() if lv.session.spec.request_id is not None)
 
+    def _lead_time_notices(self) -> None:
+        """At each recorded fraction of lead_max_s, tell a running lead of an unreleased
+        run how much of its running time is left, as a notice delivered like an arrival;
+        the last says to submit and call finish_run, since a lead stopped at the limit
+        leaves no deliverable. Each fraction is told once, across resumes."""
+        fractions = self.limits.lead_notice_fractions
+        sent = self.state.setdefault("lead_time_notices", [])
+        due = [f for f in fractions if f not in sent]
+        if not due or not any(lv.session.spec.request_id is None and lv.session.running()
+                              for lv in self.live.values()):
+            return
+        limit = self.limits.lead_max_s
+        used = leadtime.lead_time_used(self.run_dir, time.time())
+        if used < due[0] * limit or self.released(self.run_dir):
+            return
+        from stemma.hooks.arrivals import queue_notice
+
+        left = max(0.0, limit - used) / 60
+        for f in due:
+            if used < f * limit:
+                break
+            if f == fractions[-1]:
+                act = ("Submit your draft now and call finish_run before the limit: at the "
+                       "limit the driver stops you and the run ends with no deliverable.")
+            else:
+                act = ("At the limit the driver stops you and the run ends with no "
+                       "deliverable; plan to submit and call finish_run well before it.")
+            queue_notice(self.run_dir, f"lead_time_{f:g}",
+                         f"Stemma: you have run {used / 60:.0f} of your {limit / 60:.0f} "
+                         f"minutes; about {left:.0f} minutes remain. {act}")
+            sent.append(f)
+            events.emit(self.run_dir, "lead_time_notice", fraction=f, used_s=round(used, 1),
+                        lead_max_s=limit)
+        self._save_state()
+
     def step(self) -> bool:
         """One pass. Returns False when nothing is running and nothing is due."""
         now = time.monotonic()
@@ -1014,6 +1049,7 @@ class Driver:
                 self.state["usage_limited"] = True
                 self._save_state()
         self._resume_lead_if_ended()
+        self._lead_time_notices()
         if self.stop_after == "frame" and not self.state.get("frame_complete") \
                 and self._frame_settled(now):
             done = self._end_frame_only()

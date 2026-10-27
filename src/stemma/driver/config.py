@@ -90,6 +90,10 @@ class Limits:
     check_max_s: float = 3 * 3600.0
     # Resource limit: wall-clock seconds the lead session may run before it is stopped.
     lead_max_s: float = 24 * 3600.0
+    # Resource limit: fractions of lead_max_s at which the driver tells a running lead how
+    # much of its running time is left (the last one says to submit and call finish_run),
+    # since a lead stopped at the limit leaves no deliverable.
+    lead_notice_fractions: tuple[float, ...] = (0.6, 0.8)
     # Resource limit: seconds between SIGTERM and SIGKILL when a session is stopped.
     stop_grace_s: float = 10.0
     # Resource limit: launches of one check request when each resolves the wrong model or
@@ -125,6 +129,13 @@ class Limits:
     usage_wait_max_s: float = 6 * 3600.0
     # Recorded beside the numbers in run.json, so no reader takes them for a quality bar.
     purpose: str = "resource limits only (time, sessions, bytes); never a quality bar"
+
+    def __post_init__(self) -> None:
+        if not all(isinstance(f, (int, float)) and not isinstance(f, bool) and 0 < f < 1
+                   for f in self.lead_notice_fractions):
+            raise ConfigError("lead_notice_fractions are fractions between 0 and 1")
+        object.__setattr__(self, "lead_notice_fractions",
+                           tuple(sorted(float(f) for f in self.lead_notice_fractions)))
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)

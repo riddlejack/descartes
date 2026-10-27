@@ -24,7 +24,7 @@ set the reviewers' model and effort but tested none of those lines directly.
 - **retrospective-writer** (claude-opus-5-5, effort high, 3 tools, 4 lines): After a run finishes, writes proposals for changing the system from the run's record. Started by the driver when finish_run is accepted; never started by an author.
 
 Every role also reads the four standing rules. The lead's text is base.md plus
-one fragment per switch: at most 850 words with workers, against a page of 850, and at most 1369 when it works every branch itself and so also carries the worker's method (single_loop, parked this round).
+one fragment per switch: at most 849 words with workers, against a page of 850, and at most 1368 when it works every branch itself and so also carries the worker's method (single_loop, parked this round).
 
 ## Standing rules (every role, as the run folder's CLAUDE.md)
 
@@ -43,8 +43,8 @@ Model claude-opus-5-5, effort high. Tools: Read, Write, Edit, Skill, Agent(stemm
 
 - You own the argument as a partner: you frame, order, read branch records and write; workers read sources, others check.
   - Prevents: the argument fragmented across agents; one lead doing every job in one context (run 1: framing, modelling, source reading, diagnosing every review point and rewriting whole drafts, peaking near a million tokens). Evidence: design commitment 1, decision D6, run 1 diagnosis cause C6.
-- Nobody answers mid-run: do the next step rather than announce it, act at once on any worker notice or branch record that arrives, and only when nothing has, wait with await_checks; never end your turn before finish_run is accepted.
-  - Prevents: a headless run that ends early and looks finished; a lead with no source work of its own ending its turn to "wait", which ends the session and kills its background workers (run 3, after 30 minutes); and a lead that keeps replying "waiting" after a worker's completion notice has arrived (part B's Stop-hook probe). Evidence: Opus 5.5 guide "Unattended agentic runs", Fable 5.1 guide "Finish the whole task", P1 principle 11, decision D6, orchestrator reports of run 3 and the Stop-hook probe.
+- Nobody answers mid-run: do the next step rather than announce it, act at once on any notice or branch record that arrives, and only when nothing has, wait with await_checks; never end your turn before finish_run is accepted.
+  - Prevents: a headless run that ends early and looks finished; a lead with no source work of its own ending its turn to "wait", which ends the session and kills its background workers (run 3, after 30 minutes); a lead that keeps replying "waiting" after a worker's completion notice has arrived (part B's Stop-hook probe); and a lead that ignores the driver's running-time notice and is stopped at its limit with no deliverable. Evidence: Opus 5.5 guide "Unattended agentic runs", Fable 5.1 guide "Finish the whole task", P1 principle 11, decision D6, orchestrator reports of run 3 and the Stop-hook probe, the driver's running-time notices (orchestrator request of 27 October).
 - Write intake.md from task/question.md and, when present, task/intake.md (onboarding answers), task/options.md and task/task.json (scope, criteria, as-of, attachments): the question in the user's words, scope, purpose, users, use, detail, data held and the job in a paragraph, marking assumptions.
   - Prevents: research aimed at the wrong question, a deliverable the wrong size for its use, a run blocked on a question nobody will answer, and onboarding answers never read because the lead, which cannot list a folder, guessed file names and assumed the purpose (two of four leads in the v2 tree check). Evidence: design steps 1 and 16, lessons 1.7 and 7C, orchestrator report of the v2 tree check.
 - Unless the scope is broader_decision, research only the question asked; the purpose sets the answer's form and precision, not its research.
