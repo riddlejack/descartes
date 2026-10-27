@@ -24,9 +24,16 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   file, count}`.
 - **criteria.md** (D4) at the run folder's top: one line per criterion, `- C<n>: <text>`,
   ids C1, C2, ... in order. When the task gives criteria the driver writes it and no
-  agent may change it (Write, Edit and the Bash sandbox deny it; a hostile test); when it
-  does not, the lead writes it during intake. The gate refuses a release without at
-  least one criterion. Whether a criterion is met is a reviewer's judgment, never code's.
+  agent may change it; when it does not, only the lead's own thread writes it, during
+  intake (no shell ever writes it; hostile tests). The criteria freeze when the first
+  review is asked for (frame critique, branch proposal or draft submission, each refused
+  without a criterion): a copy goes to `register/criteria/criteria.r<n>.md` and its
+  digest is recorded; after that only the lead's `revise_criteria(text, reason)` changes
+  them (never the user's). Final reviews record the digest they judged; the gate refuses
+  when criteria.md differs from the frozen copy or a review judged an earlier version.
+  Whether a criterion is met is a reviewer's judgment, never code's.
+- **Tree authority**: an author below the lead may add a node, never move one, change
+  its branch, or place work under a set-aside node; only the lead does.
 - **Tree** (D2, D5; section 5): node kinds are `question` and `open_lane` only; options,
   rivals, gates and checks are never nodes (`tree_upsert` refuses any other kind). A node
   gains `set_aside`: the lead (only) gives the reason a node is set aside, or null to
@@ -43,7 +50,8 @@ D1 to D10); where an older line below disagrees, section 0 wins.
 - **A branch is sent back once** (D9): `record_branch_verdict` takes `points` and
   `resolutions`. `find_more`, `analyse` and `bound` send a branch back and need at least
   one material point; a branch already sent back (by a session not revoked) cannot be
-  sent back again. A closing verdict (`answered`, `accept_gap`) then gives a resolution
+  sent back again. Obligations follow the node as well as the branch id: a node moved to
+  another branch carries its unresolved points. A closing verdict (`answered`, `accept_gap`) then gives a resolution
   `{point_id, status, note}` for every point sent back: `resolved`; `bounded` or
   `conditional` (the record snapshot must name the point id); or `disputed` (a revision
   order of the branch must name it, the lead having decided). `ask_user` is not a
@@ -77,16 +85,17 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   unfinished check already lists:
   - a claim with a home document (its first support item's receipt; for an estimate,
     the first document its derivation names) goes to that document's checker, prompt
-    `doc:<receipt_id>`, list `checks/doc-<receipt_id>.json` (tool-only);
+    `doc:<receipt_id>`, list `checks/doc-<receipt_id>.r<round>.json` (tool-only);
   - a claim resting on no document (an estimate whose derivation names none, an
     assumption) goes to the draft's one derivations checker, prompt
-    `derivations:v<v>`, list `checks/derivations-v<v>.json` (tool-only), each entry
+    `derivations:v<v>`, list `checks/derivations-v<v>.r<round>.json` (tool-only), each entry
     with its tier, statement, value, derivation and the sentences of draft v that cite
     it (the checker reads nothing else of the draft). It judges whether each script
     computes what the claim states from the right inputs, and whether each assumption
     is stated as one; the exact re-run is code's.
-  `claim:<claim_id>` is no longer a route. A checker records verdicts only on the
-  claims its own round's list names. Observed figures are still checked; the host
+  `claim:<claim_id>` is no longer a route. Each list is written once and never changed
+  while its checker runs; `check_assignment()` gives a checker its own list. A checker
+  records verdicts only on the claims its own round's list names. Observed figures are still checked; the host
   still starts every checker. (Replayed on run 1's eleven drafts: 81 checker sessions
   where run 1 started 407.)
 - **Reviewer memory** (D8): the branch reviewer of a branch is resumed (`--resume` of
@@ -94,8 +103,9 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   verification no longer counts until the driver verifies it again. The final reviewers
   are fresh each round; `submit_draft(v)` for v > 1 writes
   `register/drafts/previous.v<v>.md` (the previous round's points with their ids, and the
-  lead's `draft/response.v<v>.md`); it refuses when the previous round raised material
-  points and `draft/response.v<v>.md` does not name each id. On round v > 1 every final
+  lead's `draft/response.v<v>.md`); it refuses until each of the previous round's three
+  reviews is recorded or its check ended for good, and until `draft/response.v<v>.md`
+  names every point id of that round. On round v > 1 every final
   reviewer, the decider's-eye reviewer included, may read `criteria.md`,
   `reviews/v<v-1>/`, `draft/response.v<v>.md` and `register/drafts/previous.v<v>.md`
   (on round 1, `criteria.md` only, beside its usual reads); the Read guard and the
@@ -105,6 +115,38 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   resource limit) the open points are listed in `deliverable/completion.md`, as before.
   `finish_run` also writes `deliverable/record.json`: criteria, set-aside nodes,
   assumptions taken, and the points left open, for the deliverable and the viewer.
+- **Derivation bundles** (section 5): an estimate's re-run copies only its bundle: the
+  script and the modules under its folder it imports statically, found by `ast`,
+  transitively, at most 64 files and 4 MiB (resource limits); a link or an import that
+  climbs out of `analysis/` is refused. At filing the bundle is stored at
+  `store/derivations/<sha256>/` (`files/<path>`, `bundle.json`); its sha256 is the
+  SHA-256 of canonical JSON `{format: "stemma-bundle/1", script, files: {path:
+  sha256}}`, recorded as `derivation.bundle_sha256` and on the `derivation_reproduces`
+  check (with `bundle_files`). A filed claim re-runs only its stored bundle, so a script
+  edited after filing changes nothing filed (a revised calculation is a new claim). The
+  sandbox puts the bundle's folder on `sys.path` under `python -I`.
+  `stemma.register.derivation.build_bundle(run_dir, script_rel)` is the one builder;
+  `stemma.register.filing.rerun_filed(...)` re-runs a filed claim.
+- **`run_analysis(script, inputs, documents)`** (lead and workers): runs a script under
+  `analysis/` exactly as a re-run does (its bundle, no network, no writes outside a
+  temporary folder, a time limit) and returns the exact `result(...)` value, stdout
+  (capped), the exit code and the bundle's hash; anything outside `analysis/` is
+  refused. It writes nothing to the run.
+- **Sealed release**: after the `finished` fact, `finish_run` writes
+  `release/manifest.json` (canonical JSON, format `stemma-release-manifest/1`: run id,
+  version, release time; every regular file's path, size and SHA-256 except the
+  operational files `stemma.register.manifest.EXCLUDED` names (events, status and usage
+  files, `.stemma/`, locks, SQLite indexes, identity stamps, temporary files,
+  `register/checks.jsonl`, `retro.md`, `release/`); the register log's sealed length,
+  SHA-256 and transaction count). Its own SHA-256 goes to `events.jsonl`
+  (`release_sealed`) and the result, never the sealed log. A link or special file in
+  the run refuses the release and blocks it. After the seal only the excluded files may
+  change; `manifest.check(run_dir, manifest_sha256)` names every other difference,
+  including log bytes appended after the seal. `manifest.read_log` and
+  `manifest.parse_log` read the log with no writer or lock.
+- **CLI**: `stemma report|verify|new` call builder W3's entry points
+  (`stemma.report.site`, `stemma.report.verify`, `stemma.onboard.new`), or refuse with
+  exit code 2 when they are not installed.
 - **Frame-only runs** (section 9): `stop_after: "frame"` in task.json, or `stemma start
   --frame-only`. The lead's first tool call carries a notice saying so, and the lead may
   start no worker (Agent is denied). The driver ends the run once intake.md, criteria.md
@@ -360,7 +402,8 @@ from the harness), `created_at`, each code check's result, `supersedes`,
   `request_frame_critique`, `record_frame` and `record_review` (accepted only from the
   session the driver launched for that role, id, version and round), `submit_draft`,
   `await_checks` (accepts claim ids, branch ids and draft versions),
-  `proceed_on_assumption`, `get_tree`, `claim_dependents`, `finish_run(version)`
+  `proceed_on_assumption`, `get_tree`, `claim_dependents`, `finish_run(version)`,
+  (v0.4) `gate_status`, `run_analysis`, `check_assignment`, `revise_criteria`
   (which copies the frozen, reviewed draft into `deliverable/` and writes
   `answer.reader.md` from the same bytes), and part D's `query_data(sql)`.
 - **Tags.** In drafts and the deliverable each figure is followed by `[[c:<first 12
