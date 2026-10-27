@@ -1,0 +1,130 @@
+run folder: <SCRATCH>
+{
+ "wall_s": 113,
+ "sessions": 9,
+ "changed": 0,
+ "verdicts": {
+  "02dddcd40aa2": [
+   "holds",
+   "holds"
+  ],
+  "05375029d056": [
+   "holds",
+   "holds"
+  ],
+  "19a446a5cf30": [
+   "holds",
+   "holds"
+  ],
+  "1e303d628b04": [
+   "holds",
+   "holds"
+  ],
+  "36ae5c7f938a": [
+   "holds",
+   "holds"
+  ],
+  "5d140c4f1fc5": [
+   "holds",
+   "holds"
+  ],
+  "85787f92ad95": [
+   "holds",
+   "holds"
+  ],
+  "a9652819d902": [
+   "holds",
+   "holds"
+  ],
+  "c33701ec451f": [
+   "holds",
+   "holds"
+  ]
+ },
+ "tokens": {
+  "input_tokens": 136,
+  "output_tokens": 27908,
+  "cache_creation_input_tokens": 236807,
+  "cache_read_input_tokens": 1316778
+ },
+ "cost_estimate_usd": 2.7165,
+ "ended": [
+  {
+   "session": "check-222b5593d0e1dee4-1",
+   "outcome": "completed"
+  },
+  {
+   "session": "check-1b73a06f76868dce-1",
+   "outcome": "completed"
+  },
+  {
+   "session": "check-3f15df4edc5c5caf-1",
+   "outcome": "completed"
+  },
+  {
+   "session": "check-938fc5c0209ad3f4-1",
+   "outcome": "completed"
+  },
+  {
+   "session": "check-edfe457da887e5c0-1",
+   "outcome": "completed"
+  },
+  {
+   "session": "check-1677dcf50286c643-1",
+   "outcome": "completed"
+  },
+  {
+   "session": "check-8ae3f1d3aabc27a1-1",
+   "outcome": "completed"
+  },
+  {
+   "session": "check-52e00a0a5a2f49fb-1",
+   "outcome": "completed"
+  },
+  {
+   "session": "check-5da7426f1e5b31e8-1",
+   "outcome": "completed"
+  },
+  {
+   "session": "check-15bb62351766ab4b-1",
+   "outcome": "completed"
+  },
+  {
+   "session": "check-cfe52e68251926e8-1",
+   "outcome": "completed"
+  },
+  {
+   "session": "check-6e7c09e78f122790-1",
+   "outcome": "completed"
+  },
+  {
+   "session": "check-9905191ade3dccd5-1",
+   "outcome": "completed"
+  },
+  {
+   "session": "check-b52d72e61adbd609-1",
+   "outcome": "completed"
+  },
+  {
+   "session": "check-3f642cc6322b7824-1",
+   "outcome": "completed"
+  },
+  {
+   "session": "check-725666d05e7d7a9f-1",
+   "outcome": "completed"
+  },
+  {
+   "session": "check-50670218fc72add5-1",
+   "outcome": "completed"
+  },
+  {
+   "session": "check-bd12d607539ba91d-1",
+   "outcome": "completed"
+  },
+  {
+   "session": "check-9b5bdb6a440419fa-1",
+   "outcome": "completed"
+  },
+  {
+   "session": "check-257381e9212007bf-1",
+   "outcome
