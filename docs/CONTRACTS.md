@@ -238,6 +238,18 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   background workers the harness killed when it ended (from its stream's
   `task_updated` killed records), so it re-dispatches them. Events:
   `lead_resumed_after_end`, `lead_not_resumed`.
+- **Lead time, one count** (`stemma.driver.leadtime`): the lead's execution time is the
+  sum of its sessions, never the gaps between them (usage waits, a driver that was
+  down); every launch gets only what is left of `lead_max_s`, and the Stop hook, the
+  resume of an ended lead and the automatic resume all read the same count.
+- **A usage stop is shared at once:** any session's usage rejection sets one stop flag
+  and persists `usage_limited` under the lock every lead launch decision takes; the Stop
+  hook then lets the lead stop, so the supervisor recovers the run after the reset.
+- **Deliberate stops:** a lead stopped on purpose (SIGTERM or SIGINT sent to its
+  process, not by the driver) ends `lead_cancelled` (exit code 9) and is never resumed.
+- **Notices name every unfinished worker:** confirmed kills, and workers started with no
+  end recorded (possibly interrupted by a crash). The Stop hook's idle-refusal count
+  starts afresh for each driver-authorised launch.
 - **Live** (`tests/e2e/stop_hook_probe.py`, pinned 2.1.308, headless): the hook refused
   the lead's stops, the background worker ran to completion (none killed) and its
   completion reached the lead.
@@ -663,7 +675,8 @@ Each guard has a producer in the live path, or it would block every run.
   `status.html`, and resumes a stopped run, by itself after a usage stop (section 0).
 - Outcomes and exit codes: `released` 0, `ended_without_release` 1, `canary_failed` 2,
   `stopped_by_limit` 3, `lead_failed` 4, `release_withdrawn` 5, `revocation_failed` 6,
-  `usage_limited` 7 (resumes left used up), `frame_complete` 8, `driver_stopped` 130.
+  `usage_limited` 7 (resumes left used up), `frame_complete` 8, `lead_cancelled` 9,
+  `driver_stopped` 130.
 - It runs the system under test only through the isolated runner configuration, and
   reads only transcripts of sessions it launched.
 

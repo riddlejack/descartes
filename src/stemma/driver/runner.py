@@ -154,8 +154,15 @@ OUTCOME_CODES: Final = {
     "revocation_failed": 6,  # a wrong-model check could not be revoked: release blocked
     "usage_limited": 7,  # the account's usage limit stopped sessions; resume continues
     "frame_complete": 8,  # a frame-only run: the frame, tree and critique response exist
+    "lead_cancelled": 9,  # someone stopped the lead's own process on purpose
     "driver_stopped": 130,  # SIGTERM or SIGINT reached the driver
 }
+
+# Return codes of a process stopped by SIGTERM or SIGINT (invariant: the platform's
+# signal numbers, as Popen reports them).
+CANCEL_RETURNCODES: Final = frozenset({-signal.SIGTERM, -signal.SIGINT})
+# A background task's end, in the harness's stream (invariant: its status names).
+TASK_ENDS: Final = frozenset({"completed", "failed", "killed", "stopped"})
 
 # Ends of a checking session that say nothing about the check itself, so resume runs it
 # again (invariant shared with the register: these outcomes mean it never did its job).
@@ -493,6 +500,11 @@ class Driver:
             return s.killed_reason
         if s.init is None or s.killed_reason == "init_timeout":
             return "launch_failed"
+        if (s.spec.request_id is None and s.killed_reason is None
+                and s.proc.returncode in CANCEL_RETURNCODES):
+            # Someone stopped the lead on purpose (SIGTERM or SIGINT sent to it, not by
+            # the driver): a cancel, never a failure to resume (Codex review #5).
+            return "cancelled"
         r = s.result or {}
         if s.proc.returncode == 0 and r.get("subtype") == "success" and not r.get("is_error"):
             return "completed"
@@ -791,14 +803,17 @@ class Driver:
                                                 usage=self.usage_summary))
 
     # ----- a lead that ended before the release -----------------------------------------
-    def killed_workers(self, name: str) -> list[str]:
-        """The background workers the harness killed when the lead's session `name`
-        ended, by their description, from its saved stream."""
+    def worker_ends(self, name: str) -> tuple[list[str], list[str]]:
+        """From the lead session `name`'s saved stream: the background workers the
+        harness killed (a `task_updated` killed record), and the ones started with no
+        end recorded at all, possibly interrupted by a crash (Codex review #8). Each by
+        its description."""
         try:
             data = safeio.read_bytes(self.run_dir, f"{SESSIONS_DIR}/{name}.stream.jsonl")
         except (FileNotFoundError, safeio.UnsafePath, NotADirectoryError):
-            return []
+            return [], []
         described: dict[str, str] = {}
+        ended: set[str] = set()
         killed: list[str] = []
         for raw in data.splitlines():
             if b"task_" not in raw:
@@ -810,12 +825,20 @@ class Driver:
             if not isinstance(msg, dict) or msg.get("type") != "system":
                 continue
             tid = str(msg.get("task_id") or "")
-            if msg.get("subtype") == "task_started":
+            sub = msg.get("subtype")
+            status = (msg.get("patch") or {}).get("status") if sub == "task_updated" \
+                else msg.get("status") if sub == "task_notification" else None
+            if sub == "task_started":
                 described[tid] = str(msg.get("description") or tid)
-            elif (msg.get("subtype") == "task_updated"
-                  and (msg.get("patch") or {}).get("status") == "killed"):
-                killed.append(described.get(tid, tid))
-        return list(dict.fromkeys(killed))
+            elif status in TASK_ENDS:
+                ended.add(tid)
+                if status == "killed":
+                    killed.append(described.get(tid, tid))
+        unresolved = [d for tid, d in described.items() if tid not in ended]
+        return list(dict.fromkeys(killed)), unresolved
+
+    def killed_workers(self, name: str) -> list[str]:
+        return self.worker_ends(name)[0]
 
     def _lead_time_left(self) -> float:
         return leadtime.lead_time_left(self.run_dir, self.limits.lead_max_s)
@@ -844,7 +867,7 @@ class Driver:
         from stemma.hooks.arrivals import queue_notice
         from stemma.hooks.stop import in_flight
 
-        killed = self.killed_workers(str(lead.get("name") or "lead"))
+        killed, unresolved = self.worker_ends(str(lead.get("name") or "lead"))
         try:
             flight = in_flight(self.run_dir)
         except Exception as exc:  # noqa: BLE001 - the notice says less, the resume goes on
@@ -856,6 +879,10 @@ class Driver:
         if killed:
             lines.append("Workers that were stopped when it ended, to dispatch again: "
                          + "; ".join(killed) + ".")
+        if unresolved:
+            lines.append("Workers started and never seen to finish (possibly interrupted; "
+                         "check their records, dispatch again if needed): "
+                         + "; ".join(unresolved) + ".")
         for key, items in flight.items():
             if items:
                 lines.append(f"{key.replace('_', ' ')}: {', '.join(items)}.")
@@ -872,6 +899,7 @@ class Driver:
             events.emit(self.run_dir, "lead_resumed_after_end", resume=n + 1,
                         limit=self.limits.max_lead_resumes,
                         previous_outcome=lead.get("outcome"), killed_workers=killed,
+                        unresolved_workers=unresolved,
                         lead_time_left_s=round(self._lead_time_left(), 1))
             self.start_lead(resume=True)
 
@@ -1038,6 +1066,8 @@ class Driver:
         # over a usage stop, which run_to_end would otherwise resume (Codex review #2).
         if lead_outcome == "stopped_by_limit" and not self.released(self.run_dir):
             return "stopped_by_limit"
+        if lead_outcome == "cancelled" and not self.released(self.run_dir):
+            return "lead_cancelled"  # a deliberate stop: never resumed (Codex review #5)
         if self.state.get("usage_limited") and not self.released(self.run_dir):
             return "usage_limited"
         if self.state.get("release_blocked"):
@@ -1052,6 +1082,8 @@ class Driver:
             return "release_withdrawn"
         if lead_outcome == "stopped_by_limit":
             return "stopped_by_limit"
+        if lead_outcome == "cancelled":
+            return "lead_cancelled"
         if lead_outcome in ("launch_failed", "failed"):
             return "lead_failed"
         return "ended_without_release"

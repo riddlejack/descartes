@@ -122,3 +122,61 @@ def test_a_usage_stop_while_the_notice_is_built_stops_the_resume(
     assert kinds(run, "lead_not_resumed")[0]["reason"].startswith("a usage stop")
     persisted = json.loads((run / ".stemma/driver-state.json").read_text())
     assert persisted["usage_limited"] is True  # persisted at once, for the Stop hook
+
+
+def test_a_lead_stopped_on_purpose_is_not_resumed(cfg: DriverConfig, tmp: Path, fake: Fake,
+                                                  limits: Limits) -> None:
+    # Review #5: SIGTERM sent to the lead's own process (not by the driver).
+    import os
+    import signal
+    import threading
+    import time
+
+    lim = dataclasses.replace(limits, max_lead_resumes=2)
+    fake.configure({"lead": {"sleep_s": 30}})
+    run = create_run(cfg, write_task(tmp), limits=lim)
+
+    def cancel() -> None:
+        end = time.time() + 20
+        while time.time() < end:
+            lead = [c for c in fake.calls() if c["role"] == "lead"]
+            st = run / ".stemma/driver-state.json"
+            if lead and st.exists() and json.loads(st.read_text())["lead"].get("running"):
+                break
+            time.sleep(0.05)
+        time.sleep(0.5)
+        import subprocess
+
+        out = subprocess.run(["pgrep", "-f", f"run:{run.name}"], capture_output=True,
+                             text=True, check=False).stdout.split()
+        for pid in out:
+            os.kill(int(pid), signal.SIGTERM)
+
+    t = threading.Thread(target=cancel)
+    t.start()
+    code = start(cfg, run, checks_api, lim, released=lambda _r: False)
+    t.join()
+    assert code == 9
+    assert not kinds(run, "lead_resumed_after_end")
+    st = json.loads((run / ".stemma/driver-state.json").read_text())
+    assert st["lead"]["outcome"] == "cancelled" and st["outcome"] == "lead_cancelled"
+
+
+def test_workers_started_and_never_ended_are_named(cfg: DriverConfig, tmp: Path,
+                                                   limits: Limits) -> None:
+    # Review #8: the lead crashed before any task_updated record.
+    run = create_run(cfg, write_task(tmp), limits=limits)
+    stream = run / ".stemma/sessions/lead.stream.jsonl"
+    stream.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        {"type": "system", "subtype": "task_started", "task_id": "t1", "description": "a"},
+        {"type": "system", "subtype": "task_started", "task_id": "t2", "description": "b"},
+        {"type": "system", "subtype": "task_started", "task_id": "t3", "description": "c"},
+        {"type": "system", "subtype": "task_notification", "task_id": "t3",
+         "status": "completed"},
+        {"type": "system", "subtype": "task_updated", "task_id": "t2",
+         "patch": {"status": "killed"}},
+    ]
+    stream.write_text("".join(json.dumps(x) + "\n" for x in lines))
+    d = Driver(cfg, run, checks_api, limits)
+    assert d.worker_ends("lead") == (["b"], ["a"])
