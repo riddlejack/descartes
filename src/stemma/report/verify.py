@@ -547,7 +547,7 @@ def check_log(log: ledger.Log) -> Section:
     from stemma.register.filing import claim_id_of
 
     sec = Section("log", "Register log")
-    wm = ledger._memory_world(log.lines)
+    wm = ledger.fold(log.data)
     sec.extra = f"{_n(len(log.lines))} transactions fold with no gap, malformed line or tail"
     for ent in wm.view("graph").query({"type": "claim"}):
         e: dict[str, Any] = dict(ent)

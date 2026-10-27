@@ -534,3 +534,17 @@ def test_dot_names_are_plain_but_dot_segments_are_not(tmp_path: Path) -> None:
     for bad in (".", "..", "a/../b", "./a"):
         with pytest.raises(safefs.UnsafeRead):
             safefs.parts(bad)
+
+
+def test_a_manifest_that_does_not_seal_the_check_records_fails(
+        run: tuple[Path, dict[str, str]]) -> None:
+    run_dir, _ids = run
+    seal(run_dir)
+    path = run_dir / "release/manifest.json"
+    man = json.loads(path.read_text())
+    del man["checks"]
+    path.chmod(0o644)
+    path.write_text(json.dumps(man))
+    result = verify.verify(run_dir)
+    assert result.outcome == "FAIL"
+    assert any("does not seal register/checks.jsonl" in f for _l, f in result.failures)

@@ -242,3 +242,13 @@ seals with `manifest.seal` (format `stemma-release-manifest/2`).
 One stop-gap is left, and it is marked: `report/ledger.py` folds the sealed bytes in
 memory. W2's `Register.read_only` reads the whole log file, and a release must be read
 from its sealed bytes only.
+
+## The last stop-gap removed: Register.from_sealed
+
+`report/ledger.py` now opens the register with W2's `Register.from_sealed`. It folds
+exactly the sealed bytes of the log and takes the sealed bytes of `checks.jsonl`. It
+also takes the bytes of `refused_corrections.jsonl`, all read through `safefs`, and it
+refuses every write. No private register attribute is touched any more.
+
+A manifest that does not seal `checks.jsonl` is now a failure: format
+`stemma-release-manifest/2` always seals it.
