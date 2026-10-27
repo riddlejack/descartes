@@ -946,6 +946,12 @@ class Driver:
         return "ended_without_release"
 
     def _finish(self, outcome: str) -> int:
+        from stemma.driver.launch import host_secrets_path
+
+        try:  # the secrets live only while sessions may run; a resume writes them again
+            host_secrets_path(self.cfg, self.run_dir).unlink(missing_ok=True)
+        except OSError as exc:
+            events.emit(self.run_dir, "host_secrets_not_removed", error=str(exc))
         code = OUTCOME_CODES[outcome]
         self.exit_code = code
         self.state["outcome"] = outcome

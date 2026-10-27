@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -339,10 +340,48 @@ def _register_evidence_tools() -> None:
     register_tools(server)
 
 
+def _register_datalayer_tools() -> None:
+    """Part D's `query_data` (CONTRACTS section 5a), served by this one server."""
+    from stemma.datalayer.tools import register_tools
+
+    register_tools(server)
+
+
 _register_evidence_tools()
+_register_datalayer_tools()
+
+# Host secrets this process may load (invariant: the data layer's secret settings).
+SECRET_NAMES = ("ZETARIS_API_KEY", "STEMMA_PG_PASSWORD")
+
+
+def load_host_secrets(env: dict[str, str] | None = None) -> list[str]:
+    """Read the run's host-secrets file (`STEMMA_HOST_SECRETS`) into this process's own
+    environment: the MCP server is the only process that holds them. The file must be a
+    regular file of this user, mode 0600, reached without a link. Returns the names set."""
+    e = os.environ if env is None else env
+    path = e.get("STEMMA_HOST_SECRETS")
+    if not path:
+        return []
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        st = os.fstat(fd)
+        if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid()
+                or stat.S_IMODE(st.st_mode) & 0o077):
+            raise RuntimeError(f"{path} is not a private file of this user")
+        data = json.loads(os.read(fd, 64 * 1024))  # resource limit: bytes of the file
+    finally:
+        os.close(fd)
+    names = []
+    for k in SECRET_NAMES:
+        v = data.get(k) if isinstance(data, dict) else None
+        if isinstance(v, str) and v:
+            e[k] = v
+            names.append(k)
+    return names
 
 
 def main() -> None:
+    load_host_secrets()
     server.run()
 
 
