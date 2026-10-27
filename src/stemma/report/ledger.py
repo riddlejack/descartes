@@ -16,12 +16,12 @@ manifest without that field leaves the file unauthenticated, and the snapshot sa
 Both side files the register reads (`checks.jsonl`, `refused_corrections.jsonl`) go
 through `safefs` and a strict parser here, never the register's unbounded reader.
 
-STOP-GAP: `_memory_world` and `_read_only_register` reach private attributes of the
-register's classes (`WorldModel._log`, `Register.__init__` bypassed, three read methods
-replaced on the instance). W2's public `Register.read_only(run_dir)` exists, but it folds
-the whole log file and reads checks.jsonl with the register's own reader; a release must
-be read from its sealed bytes only. Replace these two functions with `read_only` once it
-can take the sealed bytes of the log and of checks.jsonl.
+STOP-GAP: the snapshot starts from W2's public `Register.read_only(run_dir)`, which
+refuses every write, but `read_only` folds the whole log file and reads checks.jsonl and
+refused_corrections.jsonl with the register's unbounded reader, while a release must be
+read from its sealed bytes only. So `_memory_world` folds the sealed bytes in memory
+(through `WorldModel._log`) and `_read_only_register` puts that world and three side-file
+reads on the instance. Replace both once `read_only` can take the sealed bytes.
 """
 
 from __future__ import annotations
@@ -186,18 +186,14 @@ def _memory_world(lines: list[bytes]) -> Any:
 
 def _read_only_register(run_dir: Path, wm: Any, checks: Checks,
                         refused: list[dict[str, Any]]) -> Any:
-    """STOP-GAP (see the module's note): a Register over an in-memory world whose reads
-    of the side files come from records already read through safefs."""
+    """W2's `Register.read_only` (no lock, no write; every write method refused), with
+    its world and its three side-file reads replaced by what was read here from the
+    sealed bytes (STOP-GAP, see the module's note). The log was checked to be a plain,
+    bounded file through safefs before `read_only` opens it."""
     from stemma.register.store import Register
 
-    reg = Register.__new__(Register)
-    reg.run_dir = run_dir
-    reg.dir = run_dir / "register"
+    reg = Register.read_only(run_dir)
     reg.wm = wm
-    reg._evidence = None
-    reg._rerun = None  # type: ignore[assignment]
-    reg._relied = []
-    reg._lock = reg.dir / "register"
     revoked, verified = checks.revoked, checks.verified
 
     def refused_by(cid: str) -> frozenset[str]:
