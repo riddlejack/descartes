@@ -323,7 +323,9 @@ def test_the_dry_run_creates_nothing(tmp_path: Path, capsys: pytest.CaptureFixtu
                                      ) -> None:
     assert bare.main(["--dry-run", "--out", str(tmp_path / "bare")]) == 0
     assert not (tmp_path / "bare").exists()
-    assert '"WebSearch"' in capsys.readouterr().out
+    shown = json.loads(capsys.readouterr().out.split("\n{", 1)[1].join(["{", ""]))
+    assert shown["tools"] == ["Bash", "Read", "Write"]  # run 3 has an as-of date
+    assert {"WebSearch", "WebFetch"} <= set(shown["settings_extra"]["permissions"]["deny"])
 
 
 class _Proc:
@@ -414,6 +416,13 @@ class _Sessions:
                  ("WebFetch", {"url": "https://example.com"},
                   "Example Domain. This domain is for use in examples." if self.controls
                   else "Unable to fetch: network error", not self.controls)]
+        if f"mcp__{bare.BROKER}__capture" in prompt:  # an as_of arm: the broker's control
+            steps[-1] = (f"mcp__{bare.BROKER}__capture",
+                         {"url": "https://example.com", "reason": "scope canary"},
+                         json.dumps({"kind": "archive", "status": "ok", "sha256": "ab" * 32})
+                         if self.controls else json.dumps(
+                             {"kind": "archive", "status": "archive_unavailable",
+                              "sha256": None}), False)
         lines: list[dict[str, Any]] = [INIT]
         if self.exercise:
             for n, (tool, inp, text, error) in enumerate(steps):
@@ -435,8 +444,11 @@ def canary_ok(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(clean, "check_canary", lambda init, exp: [])
 
 
-def _launch(tmp_path: Path, sessions: Any) -> Path:
-    return bare.launch(tmp_path / "out", bare.task(), popen=sessions,
+def _launch(tmp_path: Path, sessions: Any, as_of: Any = "run 3's") -> Path:
+    t = bare.task()
+    if as_of != "run 3's":
+        t = {**t, "as_of": as_of}
+    return bare.launch(tmp_path / "out", t, popen=sessions,
                        version="2.1.308 (Claude Code)")
 
 
@@ -460,7 +472,7 @@ def test_a_clean_scope_lets_the_real_session_write_its_answer(
     assert json.loads((folder / "outcome.json").read_text())["eligible"] is True
     assert json.loads((folder / "scope-canary.json").read_text())["problems"] == []
     launch = json.loads((folder / "launch.json").read_text())
-    assert launch["tools"] == ["WebSearch", "WebFetch", "Bash", "Read", "Write"]
+    assert launch["tools"] == ["Bash", "Read", "Write"]  # run 3 has an as-of date
     assert "env" not in launch
     assert not list((tmp_path / "out").glob(".scope-canary-*"))  # the marker is removed
 

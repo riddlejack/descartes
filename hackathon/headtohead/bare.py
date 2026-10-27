@@ -40,6 +40,19 @@ does. An operating-system boundary around the whole harness process is not added
 harness applies its own sandbox to Bash, and a second sandbox around it would stop that
 one from starting. This is a stated limit of the comparison.
 
+**Given an as-of date** (run 3's task has one), the bare arm gets exactly what Stemma's
+workers get in an as_of run (CONTRACTS section 0d): no WebSearch and no WebFetch (left
+out of its tools, denied in its settings, and refused by Stemma's own guard as a hook);
+Bash with no network, as always; and Stemma's broker, the `stemma` MCP server, serving
+the folder, of which it may call exactly the evidence tools Stemma's worker holds
+(capture through an archive copy dated before the date, archived_links, the
+date-bounded sec_search, the SEC tools and the reading tools), every other tool of that
+server denied by name. The folder's run.json holds the date; it, the store, the event
+log and the launch files are unwritable by every tool of the session. The scope
+canary's network control is then the broker's capture of the page, which must come back
+as an archived copy. Without an as-of date the arm is as above, with WebSearch and
+WebFetch.
+
 Stated deviation from a plain user: the prompt asks the bare arm to cite a source for
 every figure (a plain user may not ask); without it the citation counts would measure
 nothing.
@@ -65,6 +78,14 @@ DEFAULT_ROOT: Final = Path.home() / ".private" / "runs" / "stemma2-run3" / "bare
 MODEL: Final = "claude-opus-5-5"  # the pre-registration: Opus 5.5 at high effort
 EFFORT: Final = "high"
 TOOLS: Final = ("WebSearch", "WebFetch", "Bash", "Read", "Write")  # see the module's note
+# Given an as-of date (see the module's note): no live web tool, and the broker.
+AS_OF_TOOLS: Final = ("Bash", "Read", "Write")
+BROKER: Final = "stemma"  # the MCP server's name in the as_of arm's configuration
+# Entries of an as_of folder that no tool of the session may write: run.json gives the
+# date to the broker and the guard; the rest is the broker's store, the guard's log and
+# the launch files. Invariant: what the date and the record rest on.
+PROTECTED: Final = ("run.json", "store", "events.jsonl", "events.jsonl.lock", ".mcp.json",
+                    ".settings.json")
 # Resource limits: seconds between checks of a session's deadlines, and seconds a
 # stopped or ending session is given to exit before it is killed.
 POLL_S: Final = 1.0
@@ -81,9 +102,12 @@ order, one tool call each, and report what each one returned:
 3. Use the Bash tool to run: curl -sS --max-time 10 {page}
 4. Use the Read tool to read the control file {control}
 5. Use the Bash tool to run: cat {control}
-6. Use the WebFetch tool to fetch {page}
+6. {network_step}
 Then reply with the word DONE.
 """
+CANARY_WEBFETCH: Final = "Use the WebFetch tool to fetch {page}"
+CANARY_BROKER: Final = ("Use the mcp__" + BROKER + "__capture tool to capture {page} with the "
+                        "reason: scope canary")
 # Resource limits: seconds the session may run, and seconds to wait for its init message.
 SESSION_MAX_S: Final = 4 * 3600
 # The interpreter whose folders Bash may read (its standard library, nothing of this
@@ -144,6 +168,43 @@ def prompt_for(t: dict[str, Any]) -> str:
                          as_of=t.get("as_of") or datetime.now(UTC).date().isoformat())
 
 
+def tools_for(t: dict[str, Any]) -> tuple[str, ...]:
+    return AS_OF_TOOLS if t.get("as_of") else TOOLS
+
+
+def broker_tools() -> tuple[str, ...]:
+    """The evidence tools Stemma's worker holds, read from its own agent file: the as_of
+    arm may call exactly these on the broker."""
+    from stemma.driver import frontmatter
+    from stemma.evidence.tools import TOOLS as EVIDENCE_TOOLS
+    from stemma.register import roles
+
+    path = REPO / "plugin" / "agents" / "worker.md"
+    held = frontmatter.parse(path.read_text(encoding="utf-8"), str(path)).tools()
+    names = {f.__name__ for f in EVIDENCE_TOOLS}
+    short = (t.removeprefix(roles.MCP_PREFIX) for t in held if t.startswith(roles.MCP_PREFIX))
+    return tuple(sorted(n for n in short if n in names))
+
+
+def broker_denied() -> tuple[str, ...]:
+    """Every other tool the broker serves (the register's, the data layer's)."""
+    from stemma import mcp_server
+
+    served = {t.name for t in mcp_server.server._tool_manager.list_tools()}
+    return tuple(sorted(served - set(broker_tools())))
+
+
+def broker_config(folder: Path, host_python: Path) -> dict[str, Any]:
+    """The one MCP configuration of the as_of arm: Stemma's server over the folder, run
+    by the repository's interpreter outside the session's sandbox, as in a Stemma run."""
+    env = {"STEMMA_RUN_DIR": str(folder)}
+    for k in ("STEMMA_SEC_IDENTITY", "STEMMA_CACHE"):
+        if os.environ.get(k):
+            env[k] = os.environ[k]
+    return {"mcpServers": {BROKER: {"type": "stdio", "command": str(host_python),
+                                    "args": ["-I", "-m", "stemma.mcp_server"], "env": env}}}
+
+
 def denied_reads(folder: Path, config: Path) -> list[str]:
     """Read-tool denials besides the allow-only-inside rule (a backstop): run 3's own
     folder, the Claude and Codex configurations and SSH keys."""
@@ -153,27 +214,40 @@ def denied_reads(folder: Path, config: Path) -> list[str]:
     return [f"Read(/{p}/**)" for p in paths]
 
 
-def settings_extra(folder: Path, config: Path, python: Path) -> dict[str, Any]:
-    """The bare arm's permissions and sandbox (see the module's note)."""
+def settings_extra(folder: Path, config: Path, python: Path, as_of: str | None = None,
+                   host_python: Path | None = None) -> dict[str, Any]:
+    """The bare arm's permissions and sandbox (see the module's note); with `as_of`,
+    Stemma's as_of tools and refusals, the guard run by `host_python`."""
     from stemma.driver.settings import _links_on, read_scope
 
     scope = read_scope(python)
     allow_read = [str(folder), *scope.allow] + _links_on([str(folder)])
+    allow = ["WebSearch", "WebFetch", "Bash", f"Read(/{folder}/**)", f"Write(/{folder}/**)"]
+    deny = denied_reads(folder, config)
+    filesystem: dict[str, Any] = {"denyRead": list(scope.deny),
+                                  "allowRead": list(dict.fromkeys(allow_read))}
+    out: dict[str, Any] = {}
+    if as_of:
+        allow = [a for a in allow if a not in ("WebSearch", "WebFetch")]
+        allow += [f"mcp__{BROKER}__{n}" for n in broker_tools()]
+        deny += ["WebSearch", "WebFetch"] + [f"mcp__{BROKER}__{n}" for n in broker_denied()]
+        for p in PROTECTED:
+            deny += [f"Write(/{folder / p})", f"Write(/{folder / p}/**)"]
+        filesystem["denyWrite"] = [str(folder / p) for p in PROTECTED]
+        guard = f'"{host_python or sys.executable}" -I -m stemma.hooks pre'
+        out["hooks"] = {"PreToolUse": [{"matcher": "WebSearch|WebFetch", "hooks": [
+            {"type": "command", "command": guard, "timeout": 30, "onFailure": "block"}]}]}
     return {
-        "permissions": {
-            "allow": ["WebSearch", "WebFetch", "Bash", f"Read(/{folder}/**)",
-                      f"Write(/{folder}/**)"],
-            "deny": denied_reads(folder, config),
-        },
+        "permissions": {"allow": allow, "deny": deny},
         "sandbox": {
             "enabled": True,
             "failIfUnavailable": True,
             "allowUnsandboxedCommands": False,
             "autoAllowBashIfSandboxed": True,
             "network": {"allowedDomains": []},
-            "filesystem": {"denyRead": list(scope.deny),
-                           "allowRead": list(dict.fromkeys(allow_read))},
+            "filesystem": filesystem,
         },
+        **out,
     }
 
 
@@ -206,7 +280,8 @@ def _stop(proc: Any) -> int | None:
 
 def _session(folder: Path, prompt: str, stream_name: str, binary: Path, config: Path,
              version: str, settings: dict[str, Any], popen: Any,
-             max_s: float) -> tuple[dict[str, Any], dict[str, Any] | None, str]:
+             max_s: float, tools: tuple[str, ...] = TOOLS,
+             mcp_config: Path | None = None) -> tuple[dict[str, Any], dict[str, Any] | None, str]:
     """One headless session in `folder`: (outcome, result message, the whole stream).
     The init message's canary is checked first; a failed canary stops the session. A
     reader thread hands lines over, so the start-up deadline (INIT_TIMEOUT_S) and the
@@ -216,12 +291,15 @@ def _session(folder: Path, prompt: str, stream_name: str, binary: Path, config: 
 
     from stemma.driver.clean import bare_expectation, check_canary, clean_launch
 
+    env_extra = {"CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS": "1",
+                 "CLAUDE_CODE_TMPDIR": str(folder / ".tmp")}
+    if mcp_config is not None:
+        env_extra["STEMMA_RUN_DIR"] = str(folder)  # the guard's: whose run.json to read
     cl = clean_launch(binary, config, prompt, cwd=folder, model=MODEL, effort=EFFORT,
-                      tools=list(TOOLS), settings_path=folder / ".settings.json",
-                      settings_extra=settings,
-                      env_extra={"CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS": "1",
-                                 "CLAUDE_CODE_TMPDIR": str(folder / ".tmp")},
-                      strict_mcp_config=True, disable_slash_commands=True)
+                      tools=list(tools), settings_path=folder / ".settings.json",
+                      settings_extra=settings, env_extra=env_extra,
+                      strict_mcp_config=True, disable_slash_commands=True,
+                      mcp_config=mcp_config)
     (folder / ".tmp").mkdir(exist_ok=True)
     started = time.monotonic()
     outcome: dict[str, Any] = {"canary": None, "exit_code": None}
@@ -268,9 +346,10 @@ def _session(folder: Path, prompt: str, stream_name: str, binary: Path, config: 
             if msg.get("type") == "system" and msg.get("subtype") == "init" \
                     and outcome["canary"] is None:
                 problems = check_canary(msg, bare_expectation(
-                    cwd=folder, tools=list(TOOLS), harness_version=version,
+                    cwd=folder, tools=list(tools), harness_version=version,
                     session_id=msg.get("session_id") if isinstance(
-                        msg.get("session_id"), str) else None))
+                        msg.get("session_id"), str) else None,
+                    mcp_server=BROKER if mcp_config is not None else None))
                 outcome["canary"] = problems or "passed"
                 if problems:
                     break
@@ -344,13 +423,14 @@ def _text(content: Any) -> str:
 
 
 def scope_problems(stream: str, marker: Path, token: str, control: Path,
-                   control_token: str) -> list[str]:
+                   control_token: str, as_of: str | None = None) -> list[str]:
     """What the scope canary's stream shows went wrong (empty: the scope held). Exact
     facts only: each of the six calls was made and has its result; the three reaches
     outside (the marker by Read and by Bash, the network by Bash) came back refused, and
     nothing from outside appears; the three controls succeeded (the control file inside
-    the folder read by Read and by Bash, the page reached by WebFetch), so a refusal is
-    the confinement's and not a broken tool or a network down."""
+    the folder read by Read and by Bash, the page reached by WebFetch, or with `as_of` an
+    archived copy of it captured by the broker), so a refusal is the confinement's and
+    not a broken tool or a network down."""
     results = {b.get("tool_use_id"): b for b in _blocks(stream, "tool_result")}
     uses = _blocks(stream, "tool_use")
 
@@ -365,7 +445,10 @@ def scope_problems(stream: str, marker: Path, token: str, control: Path,
              ("Bash", "curl", "the network from Bash", "refused"),
              ("Read", str(control), "the Read tool on the control file", control_token),
              ("Bash", f"cat {control}", "cat on the control file in Bash", control_token),
-             ("WebFetch", CANARY_PAGE, "WebFetch on the page", "reached")]
+             ("WebFetch", CANARY_PAGE, "WebFetch on the page", "reached")
+             if not as_of else
+             (f"mcp__{BROKER}__capture", CANARY_PAGE, "the broker's capture of the page",
+              "archived")]
     problems = []
     for name, want, what, expect in steps:
         use = find(name, want)
@@ -381,7 +464,11 @@ def scope_problems(stream: str, marker: Path, token: str, control: Path,
             problems.append(f"{what} was not refused")
         elif expect == "reached" and error:
             problems.append(f"{what} failed, so a refused curl proves nothing")
-        elif expect not in ("refused", "reached") and (error or expect not in text):
+        elif expect == "archived" and (error or not _archived(text)):
+            problems.append(f"{what} did not return an archived copy, so a refused curl "
+                            "proves nothing")
+        elif expect not in ("refused", "reached", "archived") and (
+                error or expect not in text):
             problems.append(f"{what} did not return the control's token: the tool or the "
                             "folder is broken, so a refusal proves nothing")
         if name == "Bash" and want == "curl" and CANARY_PAGE_TEXT in text:
@@ -391,6 +478,16 @@ def scope_problems(stream: str, marker: Path, token: str, control: Path,
         problems.append("the marker's token appears in the stream: a read outside the "
                         "folder succeeded")
     return problems
+
+
+def _archived(text: str) -> bool:
+    """Whether a capture's receipt says it is an archived copy that was stored."""
+    try:
+        receipt = json.loads(text)
+    except ValueError:
+        return False
+    return (isinstance(receipt, dict) and receipt.get("kind") == "archive"
+            and receipt.get("status") == "ok" and bool(receipt.get("sha256")))
 
 
 def canary_finished(outcome: dict[str, Any], result: dict[str, Any] | None) -> list[str]:
@@ -427,9 +524,17 @@ def launch(root: Path, t: dict[str, Any], popen: Any = subprocess.Popen,
     if version is None:
         version = harness_version(DriverConfig(folder, binary, config, python,
                                                default_plugin_src()))
-    settings = settings_extra(folder, config, python)
+    as_of = t.get("as_of") or None
+    tools = tools_for(t)
+    settings = settings_extra(folder, config, python, as_of, Path(sys.executable))
+    mcp_config: Path | None = None
+    if as_of:
+        _write(folder / "run.json", json.dumps({"run_id": f"bare-{stamp}", "as_of": as_of}))
+        mcp_config = folder / ".mcp.json"
+        _write(mcp_config, json.dumps(broker_config(folder, Path(sys.executable)), indent=1))
     _write(folder / "launch.json", json.dumps({
-        "model": MODEL, "effort": EFFORT, "tools": list(TOOLS), "harness": version,
+        "model": MODEL, "effort": EFFORT, "tools": list(tools), "harness": version,
+        "as_of": as_of, "broker_tools": list(broker_tools()) if as_of else [],
         "settings_extra": settings, "task": t, "started_at": stamp}, indent=1))
 
     token, control_token = secrets.token_hex(16), secrets.token_hex(16)
@@ -438,14 +543,17 @@ def launch(root: Path, t: dict[str, Any], popen: Any = subprocess.Popen,
     control = folder / ".scope-control.txt"
     control.write_text(f"{control_token}\n", encoding="utf-8")
     try:
+        step = (CANARY_BROKER if as_of else CANARY_WEBFETCH).format(page=CANARY_PAGE)
         c_out, c_res, c_stream = _session(
-            folder, CANARY_PROMPT.format(marker=marker, control=control, page=CANARY_PAGE),
-            "scope-canary.jsonl", binary, config, version, settings, popen, CANARY_MAX_S)
+            folder, CANARY_PROMPT.format(marker=marker, control=control, page=CANARY_PAGE,
+                                         network_step=step),
+            "scope-canary.jsonl", binary, config, version, settings, popen, CANARY_MAX_S,
+            tools, mcp_config)
     finally:
         marker.unlink(missing_ok=True)
         control.unlink(missing_ok=True)
     problems = (canary_finished(c_out, c_res)
-                + scope_problems(c_stream, marker, token, control, control_token))
+                + scope_problems(c_stream, marker, token, control, control_token, as_of))
     _write(folder / "scope-canary.json", json.dumps({**c_out, "problems": problems},
                                                     indent=1))
     if problems:
@@ -453,7 +561,8 @@ def launch(root: Path, t: dict[str, Any], popen: Any = subprocess.Popen,
                         + "; ".join(problems))
 
     outcome, result, _stream = _session(folder, prompt, "stream.jsonl", binary, config,
-                                        version, settings, popen, SESSION_MAX_S)
+                                        version, settings, popen, SESSION_MAX_S, tools,
+                                        mcp_config)
     why = eligible(outcome, result)
     outcome["eligible"] = not why
     outcome["not_eligible_because"] = why
@@ -485,11 +594,15 @@ def main(argv: list[str] | None = None) -> int:
             print(prompt_for(t))
             folder = Path(args.out).expanduser() / "<new run folder>"
             config = Path(os.environ.get("STEMMA_CLAUDE_CONFIG") or "<STEMMA_CLAUDE_CONFIG>")
-            print(json.dumps({"model": MODEL, "effort": EFFORT, "tools": list(TOOLS),
+            as_of = t.get("as_of") or None
+            print(json.dumps({"model": MODEL, "effort": EFFORT, "tools": list(tools_for(t)),
+                              "as_of": as_of,
                               "settings_extra": settings_extra(
                                   folder, config,
                                   SCOPE_PYTHON if SCOPE_PYTHON.exists() else
-                                  Path(sys.executable)),
+                                  Path(sys.executable), as_of, Path(sys.executable)),
+                              "mcp_config": broker_config(folder, Path(sys.executable))
+                              if as_of else None,
                               "out": str(args.out)}, indent=1))
             return 0
         folder = launch(args.out, t)
