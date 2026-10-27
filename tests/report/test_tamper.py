@@ -50,7 +50,7 @@ def test_one_byte_of_a_cited_source_is_caught_and_the_original_is_untouched(run:
 @needs_sandbox
 def test_a_changed_figure_in_the_log_is_caught(run: Path) -> None:
     out = io.StringIO()
-    assert tamper.demo(run, "figure", baseline=False, out=out) == 0
+    assert tamper.demo(run, "figure", out=out) == 0
     text = out.getvalue()
     assert "number 212 became 213" in text
     assert "Register log: claim c:" in text and "changed after filing" in text
@@ -68,5 +68,49 @@ def test_a_change_verify_misses_fails_the_demo(run: Path, monkeypatch: Any) -> N
 
     monkeypatch.setattr(verify, "verify", blind)
     out = io.StringIO()
-    assert tamper.demo(run, "source", baseline=False, out=out) == 1
+    assert tamper.demo(run, "source", out=out) == 1
     assert "NOT CAUGHT" in out.getvalue()
+
+
+def test_a_receipt_hash_that_is_a_path_writes_nothing_outside(
+        run: Path, tmp_path: Path, monkeypatch: Any) -> None:
+    """Codex recheck H2: a receipt `sha256` of `/somewhere/outside.txt` was written to."""
+    import json
+
+    outside = tmp_path / "outside.txt"
+    outside.write_text("212 benches")
+    monkeypatch.setattr(verify, "verify", lambda *a, **k: _clean_result())
+    for p in (run / "store/receipts").glob("*.json"):
+        rec = json.loads(p.read_text())
+        rec["sha256"] = str(outside)
+        p.chmod(0o644)
+        p.write_text(json.dumps(rec))
+    assert tamper.main([str(run)]) == 2
+    assert outside.read_text() == "212 benches"
+
+
+def _clean_result() -> verify.Result:
+    return verify.Result("x", None, [verify.Section("captures", "Captures")], 0.0,
+                         "not released")
+
+
+def test_a_run_holding_a_link_is_refused(run: Path, tmp_path: Path,
+                                         capsys: pytest.CaptureFixture[str]) -> None:
+    (tmp_path / "secret.txt").write_text("outside")
+    (run / "analysis/link.py").symlink_to(tmp_path / "secret.txt")
+    assert tamper.main([str(run)]) == 2
+    assert "a symbolic link" in capsys.readouterr().err
+
+
+def test_a_run_that_already_fails_verify_is_refused(
+        run: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    import json
+
+    rec = json.loads(next((run / "store/receipts").glob("*.json")).read_text())
+    target = run / "store/bytes" / rec["sha256"]
+    target.chmod(0o644)
+    target.write_bytes(target.read_bytes() + b" ")
+    before = digest(run)
+    assert tamper.main([str(run)]) == 2
+    assert "already fails verify" in capsys.readouterr().err
+    assert digest(run) == before

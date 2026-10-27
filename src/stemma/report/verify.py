@@ -73,7 +73,7 @@ MANIFEST_FORMAT: Final = "stemma-release-manifest/1"
 _SHA = re.compile(r"[0-9a-f]{64}")
 # Exceptions a malformed record can raise inside a check; each becomes a named failure.
 MALFORMED: Final = (KeyError, TypeError, ValueError, AttributeError, IndexError,
-                    RecursionError, UnicodeError)
+                    RecursionError, UnicodeError, OverflowError)
 
 
 @dataclass
@@ -270,14 +270,15 @@ def check_seal(run_dir: Path, log: ledger.Log | None, expect: str | None,
               or hashlib.sha256(log.data[:log_size]).hexdigest() != log_sha):
             sec.failures.append("register/log.jsonl: the sealed part of the log changed or "
                                 "is shorter than at release.")
-        else:
+        elif len(log.data) > log_size:
             appended = log.data[log_size:].count(b"\n")
+            sec.failures.append(f"register/log.jsonl: {len(log.data) - log_size:,} bytes "
+                                f"({appended} transaction(s)) appended after the seal; they "
+                                f"are never read.")
         sec.done += 1
     elif log_path is None:
         sec.failures.append(f"{MANIFEST} does not seal the register's log.")
-    sec.extra = (f"{_n(sec.done)} sealed files and the log re-hashed against {pin}"
-                 + (f"; {appended} log transaction(s) appended after the release"
-                    if appended else ""))
+    sec.extra = f"{_n(sec.done)} sealed files and the log re-hashed against {pin}"
     return sec
 
 
@@ -582,7 +583,11 @@ def _lookup(run: Run) -> Callable[[str], tuple[str, float]]:
         num = number.get("number") if isinstance(number, dict) else None
         if inp is None or not isinstance(num, int | float) or isinstance(num, bool):
             raise Refused(f"Refused: input {given} is not a claim with a number.")
-        return str(inp["claim_id"]), float(num)
+        try:
+            return str(inp["claim_id"]), float(num)
+        except OverflowError as exc:
+            raise Refused(f"Refused: input {given}'s number is too large for a float.") \
+                from exc
 
     return lookup
 
@@ -778,6 +783,8 @@ def verify(run_dir: Path, rerun_fn: Rerunner | None = None,
                                 failures=[f"the run's records cannot be read: {exc}"]))
         return Result(run_id, created, sections, time.monotonic() - started,
                       "unknown (the run's records cannot be read)", seal)
+    for note in run.snapshot.notes:  # what the seal does not cover: never a pass
+        sections[0].not_run.append(note)
     for cid in run.cited():
         run.claims[cid]["_cited"] = True  # only for naming failures
     receipts, bad = read_receipts(run.dir)

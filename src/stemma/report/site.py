@@ -809,7 +809,8 @@ def status_html(run: Run) -> str:
     unmet: list[str] = []
     if d.kind == "submitted_draft" and d.version is not None and run.snapshot is not None:
         try:
-            unmet = list(run.snapshot.register.finish_failures(d.version))
+            with run.snapshot.gate_reads():
+                unmet = list(run.snapshot.register.finish_failures(d.version))
         except Exception as exc:  # noqa: BLE001 - shown on the page, never hidden
             unmet = [f"the gate could not be read ({type(exc).__name__})"]
     items = "".join(f"<li>{esc(u)}</li>" for u in unmet)

@@ -56,13 +56,18 @@ def scripted(*answers: str) -> tuple[Any, list[str]]:
     return ask, shown
 
 
-def run_new(tmp_path: Path, argv: list[str], ask: Any = None,
-            call: Any = None) -> tuple[int, dict[str, Any] | None, list[str]]:
+def no_check(task: dict[str, Any]) -> None:
+    """Most tests check onboarding itself; the driver's reading is tested on its own."""
+
+
+def run_new(tmp_path: Path, argv: list[str], ask: Any = None, call: Any = None,
+            validate: Any = no_check) -> tuple[int, dict[str, Any] | None, list[str]]:
     out: list[str] = []
     if isinstance(ask, tuple):
         ask = ask[0]
     code = new.main([QUESTION, "--out", str(tmp_path / "task.json"), *argv],
-                    call=call or fake_call(), ask=ask or scripted()[0], say=out.append)
+                    call=call or fake_call(), ask=ask or scripted()[0], say=out.append,
+                    validate=validate)
     path = tmp_path / "task.json"
     return code, (json.loads(path.read_text()) if path.exists() else None), out
 
@@ -216,3 +221,68 @@ def test_live_one_clean_call_drafts_a_valid_onboarding() -> None:
     d = draft_mod.draft(QUESTION, [])
     assert d.question_type in draft_mod.QUESTION_TYPES
     assert 3 <= len(d.criteria) <= 5
+
+
+def test_the_drivers_own_loader_decides_before_anything_is_written(tmp_path: Path) -> None:
+    """Codex recheck M2: a task the driver rejects was written and reported as success."""
+    from stemma.driver import task as driver_task
+
+    v04 = "scope" in getattr(driver_task, "_TASK_KEYS", frozenset())
+    code, task, out = run_new(tmp_path, [], scripted(*[""] * 9),
+                              validate=new.validate_with_driver)
+    if v04:
+        assert code == 0 and task is not None
+    else:
+        assert code == 2 and task is None and "predates task.json v0.4" in out[-1]
+    assert not (tmp_path / "task.json").exists() or v04
+
+
+def test_a_task_the_driver_refuses_is_never_written(tmp_path: Path) -> None:
+    def refuse(task: dict[str, Any]) -> None:
+        raise OnboardError("the driver refuses this task.json: criteria are wrong")
+
+    code, task, out = run_new(tmp_path, [], scripted(*[""] * 9), validate=refuse)
+    assert code == 2 and task is None and "driver refuses" in out[-1]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_dangling_link_at_the_output_is_refused_and_its_target_never_made(
+        tmp_path: Path) -> None:
+    """Codex recheck H3: a dangling task.json link made its target outside the folder."""
+    target = tmp_path / "elsewhere" / "made.json"
+    target.parent.mkdir()
+    (tmp_path / "task.json").symlink_to(target)
+    for force in ([], ["--force"]):
+        code, _task, out = run_new(tmp_path, force, scripted(*[""] * 9))
+        assert code == 2 and not target.exists()
+        assert "exists" in out[-1] or "link" in out[-1]
+
+
+def test_a_link_to_an_existing_file_is_never_replaced_with_force(tmp_path: Path) -> None:
+    target = tmp_path / "precious.json"
+    target.write_text("keep me")
+    (tmp_path / "task.json").symlink_to(target)
+    out: list[str] = []
+    code = new.main([QUESTION, "--out", str(tmp_path / "task.json"), "--force"],
+                    call=fake_call(), ask=scripted(*[""] * 9)[0], say=out.append,
+                    validate=no_check)
+    assert code == 2 and "link" in out[-1] and target.read_text() == "keep me"
+
+
+def test_an_output_folder_reached_through_a_link_is_refused(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    (tmp_path / "via").symlink_to(real)
+    out: list[str] = []
+    code = new.main([QUESTION, "--out", str(tmp_path / "via" / "task.json")],
+                    call=fake_call(), ask=scripted(*[""] * 9)[0], say=out.append,
+                    validate=no_check)
+    assert code == 2 and "goes through a link" in out[-1]
+    assert list(real.iterdir()) == []
+
+
+def test_force_replaces_a_plain_file_in_one_step(tmp_path: Path) -> None:
+    (tmp_path / "task.json").write_text("{}")
+    code, task, _out = run_new(tmp_path, ["--force"], scripted(*[""] * 9))
+    assert code == 0 and task is not None and task["question"] == QUESTION
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["task.json"]

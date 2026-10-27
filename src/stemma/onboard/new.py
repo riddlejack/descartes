@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import stat
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -289,18 +291,78 @@ def build_task(question: str, d: Draft, a: Answers, files: list[Path]) -> dict[s
     return task
 
 
-def check_with_driver(path: Path) -> None:
-    """The driver's own reading of the task, when it is the v0.4 driver; a refusal
-    there is a refusal here."""
+Validate = Callable[[dict[str, Any]], None]
+
+
+def validate_with_driver(task: dict[str, Any]) -> None:
+    """The driver's own reading of the task, before anything is written: a refusal there
+    is a refusal here. A driver that predates task.json v0.4 cannot read this task at
+    all, so it is a refusal too, never a skipped check."""
+    import tempfile
+
     from stemma.driver import task as driver_task
     from stemma.driver.errors import DriverError
 
     if "scope" not in getattr(driver_task, "_TASK_KEYS", frozenset()):
-        return  # an older driver; it would refuse the v0.4 keys this writes
+        raise OnboardError("this driver predates task.json v0.4 (scope, criteria, options, "
+                           "roles) and would refuse the task; install the v0.4 driver")
+    with tempfile.TemporaryDirectory(prefix="stemma-new-") as td:
+        path = Path(td) / "task.json"
+        path.write_text(json.dumps(task), encoding="utf-8")
+        try:
+            driver_task.load_task(path)
+        except DriverError as exc:
+            raise OnboardError(f"the driver refuses this task.json: {exc}") from exc
+
+
+def write_new(out: Path, data: bytes, force: bool) -> None:
+    """Write `data` to `out` without following a link anywhere: the folder must exist and
+    its path may hold no link; the file is created exclusively (a dangling link at `out`
+    counts as existing), or, with `force`, an existing plain file is replaced. The bytes
+    go to a temporary file in the same folder first, then into place in one step."""
+    import os
+    import secrets
+
+    name = out.name
+    if not name or name in (".", "..") or "/" in name:
+        raise OnboardError(f"{out} is not a file name")
+    parent = os.path.abspath(out.parent)
+    if os.path.realpath(parent) != parent:
+        raise OnboardError(f"{out.parent} goes through a link; give a path without links")
     try:
-        driver_task.load_task(path)
-    except DriverError as exc:
-        raise OnboardError(f"the driver refuses this task.json: {exc}") from exc
+        dfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise OnboardError(f"{out.parent} is not a folder that exists") from exc
+    tmp = f".{name}.{secrets.token_hex(6)}.tmp"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644,
+                     dir_fd=dfd)
+        try:
+            os.write(fd, data)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        try:
+            if not force:
+                try:
+                    os.link(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd, follow_symlinks=False)
+                except FileExistsError as exc:
+                    raise OnboardError(f"{out} exists; pass --force to replace it") from exc
+            else:
+                try:
+                    st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+                except FileNotFoundError:
+                    st = None
+                if st is not None and not stat.S_ISREG(st.st_mode):
+                    raise OnboardError(f"{out} is a link or not a plain file; not replaced")
+                os.replace(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+        finally:
+            try:
+                os.unlink(tmp, dir_fd=dfd)
+            except FileNotFoundError:
+                pass
+    finally:
+        os.close(dfd)
 
 
 def summary(task: dict[str, Any]) -> str:
@@ -315,7 +377,8 @@ def summary(task: dict[str, Any]) -> str:
 
 
 def main(argv: list[str] | None = None, call: ModelCall | None = None,
-         ask: Ask = input, say: Say = print) -> int:
+         ask: Ask = input, say: Say = print,
+         validate: Validate = validate_with_driver) -> int:
     ap = argparse.ArgumentParser(prog="stemma new", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("question")
@@ -331,7 +394,7 @@ def main(argv: list[str] | None = None, call: ModelCall | None = None,
         for f in args.file:
             if not f.is_file():
                 raise OnboardError(f"{f} is not a file")
-        if args.out.exists() and not args.force:
+        if os.path.lexists(args.out) and not args.force:  # a dangling link exists too
             raise OnboardError(f"{args.out} exists; pass --force to replace it")
         if args.draft:
             try:
@@ -342,15 +405,14 @@ def main(argv: list[str] | None = None, call: ModelCall | None = None,
             say("Drafting the onboarding questions (one model call)…")
             d = draft(args.question, list(args.file), call)
         if args.save_draft:
-            args.save_draft.write_text(json.dumps(d.to_json(), indent=1, ensure_ascii=False)
-                                       + "\n", encoding="utf-8")
+            write_new(args.save_draft, (json.dumps(d.to_json(), indent=1, ensure_ascii=False)
+                                        + "\n").encode(), args.force)
         answers = (answers_from_file(args.answers, d) if args.answers
                    else interview(args.question, d, ask, say))
         task = build_task(args.question, d, answers, list(args.file))
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(json.dumps(task, indent=1, ensure_ascii=False) + "\n",
-                            encoding="utf-8")
-        check_with_driver(args.out)
+        validate(task)  # the driver's own loader, before anything is written
+        write_new(args.out, (json.dumps(task, indent=1, ensure_ascii=False) + "\n").encode(),
+                  args.force)
     except OnboardError as exc:
         say(f"stemma new: {exc}")
         return 2

@@ -172,11 +172,10 @@ def cmd_report(run_dir: Path, out_dir: Path, with_verify: bool) -> int:
     return report_main([str(run_dir), str(out_dir), *(["--verify"] if with_verify else [])])
 
 
-def cmd_tamper(run_dir: Path, what: str, keep: bool, baseline: bool) -> int:
+def cmd_tamper(run_dir: Path, what: str, keep: bool) -> int:
     from stemma.report.tamper import main as tamper_main
 
-    return tamper_main([str(run_dir), "--what", what, *(["--keep"] if keep else []),
-                        *([] if baseline else ["--no-baseline"])])
+    return tamper_main([str(run_dir), "--what", what, *(["--keep"] if keep else [])])
 
 
 def cmd_new(rest: list[str]) -> int:
@@ -219,7 +218,6 @@ def main(argv: list[str] | None = None) -> int:
     tp.add_argument("run_dir", type=Path)
     tp.add_argument("--what", choices=("source", "figure"), default="source")
     tp.add_argument("--keep", action="store_true")
-    tp.add_argument("--no-baseline", action="store_true")
     args = ap.parse_args(argv)
     if args.cmd is None:
         if _truthy(os.environ.get("SAMPLE_MODE")):
@@ -243,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "report":
         return cmd_report(args.run_dir, args.out_dir, args.verify)
     if args.cmd == "tamper":
-        return cmd_tamper(args.run_dir, args.what, args.keep, not args.no_baseline)
+        return cmd_tamper(args.run_dir, args.what, args.keep)
     return cmd_record(args.run_dir, args.pack)
 
 

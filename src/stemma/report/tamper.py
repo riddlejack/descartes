@@ -3,9 +3,12 @@ change one byte of the stored source behind a figure the answer cites (or that f
 in the register's log), run `stemma verify` on the copy, and show exactly what fails and
 that the release is refused. The original run is never touched.
 
-Untouched runs can already have differences (run 1 has calculations whose scripts were
-edited after filing); the demo verifies the untouched copy first and shows only what the
-tampering added. It exits 0 when verify caught the change and 1 when it did not.
+The demo verifies the untouched copy first and refuses to go on if anything already
+fails there: a demo on a run that does not verify shows nothing. It refuses a copy that
+holds a link or a special file, takes every path it writes from a checked identifier, and
+writes only inside the temporary copy, through the register's confined writer (no link
+followed in any part of the path). It exits 0 when verify caught the change, 1 when it
+did not, and 2 when it refused to run.
 """
 
 from __future__ import annotations
@@ -22,7 +25,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from stemma.report import runread, verify
+from stemma.register import safeio
+from stemma.report import runread, safefs, verify
+
+_SHA = re.compile(r"[0-9a-f]{64}")
 
 # What a verify of the copy needs; everything else (the driver's state, the assembled
 # plugin, derived indexes, transcripts of tool calls) is left out (logical invariant).
@@ -95,9 +101,12 @@ def tamper_source(run: runread.Run) -> Change:
     n, c = found
     item = c["support"][0]
     rec = runread.receipt(run.dir, item["receipt_id"]) or {}
-    sha = str(rec.get("sha256"))
-    path = run.dir / "store" / "bytes" / sha
-    data = path.read_bytes()
+    sha = rec.get("sha256")
+    if not isinstance(sha, str) or not _SHA.fullmatch(sha):
+        raise TamperError(f"receipt {item['receipt_id']} does not name stored bytes by a "
+                          f"SHA-256")
+    rel = f"store/bytes/{sha}"
+    data = safefs.read_bytes(run.dir, rel)
     written = str(c["value"]["as_written"])
     digits = re.sub(r"\D", "", written)
     at = -1
@@ -108,7 +117,7 @@ def tamper_source(run: runread.Run) -> Change:
     if at < 0:
         at = len(data) // 2
     changed = _bump_digit(data, at)
-    path.write_bytes(changed)
+    _write(run.dir, rel, changed)
     url = rec.get("final_url") or rec.get("requested_url") or ""
     on_it = [str(k) for k, cid in enumerate(run.cited(), start=1)
              if any((runread.receipt(run.dir, str(s.get("receipt_id"))) or {}).get("sha256")
@@ -137,14 +146,13 @@ def tamper_figure(run: runread.Run) -> Change:
             break
     else:
         raise TamperError("the answer cites no figure with a number")
-    log = run.dir / "register" / "log.jsonl"
-    lines = log.read_bytes().splitlines(keepends=True)
+    lines = safefs.read_bytes(run.dir, "register/log.jsonl").splitlines(keepends=True)
     needle = f'"number":{json.dumps(number)}'.encode()
     for i, line in enumerate(lines):
         if cid.encode() in line and b'"upsertEntity"' in line and needle in line:
             new_number = number + 1
             lines[i] = line.replace(needle, f'"number":{json.dumps(new_number)}'.encode(), 1)
-            log.write_bytes(b"".join(lines))
+            _write(run.dir, "register/log.jsonl", b"".join(lines))
             return Change(f"figure {n} of the answer, in the register's log",
                           [f"figure {n}: {run.claims[cid]['statement'][:110]}",
                            (f"claim c:{cid[:12]}: number {number!r} became {new_number!r} "
@@ -152,13 +160,22 @@ def tamper_figure(run: runread.Run) -> Change:
     raise TamperError(f"claim {cid[:12]} was not found in the log as filed")
 
 
+def _write(copy: Path, rel: str, data: bytes) -> None:
+    """Replace copy/rel through the register's confined writer: no link followed in any
+    part of the path, the new bytes renamed into place inside the copy."""
+    safefs.parts(rel)
+    try:
+        safeio.write_bytes(copy, rel, data)
+    except (safeio.UnsafePath, OSError) as exc:
+        raise TamperError(f"cannot write {rel} inside the copy: {exc}") from exc
+
+
 def _lines(result: verify.Result) -> list[str]:
     return [f"     [{'FAIL' if s.failures else ' ok '}] {s.label.ljust(13)} "
             f"{verify.summary_line(s)}" for s in result.sections]
 
 
-def demo(run_dir: Path, what: str = "source", keep: bool = False,
-         baseline: bool = True, out: Any = None) -> int:
+def demo(run_dir: Path, what: str = "source", keep: bool = False, out: Any = None) -> int:
     def say(line: str = "") -> None:
         print(line, file=out, flush=True)
 
@@ -178,16 +195,18 @@ def demo(run_dir: Path, what: str = "source", keep: bool = False,
         t = time.monotonic()
         copy_run(run_dir, copy)
         say(f"  1. Copied the recorded run to {copy} ({time.monotonic() - t:.0f} s).")
-        before: set[str] = set()
-        if baseline:
-            say("  2. Verifying the untouched copy:")
-            base = verify.verify(copy, memo=memo)
-            for line in _lines(base):
-                say(line)
-            before = {f"{label}: {msg}" for label, msg in base.failures}
-            if before:
-                say(f"     ({len(before)} difference(s) were already in the recorded run; "
-                    f"they are left out below.)")
+        _files, problems = safefs.walk(copy)
+        if problems:
+            raise TamperError("the run holds what a demo must not copy: "
+                              + "; ".join(problems[:5]))
+        say("  2. Verifying the untouched copy:")
+        base = verify.verify(copy, memo=memo)
+        for line in _lines(base):
+            say(line)
+        if base.failures:
+            raise TamperError(f"the untouched copy already fails verify ({len(base.failures)} "
+                              f"failure(s), the first: {base.failures[0][0]}: "
+                              f"{base.failures[0][1][:200]}); a demo on it would show nothing")
         run = runread.load(copy)
         change = tamper_source(run) if what == "source" else tamper_figure(run)
         say(f"  3. Tampering: {change.what}.")
@@ -197,8 +216,7 @@ def demo(run_dir: Path, what: str = "source", keep: bool = False,
         after = verify.verify(copy, memo=memo)
         for line in _lines(after):
             say(line)
-        new = [f"{label}: {msg}" for label, msg in after.failures
-               if f"{label}: {msg}" not in before]
+        new = [f"{label}: {msg}" for label, msg in after.failures]
         say()
         if not new:
             say("NOT CAUGHT: verify found nothing new after the change. This is a failure "
@@ -226,12 +244,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="change one byte of a stored source (default) or one figure in "
                          "the register's log")
     ap.add_argument("--keep", action="store_true", help="keep the tampered copy")
-    ap.add_argument("--no-baseline", action="store_true",
-                    help="skip verifying the untouched copy first; differences already in "
-                         "the run then show as well")
     args = ap.parse_args(argv)
     try:
-        return demo(args.run_dir, args.what, args.keep, not args.no_baseline)
+        return demo(args.run_dir, args.what, args.keep)
     except (runread.RunReadError, TamperError) as exc:
         print(f"stemma tamper: {exc}", file=sys.stderr)
         return 2

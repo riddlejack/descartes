@@ -112,7 +112,7 @@ def fresh_copy(base: Path, dest: Path) -> dict[str, str]:
 
 
 # The operational files a release manifest leaves out (as proposed to W2 for finish_run).
-EXCLUDED = ["events.jsonl", "status.json", "status.html", "usage.jsonl", "usage.md",
+EXCLUDED = ["register/checks.jsonl", "events.jsonl", "status.json", "status.html", "usage.jsonl", "usage.md",
             ".stemma/**", "**/*.lock", "store/index.sqlite*", "register/index.sqlite*",
             "register/calls/**", "release/**"]
 
@@ -144,12 +144,17 @@ def seal(run_dir: Path) -> str:
             files.append({"path": rel, "size": len(data),
                           "sha256": hashlib.sha256(data).hexdigest()})
     log = (run_dir / "register/log.jsonl").read_bytes()
+    checks_path = run_dir / "register/checks.jsonl"
+    checks = checks_path.read_bytes() if checks_path.exists() else b""
     man = {"format": "stemma-release-manifest/1", "run_id": "20300101-000000-abcdef",
            "version": 1, "released_at": "2030-01-02T00:00:00Z", "files": files,
            "excluded": EXCLUDED,
            "log": {"path": "register/log.jsonl", "bytes": len(log),
                    "sha256": hashlib.sha256(log).hexdigest(),
-                   "transactions": log.count(b"\n")}}
+                   "transactions": log.count(b"\n")},
+           "checks": {"path": "register/checks.jsonl", "bytes": len(checks),
+                      "sha256": hashlib.sha256(checks).hexdigest(),
+                      "records": checks.count(b"\n")}}
     raw = json.dumps(man, sort_keys=True, separators=(",", ":")).encode()
     (run_dir / "release").mkdir(exist_ok=True)
     (run_dir / "release/manifest.json").write_bytes(raw)

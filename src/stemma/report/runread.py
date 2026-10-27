@@ -209,14 +209,8 @@ def submitted_versions(facts: dict[str, list[dict[str, Any]]]) -> list[int]:
     return out
 
 
-def release_state(run_dir: Path, facts: dict[str, list[dict[str, Any]]]) -> Release:
-    from stemma.register import checks_api
-
-    try:
-        blocks = checks_api.release_blocks(run_dir)
-    except (KeyError, TypeError, ValueError, OSError) as exc:
-        raise RunReadError(f"register/checks.jsonl cannot be read ({type(exc).__name__})") \
-            from exc
+def release_state(run_dir: Path, facts: dict[str, list[dict[str, Any]]],
+                  blocks: list[str]) -> Release:
     finished = facts.get("finished") or []
     exists = safefs.maybe(safefs.read_bytes, run_dir, "deliverable/answer.md")
     if not finished:
@@ -298,12 +292,9 @@ def _check_nodes(tree: Any) -> list[dict[str, Any]]:
 
 
 # ----------------------------------------------------------------------- load
-def run_facts(register: Any) -> dict[str, list[dict[str, Any]]]:
+def run_facts(register: Any, revoked: frozenset[str]) -> dict[str, list[dict[str, Any]]]:
     """Facts about the run entity by predicate, oldest first, without those written by a
     session the driver revoked (the register's own reading)."""
-    from stemma.register import checks_api
-
-    revoked = checks_api.revoked_sessions(register.run_dir)
     out: dict[str, list[dict[str, Any]]] = {}
     if register.wm.view("graph").entity(RUN_ENTITY) is None:
         return out
@@ -335,14 +326,14 @@ def load(run_dir: Path) -> Run:
     snap = ledger.snapshot(run_dir)
     try:
         records = _claims(snap.register)
-        facts = run_facts(snap.register)
+        facts = run_facts(snap.register, snap.checks.revoked)
     except RunReadError:
         raise
     except (KeyError, TypeError, ValueError, AttributeError, IndexError,
             RecursionError) as exc:
         raise RunReadError(f"a register record is not in the register's shape "
                            f"({type(exc).__name__}: {exc})") from exc
-    release = release_state(run_dir, facts)
+    release = release_state(run_dir, facts, snap.checks.blocks)
     nodes = _check_nodes(read_json(run_dir, "tree.json"))
     criteria, source = _criteria(run_dir, task)
     return Run(dir=run_dir, run=run, task=task, criteria=criteria, criteria_source=source,

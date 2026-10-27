@@ -26,6 +26,11 @@ def run(tmp_path_factory: pytest.TempPathFactory, tmp_path: Path) -> tuple[Path,
     return dest, ids
 
 
+def checks_sealed(run_dir: Path) -> bool:
+    man = json.loads((run_dir / "release/manifest.json").read_text())
+    return isinstance(man.get("checks"), dict)
+
+
 def section(result: verify.Result, key: str) -> verify.Section:
     return next(s for s in result.sections if s.key == key)
 
@@ -57,14 +62,18 @@ def test_a_sealed_run_passes_and_a_pinned_digest_is_checked(
     release(run_dir)
     digest = seal(run_dir)
     result = verify.verify(run_dir)
-    assert result.outcome == "PASS" and result.seal.state == "sealed", verify.render(result)
-    assert "against the run's own manifest (not pinned)" in verify.render(result)
+    # A manifest that does not seal checks.jsonl leaves revocations unauthenticated: the
+    # result is then INCOMPLETE, never PASS.
+    ok = "PASS" if checks_sealed(run_dir) else "INCOMPLETE"
+    assert result.outcome == ok and result.seal.state == "sealed", verify.render(result)
+    if ok == "PASS":
+        assert "against the run's own manifest (not pinned)" in verify.render(result)
     pinned = verify.verify(run_dir, expect=digest)
-    assert pinned.outcome == "PASS" and pinned.seal.state == "pinned"
+    assert pinned.outcome == ok and pinned.seal.state == "pinned"
     assert result.release_state == "released"
     wrong = verify.verify(run_dir, expect="0" * 64)
     assert wrong.outcome == "FAIL" and "not to the pinned" in section(wrong, "seal").failures[0]
-    assert verify.main([str(run_dir), "--expect", digest]) == 0
+    assert verify.main([str(run_dir), "--expect", digest]) == (0 if ok == "PASS" else 3)
     assert verify.main([str(run_dir), "--expect", "nothex"]) == 2
 
 
@@ -428,3 +437,96 @@ def test_a_memo_never_hides_a_changed_script(run: tuple[Path, dict[str, str]]) -
     target.write_text("def years_left():\n    return 5\n")
     fails = section(verify.verify(run_dir, memo=memo), "calculations").failures
     assert len(fails) == 1 and ids["proj"][:12] in fails[0]
+
+
+def _append_tx(run_dir: Path, predicate: str, about: str, value: dict[str, Any]) -> None:
+    """Append one well-formed World Model transaction, as a forger with write access
+    to the folder would (the next tx and event numbers, a plausible source)."""
+    log = run_dir / "register/log.jsonl"
+    lines = log.read_bytes().splitlines()
+    last = json.loads(lines[-1])
+    tx = last["tx"] + 1
+    seq = last["events"][-1]["seq"] + 1
+    at = "2030-01-03T00:00:00.000Z"
+    src = {"kind": "tool", "at": at, "by": "stemma:claim-checker", "runId": "s-forged"}
+    ev = {"id": f"evt_{seq}", "seq": seq, "kind": "assertFact", "schemaVersion": 1, "at": at,
+          "tx": tx, "payload": {"id": f"fact_forged{seq}", "about": about,
+                                "predicate": predicate, "value": value, "confidence": None,
+                                "source": src, "assertedAt": at}}
+    new = {"tx": tx, "at": at, "op": "assertFact", "actor": "stemma:claim-checker",
+           "summary": "forged", "events": [ev]}
+    log.write_bytes(log.read_bytes() + json.dumps(new, separators=(",", ":")).encode() + b"\n")
+
+
+@needs_sandbox
+def test_forged_log_additions_after_the_seal_fail_and_are_never_read(
+        run: tuple[Path, dict[str, str]]) -> None:
+    """Codex recheck H1: an appended `holds` verdict and an appended `finished` record
+    passed, pinned, and the second showed the run as released."""
+    from stemma.report import runread
+
+    run_dir, ids = run
+    digest = seal(run_dir)  # an unreleased run, sealed
+    _append_tx(run_dir, "verdict", f"claim:stemma:{ids['now']}",
+               {"verdict": "holds", "evidence": "forged"})
+    _append_tx(run_dir, "finished", "run:stemma:run",
+               {"at": "2030-01-03T00:00:00Z", "version": 1, "sha256": "0" * 64,
+                "sessions": []})
+    result = verify.verify(run_dir, expect=digest)
+    assert result.outcome == "FAIL"
+    assert any("appended" in f for _l, f in result.failures), verify.render(result)
+    r = runread.load(run_dir)
+    assert r.release.state == "not_released"
+    assert (r.claims[ids["now"]].get("verdict") or {}).get("evidence") != "forged"
+
+
+def test_a_forged_revocation_after_the_seal_is_never_read(
+        run: tuple[Path, dict[str, str]]) -> None:
+    from stemma.report import runread
+
+    run_dir, _ids = run
+    release(run_dir)
+    seal(run_dir)
+    if not checks_sealed(run_dir):
+        pytest.skip("this manifest does not seal checks.jsonl yet (verify says INCOMPLETE)")
+    checks = run_dir / "register/checks.jsonl"
+    checks.write_bytes(checks.read_bytes() + json.dumps(
+        {"kind": "release_blocked", "request_id": "", "at": "2030-01-03T00:00:00Z",
+         "reason": "forged block"}).encode() + b"\n")
+    assert runread.load(run_dir).release.state == "released"
+
+
+@pytest.mark.parametrize("how", ["fifo", "malformed", "symlink"])
+def test_side_files_are_read_safely_and_fail_by_name(
+        run: tuple[Path, dict[str, str]], tmp_path: Path, how: str) -> None:
+    """Codex recheck M1: checks.jsonl and refused_corrections.jsonl bypassed the safe
+    reader (a FIFO could block; a malformed line raised LogCorrupt)."""
+    run_dir, _ids = run
+    target = run_dir / ("register/checks.jsonl" if how != "symlink"
+                        else "register/refused_corrections.jsonl")
+    if target.exists():
+        target.unlink()
+    if how == "fifo":
+        os.mkfifo(target)
+    elif how == "malformed":
+        target.write_text('{"kind": "verified", "session_id": "x"}\nnot json\n')
+    else:
+        outside = tmp_path / "outside.jsonl"
+        outside.write_text('{"session_id": "x", "claim_id": "y"}\n')
+        target.symlink_to(outside)
+    result = verify.verify(run_dir, rerun_fn=lambda *a, **k: (_ for _ in ()).throw(
+        DerivationError("sandbox-exec is not available")))
+    assert result.outcome == "FAIL"
+    text = " ".join(f for _l, f in result.failures)
+    assert target.name in text
+
+
+def test_an_oversized_input_number_is_a_named_failure(
+        run: tuple[Path, dict[str, str]]) -> None:
+    from stemma.report import runread
+
+    run_dir, ids = run
+    r = runread.load(run_dir)
+    r.claims[ids["now"]]["value"] = {**r.claims[ids["now"]]["value"], "number": 10 ** 400}
+    out = verify._rerun_one(r, r.claims[ids["proj"]], lambda *a, **k: None)
+    assert out[0] is not None and "too large" in out[0]
