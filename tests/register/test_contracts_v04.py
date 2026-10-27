@@ -889,3 +889,30 @@ def test_an_orphan_assignment_left_by_a_crash_does_not_block_retries(
             if r.role == "claim-checker"] == ["doc:r1"]
     chk = launched(reg, "claim-checker", "doc:r1", "s-d1")
     assert reg.check_assignment(chk)["claims"] == [a]
+
+
+def test_a_release_read_from_its_sealed_bytes_ignores_later_lines(reg: Register) -> None:
+    from stemma.register.wm import WorldModelError
+
+    cid = ready_run(reg)
+    reg.record_claim_verdict(checker_for(reg, cid, "s-chk"), cid, "holds", "ok")
+    reg.finish_run(LEAD, 1)
+    man = json.loads((reg.run_dir / "release/manifest.json").read_text())
+    log = (reg.run_dir / "register/log.jsonl").read_bytes()[:man["log"]["bytes"]]
+    checks = (reg.run_dir / "register/checks.jsonl").read_bytes()[:man["checks"]["bytes"]]
+    # A forged revocation appended after the seal hides the verdict for a file reader...
+    jsonl.append(checks_api.log_path(reg.run_dir), {
+        "kind": "revoked", "request_id": "", "at": "x", "session_id": "s-chk",
+        "reason": "forged after the seal"})
+    assert Register.read_only(reg.run_dir).get_claim(cid)["verdict"] is None
+    # ...but not for a reader of the sealed bytes.
+    sealed = Register.from_sealed(reg.run_dir, log=log, checks=checks)
+    assert sealed.get_claim(cid)["verdict"]["verdict"] == "holds"
+    assert sealed.release_state() == "released" and sealed.finish_failures(1) == []
+    with pytest.raises(Refused, match="open read-only"):
+        sealed.tree_upsert(LEAD, {"id": "x", "kind": "question", "statement": "x"})
+    for torn in (log[:-1],):
+        with pytest.raises(WorldModelError):
+            Register.from_sealed(reg.run_dir, log=torn, checks=checks).tree()
+    with pytest.raises(ValueError, match="end inside a record"):
+        Register.from_sealed(reg.run_dir, log=log, checks=checks[:-1])

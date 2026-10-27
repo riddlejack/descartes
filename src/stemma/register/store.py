@@ -239,7 +239,31 @@ class Register:
         reg._is_read_only = True
         return reg
 
+    @classmethod
+    def from_sealed(cls, run_dir: Path, log: bytes, checks: bytes,
+                    refused: bytes | None = None) -> Register:
+        """A reader of a release as sealed (Codex H1): it folds exactly `log` (the
+        register log's sealed prefix) and takes requests, verifications, revocations and
+        release blocks from exactly `checks` (the checks log's sealed prefix), and
+        refused corrections from `refused` when given. Nothing appended after the seal
+        counts. Every write is refused; nothing is opened for writing."""
+        reg = cls.__new__(cls)
+        reg.run_dir = run_dir
+        reg.dir = run_dir / "register"
+        reg.wm = WorldModel({"storage": "bytes", "data": log, "namespace": "register"})
+        reg._evidence = None
+        reg._rerun = rerun
+        reg._relied = []
+        reg._lock = reg.dir / "register"
+        reg._is_read_only = True
+        reg._ck_records = checks_api.parse_records(checks)
+        reg._refused_records = (checks_api.parse_records(refused, need_kind=False)
+                                if refused is not None else None)
+        return reg
+
     _is_read_only = False
+    _ck_records: list[dict[str, Any]] | None = None
+    _refused_records: list[dict[str, Any]] | None = None
 
     @contextmanager
     def _exclusive(self) -> Iterator[None]:
@@ -294,10 +318,10 @@ class Register:
         session (even a checking one) carries an `agent_id` and is refused here."""
         if caller.agent_id:
             raise Refused(f"Refused: this session was not started for {prompt}.")
-        state = checks_api.state_for_session(self.run_dir, caller.session_id)
+        state = checks_api.state_for_session(self.run_dir, caller.session_id, records=self._ck_records)
         if state is None or state.request.role != role or state.request.prompt != prompt:
             raise Refused(f"Refused: this session was not started for {prompt}.")
-        rounds = checks_api.for_prompt(self.run_dir, role, prompt)
+        rounds = checks_api.for_prompt(self.run_dir, role, prompt, records=self._ck_records)
         if state.request.round != max(r.request.round for r in rounds):
             raise Refused(f"Refused: this session was started for an earlier round of {prompt}.")
 
@@ -308,7 +332,7 @@ class Register:
         refusal = f"Refused: this session was not started for claim:{cid}."
         if caller.agent_id:
             raise Refused(refusal)
-        state = checks_api.state_for_session(self.run_dir, caller.session_id)
+        state = checks_api.state_for_session(self.run_dir, caller.session_id, records=self._ck_records)
         if state is None or state.request.role != "claim-checker":
             raise Refused(refusal)
         if cid not in self._check_lists().get((state.request.prompt, state.request.round), []):
@@ -356,7 +380,7 @@ class Register:
         that cite it. Each cited estimate's inputs are checked too, cited or not.
         Skipped: superseded claims, claims with a verdict, and claims a check that has
         not ended already lists. Call under the lock. Returns the request ids."""
-        states = checks_api.states(self.run_dir)
+        states = checks_api.states(self.run_dir, records=self._ck_records)
         busy: set[str] = set()
         for (prompt, rnd), ids in self._check_lists().items():
             if any(st.request.prompt == prompt and st.request.round == rnd
@@ -379,7 +403,7 @@ class Register:
             self._ensure_entity(RUN_ENTITY, "run", "run", source)
         for rid, ids in sorted(by_doc.items()):
             prompt = f"doc:{rid}"
-            rnd = len(checks_api.for_prompt(self.run_dir, "claim-checker", prompt)) + 1
+            rnd = len(checks_api.for_prompt(self.run_dir, "claim-checker", prompt, records=self._ck_records)) + 1
             listing = {"receipt_id": rid, "round": rnd, "draft_version": version,
                        "claims": sorted(ids),
                        "statements": {c: self._claim_record(c)["statement"] for c in ids}}
@@ -393,7 +417,7 @@ class Register:
                                                 event, round_no=rnd).request_id)
         if no_doc:
             prompt = f"derivations:v{version}"
-            rnd = len(checks_api.for_prompt(self.run_dir, "claim-checker", prompt)) + 1
+            rnd = len(checks_api.for_prompt(self.run_dir, "claim-checker", prompt, records=self._ck_records)) + 1
             segs = tags.segments(text) if text else []
             entries = []
             for cid in no_doc:
@@ -423,7 +447,7 @@ class Register:
         except (safeio.UnsafePath, NotADirectoryError) as exc:
             raise Refused(f"Refused: {rel} cannot be written safely.") from exc
         if any(st.request.round == round_no
-               for st in checks_api.for_prompt(self.run_dir, "claim-checker", prompt)):
+               for st in checks_api.for_prompt(self.run_dir, "claim-checker", prompt, records=self._ck_records)):
             raise Refused(f"Refused: {rel} already belongs to a requested check; an "
                           f"assignment is never rewritten.")
         self._write(rel, text)
@@ -435,7 +459,7 @@ class Register:
         if caller.agent_id:
             raise Refused("Refused: this session was not started for a claim check.")
         self.wm.refresh()
-        state = checks_api.state_for_session(self.run_dir, caller.session_id)
+        state = checks_api.state_for_session(self.run_dir, caller.session_id, records=self._ck_records)
         if state is None or state.request.role != "claim-checker":
             raise Refused("Refused: this session was not started for a claim check.")
         prompt, rnd = state.request.prompt, state.request.round
@@ -461,7 +485,7 @@ class Register:
         return None
 
     def _revoked(self) -> frozenset[str]:
-        return checks_api.revoked_sessions(self.run_dir)
+        return checks_api.revoked_sessions(self.run_dir, records=self._ck_records)
 
     def _live_facts(self, about: str, predicate: str) -> list[dict[str, Any]]:
         """Facts about an entity, oldest first, without those a revoked session wrote."""
@@ -470,7 +494,7 @@ class Register:
                 if f["source"].get("runId") not in revoked]
 
     def _verified(self) -> frozenset[str]:
-        return checks_api.verified_sessions(self.run_dir)
+        return checks_api.verified_sessions(self.run_dir, records=self._ck_records)
 
     def _read(self, rel: str | PurePosixPath) -> bytes:
         """An agent-written file's bytes, refusing symlinks anywhere on the path."""
@@ -645,7 +669,9 @@ class Register:
         return self.run_dir / "register" / "refused_corrections.jsonl"
 
     def _sessions_with_refused_correction(self, cid: str) -> frozenset[str]:
-        return frozenset(r["session_id"] for r in jsonl.read_all(self._refused_corrections_log())
+        refused = (self._refused_records if self._refused_records is not None
+                   else jsonl.read_all(self._refused_corrections_log()))
+        return frozenset(r["session_id"] for r in refused
                          if r["claim_id"] == cid)
 
     def _correction_refused(self, session_id: str | None, cid: str) -> bool:
@@ -1006,7 +1032,7 @@ class Register:
                               f"{'; '.join(REVISION_HEADINGS)}) names them.")
             source = self._src(caller)
             self._freeze_criteria(caller, "first review asked for")
-            prior = checks_api.for_prompt(self.run_dir, "branch-reviewer", f"branch:{branch_id}")
+            prior = checks_api.for_prompt(self.run_dir, "branch-reviewer", f"branch:{branch_id}", records=self._ck_records)
             rnd = len(prior) + 1
             # The reviewer is given this snapshot; its verdict binds to these bytes.
             snapshot = frozen_record(branch_id, rnd)
@@ -1117,7 +1143,7 @@ class Register:
             self._session_prompt_is(caller, "branch-reviewer", f"branch:{branch_id}")
             if self._apply_verdicts():
                 self._write_tree()
-            state = checks_api.state_for_session(self.run_dir, caller.session_id)
+            state = checks_api.state_for_session(self.run_dir, caller.session_id, records=self._ck_records)
             rnd = state.request.round if state else 0
             nodes = self._branch_nodes(branch_id)
             if any(n["status"] != "proposed_done" for n in nodes):
@@ -1380,7 +1406,7 @@ class Register:
         self.wm.refresh()
         if not self._run_facts("finished"):
             return None
-        if self._run_facts("release_withdrawn") or checks_api.release_blocks(self.run_dir):
+        if self._run_facts("release_withdrawn") or checks_api.release_blocks(self.run_dir, records=self._ck_records):
             return "withdrawn"
         return "released"
 
@@ -1434,7 +1460,7 @@ class Register:
         with self._exclusive():
             self.wm.refresh()
             self._freeze_criteria(caller, "first review asked for")
-            prior = checks_api.for_prompt(self.run_dir, "blind-framer", "frame:critique")
+            prior = checks_api.for_prompt(self.run_dir, "blind-framer", "frame:critique", records=self._ck_records)
             req = checks_api.request_check(self.run_dir, roles.BLIND_FRAMER, "frame:critique",
                                            "request_frame_critique", round_no=len(prior) + 1)
             self._run_fact(caller, "frame_critique_requested",
@@ -1541,7 +1567,7 @@ class Register:
         for role in roles.FINAL_REVIEWERS:
             if role in have:
                 continue
-            rounds = checks_api.for_prompt(self.run_dir, role, f"draft:{last}")
+            rounds = checks_api.for_prompt(self.run_dir, role, f"draft:{last}", records=self._ck_records)
             ended = bool(rounds) and all(
                 st.status == "ended" and st.outcome not in checks_api.RETRYABLE_OUTCOMES
                 for st in rounds)
@@ -1658,7 +1684,7 @@ class Register:
                 failures.append(f"{what} comes from a session whose model and effort "
                                 f"are not verified yet")
 
-        for reason in checks_api.release_blocks(self.run_dir):
+        for reason in checks_api.release_blocks(self.run_dir, records=self._ck_records):
             failures.append(f"the release is blocked: {reason}")
         try:
             if not self.criteria():
@@ -1875,10 +1901,10 @@ class Register:
         if critiques:
             last = critiques[-1]
             session = str(last.get("session") or "")
-            rounds = checks_api.for_prompt(self.run_dir, roles.BLIND_FRAMER, "frame:critique")
+            rounds = checks_api.for_prompt(self.run_dir, roles.BLIND_FRAMER, "frame:critique", records=self._ck_records)
             latest = rounds[-1].request if rounds else None
-            mine = checks_api.state_for_session(self.run_dir, session) if session else None
-            if session not in checks_api.verified_sessions(self.run_dir):
+            mine = checks_api.state_for_session(self.run_dir, session, records=self._ck_records) if session else None
+            if session not in checks_api.verified_sessions(self.run_dir, records=self._ck_records):
                 missing.append(f"the critique's session {session} is not verified (its model "
                                f"and effort not yet confirmed, or revoked)")
             elif latest is None or mine is None or mine.request.request_id != latest.request_id:
@@ -1997,7 +2023,7 @@ class Register:
                 if rec["verdict_session"] in verified else None
             return verdict
         if kind == "branch":
-            rounds = checks_api.for_prompt(self.run_dir, "branch-reviewer", target)
+            rounds = checks_api.for_prompt(self.run_dir, "branch-reviewer", target, records=self._ck_records)
             nodes = [n for n in self.tree() if n.get("branch_id") == ident]
             if not rounds or not nodes:
                 return None
@@ -2046,7 +2072,7 @@ class Register:
             self.wm.refresh()
             landed: dict[str, Any] = {}
             waiting: list[dict[str, Any]] = []
-            all_states = list(checks_api.states(self.run_dir).values())
+            all_states = list(checks_api.states(self.run_dir, records=self._ck_records).values())
             lists = self._check_lists()
             for t in targets:
                 got = self._landed(t)

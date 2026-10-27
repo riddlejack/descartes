@@ -39,7 +39,7 @@ from .ids import (
     relationshipId,
     sha256Hex,
 )
-from .log import FileLog, Log, MemoryLog
+from .log import BytesLog, FileLog, Log, MemoryLog
 from .records import (
     AssertFactInput,
     AuditEntry,
@@ -132,6 +132,7 @@ class WorldModel:
                 "sourcePriority",
                 "schemaVersion",
                 "readOnly",
+                "data",
             },
         )
         storage = opts.get("storage", "memory")
@@ -152,6 +153,8 @@ class WorldModel:
             if not isinstance(path, (str, os.PathLike)) or not str(path):
                 raise ValidationError("WorldModel: storage 'file' needs `path` (the log file)")
             self._log = FileLog(path, read_only=bool(opts.get("readOnly", False)))
+        elif storage == "bytes":  # a sealed prefix, read-only
+            self._log = BytesLog(opts.get("data"))  # type: ignore[arg-type]
         else:
             raise ValidationError(f"WorldModel: storage must be 'memory' or 'file', not {storage!r}")
         namespace = opts.get("namespace")

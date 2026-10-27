@@ -78,6 +78,41 @@ class MemoryLog:
         self._lines.append(encode_line(tx))
 
 
+class BytesLog:
+    """A read-only log over given bytes (a sealed prefix of a file log): it folds exactly
+    those bytes. A tail without its newline is refused, never skipped; every write is
+    refused."""
+
+    def __init__(self, data: bytes) -> None:
+        if not isinstance(data, bytes):
+            raise StorageError("a bytes log needs bytes")
+        if data and not data.endswith(b"\n"):
+            raise StorageError("the log bytes end inside a line")
+        self._data = data
+
+    @contextmanager
+    def exclusive(self) -> Iterator[None]:
+        raise StorageError("a bytes log is read-only")
+        yield  # pragma: no cover
+
+    def read_from(self, cursor: int) -> tuple[list[dict[str, Any]], int]:
+        txs: list[dict[str, Any]] = []
+        offset = cursor
+        for line in self._data[cursor:].splitlines(keepends=True):
+            txs.append(decode_line(line, f"log bytes at byte {offset}"))
+            offset += len(line)
+        return txs, len(self._data)
+
+    def torn_tail(self, cursor: int) -> bytes:
+        return b""
+
+    def discard_tail(self, cursor: int, torn: bytes) -> str:
+        raise StorageError("a bytes log is read-only")
+
+    def append(self, tx: Any) -> None:
+        raise StorageError("a bytes log is read-only")
+
+
 class FileLog:
     """A JSONL log on disk, safe for several processes writing at once."""
 
