@@ -6,7 +6,7 @@ description: Question-type card for sizing a market or its potential. Load it wh
 # Card: sizing a market
 
 Use this card when the question asks how large a market or opportunity is; it holds method, not figures for any industry.
-Define the market by the customer need and what substitutes for it, not by an industry label, and state the definition before any number.
+Define the market by the customer need and what substitutes for it, not by an industry label, starting from the user's own term, and state the definition before any number.
 
 ## Two routes, reconciled
 

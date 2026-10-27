@@ -322,3 +322,187 @@ live run) and the frame's reasons (from E6a) pushed the longest team lead to 807
 
 - The driver's lead assembly is `rolemap.assemble_lead(choice)`; B may import it or
   reimplement it, in the contract's order (s1, s2, s3, s4, s6).
+
+## Version 2: the ten decisions of 27 October (builder W1)
+
+The texts now follow D1 to D10 of `V2-CHANGES-2026-10-27.md`; each changed line's
+comment cites the decision and the run 1 diagnosis section behind it. Lines whose
+failure no longer exists came out: "make it a choice", options and their conditions
+as the tree, the rival node, "options close through their conditions", "never
+dropping or thinning", and phrase about a past error (its failure,
+a striking claim on a sampled universe, is kept).
+
+### What is shown
+- `rolemap.py check` passes; `map --check` passes; `tests/roles` 48 pass; the whole
+  suite 1,170 pass, 18 skipped (live tests excluded), after the blind-review fixes.
+- The longest team lead is 850 words against the 850-word page (s1 decomposition,
+  team, s3 true, s4 basic_facts). Nothing more fits without a cut.
+- New hostile tests: the lead listing a source-reading tool (an MCP reader, or
+  WebSearch) fails the lint; a pending contract name passes until the contract names
+  it, then the lint says to drop it; an unagreed path still fails beside the pending
+  ones.
+
+### Interpretations (open to correction)
+- **Pending contract names.** The prose lint checks names against `CONTRACTS.md`,
+  which part B is changing in parallel. `PENDING_CONTRACT_NAMES` (`question_only`,
+  `broader_decision`) and `PENDING_CONTRACT_PATHS` (`criteria.md`, `checks/`) let
+  the agreed names through; once the contract carries one, `check` reports it so the
+  entry is deleted. On merge with B's contract, expect those reports and delete the
+  entries.
+- **The lead's responses to review points** go in `draft/responses.v<n>.md` (lead
+  writes; `reviews/` is tool-only). Final reviewers read `reviews/v<n-1>/` and
+  `draft/responses.v<n-1>.md` from the second version on. Asked the orchestrator to
+  confirm and to have B open those reads (and `criteria.md`) to all three reviewers,
+  the decider's-eye reviewer included.
+- **Revision orders.** The lead fills Finding and Raised by; the worker fills Is it
+  right? (first, with evidence) and Fix; the lead decides disputes in its responses
+  file. In single_loop the lead does both halves.
+- **Echo pairs** go to the branch's worker to trace, since the lead no longer reads
+  sources.
+- **The lead still computes** figures that only combine filed claims (a gap, a sum),
+  in a recorded script; modelling goes to a worker. It keeps file_claim, Bash and the
+  claim look-ups for that.
+- **D9 in the branch reviewer:** a material point is sent back once; if still open,
+  the reviewer records `bound` naming the bound or condition the record must state,
+  then closes the branch once it does.
+- **Points need a node or criterion.** The decider's-eye reviewer names the
+  criterion (it does not see the tree); the auditor names the node of the claim's
+  branch, else a criterion; the mechanical reader names a criterion, else the node of
+  the section.
+- **Orientation (S4)** arms that read before framing now create the open_lane node
+  and have its branch do the reading, since the lead cannot.
+
+### Rulings from the orchestrator (27 October)
+- `draft/responses.v<n>.md` is agreed; B opens `criteria.md`, `reviews/v<n-1>/` and
+  the responses file to all three final reviewers.
+- S2 `single_loop` and S3 `true` are parked: the fragments stay as they are, the map
+  marks them, and the driver refuses both values. S3 `false` is the v2 default.
+- The order heading is now "What would change the answer" (B renames it in the
+  contract).
+- The pending vocabulary list stays until B's contract v0.4 carries the names.
+- Pre-public audit: the private paths in comments and in the evidence file's header
+  are replaced by "a private design record"; the map's "lesson" label is neutral.
+- Comments now say "decision D1" for the owner's decisions, so they cannot be read
+  as the research file "D1" ("D1 principle 12").
+
+### The blind review of the v2 texts (one fresh helper, given V2-CHANGES and the files)
+It returned 23 findings. Fixed:
+- Workers were told to wait on claim checks before proposing done, but under
+  decision D7 checks run only on claims a submitted draft cites, so no branch could
+  ever finish. Workers now propose done without waiting, and a failed check comes
+  back as a revision order; the branch reviewer reads any verdicts already recorded.
+- The broader_decision scope was overruled by the tree line, the framer and the
+  decider's-eye reviewer; each now honours it.
+- A worker who shows a finding wrong now writes "none, disputed" under Fix, and the
+  lead rules in its responses file.
+- The branch reviewer's bound loop now ends: send back once, then bound once, then
+  answered or accept_gap with the point named open.
+- Workers take what they need from the order, never frame.md, so S3's blind arm
+  stays blind.
+- Method: "before any remedy" cut; the "proposed change" fit limited to questions
+  whether a named change works; the open lane tied to the question.
+- Decision card takes the goal from the question and task/; market-sizing card
+  starts from the user's own term; the decider's-eye reviewer's expert questions are
+  about the question asked; the framer checks lead-written criteria for added
+  thresholds.
+Not changed, with reasons:
+- single_loop's missing source tools and "order modelling" in that arm: parked.
+- Estimated claims with no document (the lead's combined figures) belong to no
+  doc:<receipt_id> checker. The host decides grouping; asked B, through the
+  orchestrator, to assign each cited estimate to the session of a document its
+  inputs rest on, or to state another route.
+- D2 and D3 live mainly in the method skill: the base keeps their binding parts
+  (question type, options only if named, rival and separating sub-question, terms
+  defined, tree of sub-questions only); moving the rest would shrink what switch S1
+  tests, and the lead is at its page limit.
+- Company card's reading list: the card loads only for a company question and its
+  lenses are already "where the question needs it".
+- "Client question list" is in contract section 9; the decider's-eye comment's
+  E6a caveat is evidence, not a missing failure; the lead keeps Read and Bash (B's
+  read hook refuses stored sources) and claim look-ups (needed for tags); the framer
+  keeps Skill to read cards.
+
+### Open, needing B
+- Estimated claims with no document need a checker route (above).
+- D10: frontmatter is Opus 5.5 at high for every role; the driver's defaults
+  (`MAX_EFFORT_ROLES` in `src/stemma/driver/task.py`) still set max for the lead and
+  final reviewers and are B's to change.
+
+### Aligned to contract v0.4 (part B, commit 188bae3)
+- This branch is rebased onto 188bae3 so the lint reads v0.4. The pending list then
+  reported all four entries as now in the contract, and they were deleted; only
+  `run_analysis` remains pending (part B is adding it), and `check` will report it
+  when the contract names it.
+- The lead loses Bash as well as the source tools (the lint now refuses either);
+  its arithmetic script runs through `run_analysis`, and it files the exact result.
+- `criteria.md` lines are `- C1: <text>`. The lead answers each final-review point
+  by id in `draft/response.v<v>.md` before submitting version v (this replaces the
+  `draft/responses.v<n>.md` name agreed earlier); reviewers read
+  `register/drafts/previous.v<version>.md`. Points are `{point, material, node,
+  criterion}`.
+- Branch reviewer: one send-back per branch; the closing verdict gives every
+  sent-back point a resolution (resolved, bounded, conditional, disputed) and
+  records a new material point as an open limit. The worker writes the revision
+  order after a send-back, naming each point id, and names a bounded or conditional
+  point's id in its record.
+- Claim checker takes `doc:<receipt_id>` or, for a cited claim with no document,
+  `claim:<claim_id>`; the earlier gap on estimates is closed by v0.4.
+- The host lists points open at `max_review_rounds` in the completion statement, so
+  the lead's text no longer does.
+- v0.4 still has the order heading "What would change the decision"; the texts use
+  the approved "What would change the answer".
+- Shown: lint and map check pass; tests/roles 49 pass; whole suite 1,261 pass, 18
+  skipped.
+
+### Codex review of 4d83095 (one fix round, 27 October)
+Nine findings; the orchestrator's instructions per item:
+1. Integration (host on old interfaces, map wording on effort and parked switches):
+   true once part B is merged; nothing changed here.
+2. Document-free estimates: the claim checker now takes `derivations:v<n>` (part B
+   is adding it; `checks/derivations-v<n>.json`) and `doc:` only (orchestrator: no
+   `claim:` route; an `assumed` cited claim's check route is part B's to state), and
+   judges for each estimate whether its script computes what the claim states from
+   the right input claims.
+3. Lint bypass: `WebSearch(*)` and `WebSearch(domain:...)` passed the lead check.
+   Tool specs are now parsed (`TOOL_SPEC`); only `Agent` may carry an argument, any
+   other syntax is refused, and the lead check judges the reduced name. Hostile
+   tests: five parameterised or malformed forbidden specs on the lead, five
+   unsupported specs on a worker.
+4. Company card: discovery limited to what the scoped question needs; every
+   document relied on is still read whole. Orientation fragments read only what
+   bears on the question.
+5. Framer: criteria are checked against the question and the user's answers in
+   task/ (user thresholds allowed); nodes are checked against the broader decision
+   when the scope is broader_decision.
+6. Lead: one line for decision D3 (both cheap readings), and options at framing only
+   as the user named them, after the research only with broader_decision scope or a
+   "what to do" question. To fit, parked arms are exempt from the page check (they
+   cannot run; a test shows the check returns once an arm is un-parked) and a few
+   lines were trimmed. The longest runnable lead is 850/850.
+7. Branch reviewer: before the closing review, the old accept-gap rule; at it, the
+   send-back limit decides, a point still open closes bounded or conditional with
+   its effect stated, never called evidence exhausted.
+8. Standing rule 1: roles that read sources capture before they cite; a role that
+   reads none (the lead) cites only filed claims.
+9. Mechanical reader: the shortest change that makes a segment correct or clear (a
+   unit, a year, a definition), and no growth beyond it.
+Also: the worker may call `run_analysis` (orchestrator); its Bash is unchanged.
+Shown: lint and map check pass; tests/roles 60 pass; whole suite 1,272 pass, 18
+skipped.
+
+### Aligned to part B's Group A (2e4f4f7)
+- Rebased onto 2e4f4f7. The contract now names `run_analysis`, `check_assignment`
+  and `revise_criteria`, so the pending-vocabulary list, its check and its test are
+  deleted; the three tools are in the lint's contract list.
+- Claim checker: assignments `doc:<receipt_id>` or `derivations:v<n>`, its exact list
+  from `check_assignment` (lists are per round and written once); derivation entries
+  carry their citing sentences, which the assumed-claim line now reads.
+- Lead: criteria freeze at the first review; `revise_criteria` only for a criterion
+  that misreads the question, never to fit the draft (it voids earlier final
+  reviews). `draft/response.v<v>.md` answers every point of the last round by id.
+  Longest runnable lead 849/850.
+- Worker: a branch lead adds nodes, never moves one or changes its branch. The
+  send-back lines are merged and the analysis line shortened (worker 812/850), so the
+  lint's append-a-line tests have room.
+- Shown: lint and map check pass; tests/roles 59 pass; whole suite 1,426 pass, 18
+  skipped.

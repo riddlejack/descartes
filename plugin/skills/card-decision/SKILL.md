@@ -5,13 +5,14 @@ description: Question-type card for a decision such as an investment, an acquisi
 
 # Card: a decision (an investment, a deal, a new venture)
 
-Use this card when the question asks whether to act or which option to take; it holds method, not an industry's economics or a valuation model.
+Use this card when the question itself asks whether to act or which option to take; it holds method, not an industry's economics or a valuation model.
 
 ## Framing the choice
 
-Put the real options side by side: acting, carrying on as now, a narrower or staged variant, and any timing option such as waiting for a fact to arrive.
-For each option write the two or three things that must be true for it to be right, and find early which of them could end the question.
-Ask what the decider is trying to achieve; if the options cannot be ranked, the goal has not been stated, and stating it is the first finding.
+Take the options the question or the user names: for "whether to do X", doing it and not doing it; for "A or B", A and B.
+Make the tree's sub-questions the criteria every option is compared on, so that no option owns a subtree, and find early which criterion could end the question.
+If the question asks what to do and names no options, work the options out from the findings after the research, never before it.
+Take what the decider is trying to achieve from the question and task/; if the options cannot be ranked against it, say so as the first finding.
 
 ## Where to look
 
@@ -20,6 +21,6 @@ Treat the materials of anyone selling the deal or the venture as advocacy, tiere
 
 ## Before concluding
 
-Quantify the effect of the recommended option with its assumptions and a range, and say at what value of the deciding fact the choice would flip.
-State what would have to happen for the recommendation to fail, and whether any of it is already visible.
-Give the reason for the choice as how it meets the goal, with the real alternatives shown and straw men left out.
+Quantify the effect of each option with its assumptions and a range, and say at what value of the deciding fact the choice would flip.
+Recommend an option only when the question asks for a recommendation, and then state what would have to happen for it to fail and whether any of it is already visible.
+Give the reason for any choice as how it meets the goal, with the real alternatives shown and straw men left out.

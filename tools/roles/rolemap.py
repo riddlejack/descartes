@@ -92,6 +92,33 @@ CONTRACT_TOOLS = frozenset(
         "query_data",
         "gate_status",
         "finish_run",
+        "run_analysis",
+        "check_assignment",
+        "revise_criteria",
+    }
+)
+
+# Logical invariant: the tools decision D6 takes from the lead (it reads branch
+# records, never sources), as contract v0.4 section 0 lists them; Bash goes too, since a
+# guard cannot parse every way a shell command reads a file. A hook (part B) also
+# refuses the lead's Read of store/ and attachments.
+LEAD_FORBIDDEN_TOOLS = frozenset(
+    {
+        "WebSearch",
+        TOOL_PREFIX + "capture",
+        TOOL_PREFIX + "capture_file",
+        TOOL_PREFIX + "sec_filings",
+        TOOL_PREFIX + "sec_capture",
+        TOOL_PREFIX + "sec_facts",
+        TOOL_PREFIX + "outline",
+        TOOL_PREFIX + "read",
+        TOOL_PREFIX + "read_section",
+        TOOL_PREFIX + "search_store",
+        TOOL_PREFIX + "tables",
+        TOOL_PREFIX + "check_quote",
+        TOOL_PREFIX + "query_data",
+        "Bash",
+        "WebFetch",
     }
 )
 
@@ -140,6 +167,14 @@ SWITCHES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("s4_orientation", ("frame_first", "basic_facts", "primary_record")),
     ("s6_cross_family", ("off", "during", "final")),
 )
+
+# Logical invariant: switch values parked by the orchestrator on 27 October; the
+# driver refuses them with a typed error (part B), and the map marks them. single_loop
+# needs the source tools D6 takes from the lead; s3 true needs two branches on one node.
+PARKED: dict[tuple[str, str], str] = {
+    ("s2_shape", "single_loop"): "the lead would need the source-reading tools decision D6 removes",
+    ("s3_hypothesis_in_briefs", "true"): "the register does not yet allow two branches on one node",
+}
 
 # Resource limit: the design's "a page or less" for a standing role text (step 5),
 # taken as this many words of instruction, excluding frontmatter and comments: one
@@ -192,6 +227,24 @@ PATH_TOKEN = re.compile(
     r"\.(?:md|json|jsonl|py|txt)\b"
 )
 MCP_NAME = re.compile(r"mcp__[A-Za-z0-9_]+")
+# A frontmatter tool spec: a bare name, or a name with one parenthesised argument.
+TOOL_SPEC = re.compile(r"^(?P<base>[A-Za-z][A-Za-z0-9_]*)(?:\((?P<arg>[^()\s][^()]*)\))?$")
+# Logical invariant: the one harness tool a role lists with an argument, naming which
+# plugin role it may start (Agent(stemma:worker)); any other argument is refused, so a
+# parameterised spec cannot carry a tool past a check on its bare name.
+PARAMETERISED_TOOLS = frozenset({"Agent"})
+# Everything from the first parenthesis or space on, for naming a malformed spec's tool.
+TOOL_SPEC_FALLBACK = re.compile(r"[(\s].*$", re.DOTALL)
+
+
+def tool_base(spec: str) -> str | None:
+    """The tool a spec names, or None when its syntax is not one roles may use."""
+    match = TOOL_SPEC.match(spec)
+    if match is None:
+        return None
+    if match["arg"] is not None and match["base"] not in PARAMETERISED_TOOLS:
+        return None
+    return match["base"]
 
 
 class RoleFileError(Exception):
@@ -323,11 +376,17 @@ def all_lead_choices() -> list[dict[str, str]]:
     return choices
 
 
+def is_parked(choice: dict[str, str]) -> bool:
+    return any((switch, value) in PARKED for switch, value in choice.items())
+
+
 def max_lead_words(shape: str) -> int:
+    """The longest lead a run can get with this shape; a parked shape counts its own."""
+    shape_parked = ("s2_shape", shape) in PARKED
     return max(
         words(parse_commented(LEAD_DIR / "base.md", assemble_lead(choice)))
         for choice in all_lead_choices()
-        if choice["s2_shape"] == shape
+        if choice["s2_shape"] == shape and (shape_parked or not is_parked(choice))
     )
 
 
@@ -411,12 +470,15 @@ def check_role_meta(doc: Doc, expected_name: str, errors: list[str]) -> None:
     if len(set(tools)) != len(tools):
         errors.append(f"{where}: a tool is listed twice")
     for tool in tools:
-        if tool.startswith("mcp__"):
-            if not tool.startswith(TOOL_PREFIX):
+        base = tool_base(tool)
+        if base is None:
+            errors.append(f"{where}: {tool!r} is not a tool spec roles may use")
+        elif base.startswith("mcp__"):
+            if not base.startswith(TOOL_PREFIX):
                 errors.append(f"{where}: {tool} does not use the prefix {TOOL_PREFIX}")
-            elif tool[len(TOOL_PREFIX) :] not in CONTRACT_TOOLS:
+            elif base[len(TOOL_PREFIX) :] not in CONTRACT_TOOLS:
                 errors.append(f"{where}: {tool} is not a tool the contract defines")
-        elif tool.split("(")[0] not in HARNESS_TOOLS:
+        elif base not in HARNESS_TOOLS:
             errors.append(f"{where}: {tool} is not an allowed harness tool")
 
 
@@ -453,6 +515,12 @@ def check_lead(errors: list[str]) -> None:
     if base is not None:
         check_role_meta(base, "lead", errors)
         check_deferred(base, errors)
+        tools = base.meta.get("tools", [])
+        for tool in tools if isinstance(tools, list) else []:
+            # Judged on the name the spec reduces to, so no argument form slips past.
+            name = tool_base(tool) or TOOL_SPEC_FALLBACK.sub("", tool)
+            if name in LEAD_FORBIDDEN_TOOLS:
+                errors.append(f"{rel(base.path)}: the lead holds {tool}, a source-reading tool")
     expected = {"base.md"} | {f"{s}.{v}.md" for s, vs in SWITCHES for v in vs}
     present = {p.name for p in LEAD_DIR.iterdir() if p.is_file()}
     for name in sorted(expected - present):
@@ -481,7 +549,9 @@ def check_lead(errors: list[str]) -> None:
         except RoleFileError as error:
             errors.append(f"assembled lead {choice}: {error}")
             continue
-        if words(doc) > lead_page_limit(choice):
+        # A parked arm cannot run (the driver refuses it), so it needs no page until it
+        # is un-parked; its text must still parse.
+        if not is_parked(choice) and words(doc) > lead_page_limit(choice):
             errors.append(
                 f"assembled lead {choice}: {words(doc)} words, over its limit "
                 f"({lead_page_limit(choice)})"
@@ -705,12 +775,14 @@ def build_map() -> str:
         "",
         "Generated by `tools/roles/rolemap.py map` from the files in `plugin/`; do not",
         "edit by hand. Each line a role reads is followed by the failure it prevents and",
-        'its evidence. Evidence names: "design" is DESIGN-v1; "lesson" is',
-        'the practice lessons (private); "P1", "P3" and "D1" are the research files of those',
-        'names; "contract" is docs/CONTRACTS.md; the Opus 5.5 and Fable 5.1 guides are',
-        "Anthropic's prompting pages. Lines marked provisional are not yet settled by a",
-        "test; the E6a reviewer study (26 October) set the reviewers' model and effort",
-        "but tested none of those lines directly.",
+        'its evidence. Evidence names: "design" is DESIGN-v1; "lesson" is one of the',
+        'practice lessons (a private design record); "P1", "P3" and "D1" are the',
+        'research files of those names; "contract" is docs/CONTRACTS.md; "decision D1"',
+        'to "decision D10" are the owner\'s decisions of 27 October (V2-CHANGES);',
+        '"run 1" is the first live run and its diagnosis (a private design record); the',
+        "Opus 5.5 and Fable 5.1 guides are Anthropic's prompting pages. Lines marked",
+        "provisional are not yet settled by a test; the E6a reviewer study (26 October)",
+        "set the reviewers' model and effort but tested none of those lines directly.",
         "",
     ]
     errors: list[str] = []
@@ -733,7 +805,8 @@ def build_map() -> str:
         "Every role also reads the four standing rules. The lead's text is base.md plus",
         f"one fragment per switch: at most {max_lead_words('team')} words with workers, "
         + f"against a page of {PAGE_WORDS}, and at most {max_lead_words('single_loop')} "
-        + "when it works every branch itself and so also carries the worker's method.",
+        + "when it works every branch itself and so also carries the worker's method "
+        + "(single_loop, parked this round).",
         "",
         "## Standing rules (every role, as the run folder's CLAUDE.md)",
         "",
@@ -749,7 +822,9 @@ def build_map() -> str:
     for switch, values in SWITCHES:
         for value in values:
             frag = load_role(lead_fragment(switch, value), errors)
-            out += ["", f"### Lead, when {switch} is {value}", ""]
+            parked = PARKED.get((switch, value))
+            note = f" (parked: {parked}; the driver refuses it)" if parked else ""
+            out += ["", f"### Lead, when {switch} is {value}{note}", ""]
             if frag is None or not frag.lines:
                 out.append("- Adds nothing.")
             else:

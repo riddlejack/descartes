@@ -349,3 +349,58 @@ def test_two_sentences_sharing_one_comment_fail(rm: ModuleType) -> None:
 def test_sentence_break_before_a_number_fails(rm: ModuleType) -> None:
     append(rm, "worker", "Read it whole. 2 passes follow. <!-- prevents: x; evidence: y -->")
     assert "not exactly one sentence" in errors_of(rm)
+
+
+def test_lead_with_a_source_reading_tool_fails(rm: ModuleType) -> None:
+    edit(rm.LEAD_DIR / "base.md", "  - Skill\n", "  - Skill\n  - mcp__plugin_stemma_stemma__read\n")
+    assert "the lead holds mcp__plugin_stemma_stemma__read, a source-reading tool" in errors_of(rm)
+
+
+def test_lead_with_websearch_fails(rm: ModuleType) -> None:
+    edit(rm.LEAD_DIR / "base.md", "  - Skill\n", "  - Skill\n  - WebSearch\n")
+    assert "the lead holds WebSearch" in errors_of(rm)
+
+
+def test_lead_with_bash_fails(rm: ModuleType) -> None:
+    edit(rm.LEAD_DIR / "base.md", "  - Skill\n", "  - Skill\n  - Bash\n")
+    assert "the lead holds Bash" in errors_of(rm)
+
+
+def test_unagreed_path_fails(rm: ModuleType) -> None:
+    append(
+        rm, "worker", "Keep notes in checklist/notes.md always. <!-- prevents: x; evidence: y -->"
+    )
+    assert "the path 'checklist/notes.md', which the contract does not" in errors_of(rm)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    ["WebSearch(*)", "WebSearch(domain:example.org)", "Bash(ls:*)", "Bash()", "WebSearch (x)"],
+)
+def test_lead_with_a_parameterised_forbidden_tool_fails(rm: ModuleType, spec: str) -> None:
+    edit(rm.LEAD_DIR / "base.md", "  - Skill\n", f"  - Skill\n  - {spec}\n")
+    assert f"the lead holds {spec}, a source-reading tool" in errors_of(rm)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "Read(store/**)",
+        "mcp__plugin_stemma_stemma__read(x)",
+        "Agent()",
+        "Agent(a)(b)",
+        "Read extra",
+    ],
+)
+def test_unsupported_tool_spec_fails(rm: ModuleType, spec: str) -> None:
+    edit(rm.AGENTS_DIR / "worker.md", "  - Skill\n", f"  - Skill\n  - {spec}\n")
+    assert f"{spec!r} is not a tool spec roles may use" in errors_of(rm)
+
+
+def test_parked_arm_is_exempt_from_the_page_but_not_once_unparked(rm: ModuleType) -> None:
+    fragment = rm.LEAD_DIR / "s3_hypothesis_in_briefs.true.md"
+    filler = " ".join(["word"] * rm.PAGE_WORDS)
+    fragment.write_text(f"\n## Orders\n\n{filler}. <!-- prevents: x; evidence: y -->\n")
+    assert "assembled lead" not in errors_of(rm)
+    del rm.PARKED[("s3_hypothesis_in_briefs", "true")]
+    assert "assembled lead" in errors_of(rm)
