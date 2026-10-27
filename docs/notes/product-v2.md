@@ -357,3 +357,56 @@ Each fix below has a test named after it, built from the review's probe.
 12. *Tools were limited but the filesystem was not.* The bare arm's tools are confined
     and proven at launch by the scope canary. That the harness process itself runs as
     the owner is a stated limit.
+
+## Codex re-check of the head-to-head harness: the eight remaining findings
+
+Review: `~/.private/stemma-design/build-2026-10/reviews/W3-headtohead-recheck.md`. One
+test per finding (`test_recheck_<n>_...` in `hackathon/tests/test_headtohead.py`); all
+twelve new tests failed on 9628aa3 before the fixes (the canary and stuck-child tests
+partly because their fake now speaks the new six-step canary prompt).
+
+1. **Calculation credit.** A computed Stemma figure counts as reproduced only when a
+   claim it cites re-runs and its recorded value is the number shown (sign, unit, scale,
+   at the shown precision). "We compute 999" over a claim recorded as 30 gets none, and
+   says why.
+2. **Partial source failures.** A figure unjudged against any resolved cited source is
+   counted (`taken_figures_with_a_cited_source_unjudged`), even when another source
+   supported it, beside `taken_figures_judged_against_every_resolved_cited_source`; the
+   summary says how many.
+3. **The judge.** It sees no citation markup (claim tags, links, URLs, reference
+   markers removed: `blind`). It runs inside a macOS sandbox profile (`judge_profile`):
+   no read or write of the home folder, /Volumes or the temporary folders except its own
+   empty call folder and Codex's folder, in which the owner's `AGENTS.md`, sessions and
+   history stay shut. Tested by the operating system with a planted file, and live: one
+   scoring with a source telling the judge to `cat` an outside file; the judge judged
+   the figure and the file's token appeared in no reply.
+   - macOS refuses a sandbox inside a sandbox with any deny rule, so Codex's own command
+     sandbox cannot start in this one. The judge therefore gets the source text in its
+     prompt (on stdin) and needs no command. A source over 400,000 characters is given as
+     excerpts around the figures' numbers and long words, and such figures are counted.
+   - Running Codex with its own sandbox switched off was refused by this session's
+     permission checks; not pursued.
+   - Found on the way: every earlier judge call (the 87 in the live re-trial) ran with
+     the owner's `~/.codex/AGENTS.md` loaded. Now it is shut. Codex's skills and plugins
+     from `~/.codex` still load unless `STEMMA_CODEX_HOME` names a clean, signed-in Codex
+     folder (made like the clean Claude configuration); the summary says which ran.
+4. **Parser.** "of 2000 benches", "(2000) benches" and ".5%" are figures; "[1] reports 42
+   benches." is a sentence, not a reference definition (that needs a colon, a URL or a
+   sources heading). A year after "of", "to", "from" or in brackets is a date unless a
+   counted word follows it; "Smith (2021)" and "the 2021 American Jobs Plan" are dates.
+5. **Citations.** A figure takes markers in its own sentence, or right after it with
+   only spaces and punctuation between, or earlier in its sentence; never across another
+   sentence's words. Only a table row gives every marker in the row to its figures.
+6. **Scope canary.** Six calls, each needing its result: the marker read by Read and by
+   Bash and curl must be refused; a control file inside the folder read by both tools
+   and the page fetched by WebFetch must succeed (so a refusal is the confinement's).
+   The canary session itself must exit 0 with a successful result. Not watched live:
+   whether this harness marks a refused Bash command `is_error`; if not, the canary
+   refuses the arm and names the step.
+7. **Forced stop.** A child that closes its output but does not exit is stopped and
+   recorded as stopped, so it is never eligible.
+8. **Gaps.** Any invalid entry in the judge's gap reply marks the count not fully
+   judged, and the summary says so.
+
+Checks: 46 head-to-head tests pass; full suite 1685 passed, 19 skipped; ruff and
+mypy --strict clean on `src` and `hackathon/headtohead`.
