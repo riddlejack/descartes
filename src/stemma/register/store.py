@@ -1115,6 +1115,10 @@ class Register:
         nid = node.get("id")
         if not isinstance(nid, str) or not _SAFE_ID.fullmatch(nid):
             raise Refused("Refused: a node needs a plain id.")
+        if nid.endswith("."):
+            # An order's "Answer q9." names q9: a full stop after an id is punctuation,
+            # so no node id ends in one (Codex re-check of the removal, 27 Oct).
+            raise Refused(f"Refused: node id {nid} ends in a full stop; a node id does not.")
         if "set_aside" in node:
             self._require(caller, frozenset({roles.LEAD}), "set nodes aside")
             reason = node["set_aside"]
@@ -1242,12 +1246,14 @@ class Register:
         return rec
 
     def _holders(self, n: dict[str, Any], existing: dict[str, dict[str, Any]]) -> list[str]:
-        """What holds a node in the tree (exact facts). Only a node framing left unused
-        is removed: one with no children, never assigned a branch, with no status but
-        open or set aside, that no fact in the register's whole history names (revoked
-        sessions' included) and no branch order or revision order names. Its own
-        set-aside mark does not hold it. A child moved away earlier does not either:
-        moving it is how a duplicate's children join the node it merges into."""
+        """What holds a node in the tree (exact facts): its children, a branch it has or
+        ever had, a status but open or set aside, any fact in the register's whole log
+        about it or holding its id (revoked sessions' included), and a branch order or
+        revision order naming it. Its own set-aside mark does not hold it, nor does a
+        child moved away earlier (moving it is how a duplicate's children join the node
+        it merges into). No other file is read: a narrative naming the node (the
+        framer's critique saying q9 duplicates q3, a record, a restatement) does not
+        hold it."""
         nid = str(n["id"])
         out = []
         kids = sorted(str(c["id"]) for c in existing.values() if c.get("parent") == nid)
@@ -1288,7 +1294,7 @@ class Register:
                     out += [f"review point {pt.get('id')} names it" for pt in value["points"]
                             if isinstance(pt, dict) and pt.get("node") == nid]
                 elif _names(value, nid):
-                    out.append(f"a {pred} record names it")
+                    out.append(f"a recorded {str(pred).replace('_', ' ')} names it")
         return out
 
     def _orders_naming(self, nid: str) -> list[str]:

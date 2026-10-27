@@ -116,6 +116,44 @@ def test_a_longer_id_in_an_order_is_not_the_node(reg: Register) -> None:
     _refused(reg, "q8", "branches/b1/order.md names it")
 
 
+def test_a_node_id_never_ends_in_a_full_stop(reg: Register) -> None:
+    # Codex re-check #2: the order matcher reads "Answer q9." as q9, so an id q9. could
+    # never be held by an order; no node id ends in a full stop.
+    for bad in ("q9.", "q9..", "a.b."):
+        with pytest.raises(Refused, match="ends in a full stop"):
+            reg.tree_upsert(LEAD, node(bad))
+    reg.tree_upsert(LEAD, node("q9.1"))
+    assert ids(reg) == ["q9.1"]
+
+
+def test_any_recorded_fact_holding_the_id_holds_the_node(reg: Register) -> None:
+    # Codex re-check #3: the general fact-value holder, alone. An assumption whose text
+    # is exactly the node's id names it; nothing else does.
+    reg.tree_upsert(LEAD, node("n1", branch_id="b1"))
+    reg.tree_upsert(LEAD, node("q9"))
+    write_record(reg, "b1")
+    reg.propose_branch_done(WORKER, "b1")
+    reg.record_branch_verdict(reviewer_for(reg, "b1"), "b1", "ask_user", "which one?",
+                              points=[{"point": "p", "material": True, "criterion": "C1"}])
+    reg.proceed_on_assumption(LEAD, "b1", "q9")
+    with pytest.raises(Refused, match=r"node q9 is not removed: a recorded assumption "
+                                      r"names it\.$"):
+        reg.tree_upsert(LEAD, {"id": "q9", "remove": MERGED})
+
+
+def test_a_narrative_naming_the_node_does_not_hold_it(reg: Register) -> None:
+    # Contract 0c: only the register's records and the order files are read. The
+    # framer's critique saying q9 duplicates q3 is why the lead removes q9.
+    reg.tree_upsert(LEAD, node("q3"))
+    reg.tree_upsert(LEAD, node("q9"))
+    (reg.run_dir / "framer").mkdir()
+    (reg.run_dir / "framer/critique.md").write_text("q9 duplicates q3.\n")
+    (reg.run_dir / "branches/b1").mkdir(parents=True)
+    (reg.run_dir / "branches/b1/record.md").write_text("See q9.\n")
+    reg.tree_upsert(LEAD, {"id": "q9", "remove": MERGED})
+    assert ids(reg) == ["q3"]
+
+
 def test_a_node_that_ever_had_a_branch_is_not_removed(reg: Register) -> None:
     # Codex review #2: a node detached from its branch (branch cleared, status reset)
     # may still be named by the branch's record and claims; it stays.

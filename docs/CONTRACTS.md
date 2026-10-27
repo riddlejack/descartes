@@ -333,19 +333,19 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   subagent of the lead), with nothing else in the object; the reason is text, at most
   `SET_ASIDE_MAX_CHARS`.
 - **What holds a node** (exact facts; any one refuses the removal, and the refusal
-  names each). Only a node framing left unused is removed: the real case is a duplicate
-  merged into another before dispatch. A node is held by: child nodes; a branch
-  assigned to it now or at any time before (a detached node may still be named by its
-  branch's record, restatements and claims); a status other than `open` or
-  `set_aside`; any fact in the register's whole log about it or holding its id,
-  revoked sessions' facts included (a revoked review no longer counts toward release,
-  but it was recorded and names the node), among them a branch verdict on it and a
-  review point (final review or branch verdict) naming it; a branch order (`order.md`)
+  names each): its child nodes; a branch assigned to it now or at any time before; a
+  status other than `open` or `set_aside`; any fact in the register's whole log about
+  it or whose value holds its id, revoked sessions' facts included (among them a branch
+  verdict on it, a review point naming it, an assumption); a branch order (`order.md`)
   or revision order (`revision-<n>.md`) anywhere under `branches/` naming its id as a
   whole id (each run of id characters is one id, less trailing full stops, so
-  `q9._child` is not `q9`). Its own set-aside mark does not hold it, and neither does a
-  child moved away earlier (moving the children is how a duplicate merges). A
-  set-aside node nothing holds can be removed.
+  `q9._child` is not `q9`, and no node id ends in a full stop). Its own set-aside mark
+  does not hold it, and neither does a child moved away earlier (moving the children
+  is how a duplicate merges). A set-aside node nothing holds can be removed.
+- **What is not read.** No other file is scanned. A narrative that names the node
+  does not hold it: the framer's critique (which may say "q9 duplicates q3", the case
+  removal is for), a branch record, a restatement. The lead removes on its own reading
+  of those.
 - **What is recorded.** The node's record gains `removed: {reason, at}` and leaves the
   tree: `tree()`, `get_tree`, `tree.md`, the closure, the gate and `set_aside` no longer
   see it. `tree.json` lists it under `removed` (`id`, `statement`, `reason`), and the

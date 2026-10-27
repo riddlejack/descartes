@@ -214,10 +214,12 @@ def tree_upsert(ctx: Context[Any], node: dict[str, Any]) -> dict[str, Any]:
     Lead only: set_aside is the reason a node is set aside (neither possible answer could
     change the headline), or null to bring it back; a set-aside node and everything under
     it counts as closed and is listed by gate_status. Fields left out keep their values.
-    Lead only: {id, remove: reason} removes a node framing left unused (no children,
-    never given a branch, named by no review, verdict or order), for a duplicate merged
-    into another before dispatch; the refusal names whatever holds it. A removed id is
-    not used again."""
+    Lead only: {id, remove: reason} removes a node, for a duplicate merged into
+    another. It is refused while anything holds the node: its children, a branch it has
+    or ever had, a register record naming it (a review point, a verdict, an assumption),
+    or a branch order or revision order naming it; the refusal names each. Other files
+    are not read: the framer's critique or a branch record naming it does not hold it.
+    A removed id is not used again. A node id never ends in a full stop."""
     return _call(ctx, "tree_upsert", lambda r, c: r.tree_upsert(c, node))
 
 
