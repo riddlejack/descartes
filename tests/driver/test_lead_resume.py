@@ -203,7 +203,7 @@ def test_the_old_usage_stop_is_cleared_on_disk_before_the_lead_launches(
 
     monkeypatch.setattr(runner.Driver, "start_lead", spy)
     fake.configure({"lead@resume": {"sleep_s": 0.1}})
-    runner.resume(cfg, run, checks_api, limits)
+    runner.resume(cfg, run, checks_api, limits, reason="Resume the synthetic test.")
     assert seen == [False]
 
 

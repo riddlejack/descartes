@@ -40,7 +40,9 @@ def test_both_notices_reach_a_running_lead(cfg: DriverConfig, tmp: Path, fake: F
     assert "Submit your draft now and call finish_run" in got[1]["text"]
     sent = [e for e in events.read(run) if e["event"] == "lead_time_notice"]
     assert [e["fraction"] for e in sent] == [0.25, 0.4]
-    assert all(e["used_s"] >= e["fraction"] * 6.0 for e in sent)
+    # The event records tenths of a second: compare at that same precision, not
+    # binary 2.4000000000000004 against recorded 2.4.
+    assert all(e["used_s"] >= round(e["fraction"] * 6.0, 1) for e in sent)
     assert not [e for e in events.read(run) if e["event"] == "session_stopped_by_limit"]
 
 

@@ -23,6 +23,6 @@ def run(cfg_fields: dict[str, str], run_dir: str, me: int, barrier: Any, results
     barrier.wait()  # both supervisors are released at once
     try:
         results.put((me, "code", run_to_end(cfg, Path(run_dir), resume_first=True,
-                                            api=checks_api)))
+                                            api=checks_api, operator_reason="Resume the synthetic test.")))
     except DriverBusy as exc:
         results.put((me, "busy", str(exc)))

@@ -141,13 +141,15 @@ def pending_checks(run_dir: Path) -> list[CheckRequest]:
     return [s.request for s in states(run_dir).values() if s.status == "pending"]
 
 
-def _mark(run_dir: Path, record: dict[str, Any], need: frozenset[str]) -> None:
+def _mark(run_dir: Path, record: dict[str, Any], need: frozenset[str], *,
+          end_retry: bool = False) -> None:
     log = log_path(run_dir)
     with jsonl.exclusive(log):
         s = _states(jsonl.read_all(log)).get(record["request_id"])
         if s is None:
             raise UnknownCheck(record["request_id"])
-        if s.status not in need:
+        terminal_retry = end_retry and s.status == "ended" and s.outcome in RETRYABLE_OUTCOMES
+        if s.status not in need and not terminal_retry:
             raise UnknownCheck(f"{record['request_id']} is {s.status}, not {sorted(need)}")
         jsonl.append_unlocked(log, [record])
 
@@ -167,7 +169,8 @@ def mark_launched(run_dir: Path, request_id: str, session_id: str, model: str,
 
 def mark_ended(run_dir: Path, request_id: str, exit_code: int, outcome: str) -> None:
     _mark(run_dir, {"kind": "ended", "request_id": request_id, "exit_code": exit_code,
-                    "outcome": outcome, "at": _now()}, frozenset({"running"}))
+                    "outcome": outcome, "at": _now()}, frozenset({"running"}),
+          end_retry=outcome in {"given_up", "superseded"})
 
 
 def for_prompt(run_dir: Path, role: str, prompt: str, *,

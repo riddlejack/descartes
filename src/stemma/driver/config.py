@@ -102,8 +102,9 @@ class Limits:
     # Resource limit: bytes of a session's stderr kept in an event when it fails.
     stderr_tail_bytes: int = 2000
     # Resource limit: rounds of the three final reviews (one per submitted draft); the
-    # register refuses another round after this many and releases the last one with its
-    # criticisms listed (CONTRACTS section 6, v0.3).
+    # register adds only recorded operator grants. The final reviewed draft releases
+    # with criticisms listed only if every other gate holds; otherwise exhaustion ends
+    # unreleased (CONTRACTS section 6).
     max_review_rounds: int = 3
     # Resource limit: in a frame-only run, seconds the finished frame (intake, frame, tree,
     # the response to the critique) must stay unchanged before the driver ends the lead.

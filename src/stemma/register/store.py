@@ -195,6 +195,16 @@ class Caller:
     session_id: str
 
 
+@dataclass(frozen=True)
+class ReviewExhaustion:
+    """A resource stop, never a judgment of research quality."""
+
+    version: int
+    used: int
+    limit: int
+    unmet: tuple[str, ...]
+
+
 def now() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
@@ -1828,7 +1838,7 @@ class Register:
                             "round": req.round})
         return {"check_requested": req.request_id, "round": req.round}
 
-    def max_review_rounds(self) -> int:
+    def configured_review_rounds(self) -> int:
         """`limits.max_review_rounds` from run.json; the default when run.json or the key
         is absent. A value that is not a positive whole number is a loud refusal."""
         try:
@@ -1845,8 +1855,105 @@ class Register:
             raise Refused("Refused: run.json max_review_rounds is not a positive whole number.")
         return n
 
+    def max_review_rounds(self) -> int:
+        """The frozen allowance plus explicit, sealed operator grant events."""
+        self.wm.refresh()
+        limit = self.configured_review_rounds()
+        for grant in self._run_facts("review_round_granted"):
+            before, after = grant.get("previous_limit"), grant.get("limit")
+            if (type(before) is not int or type(after) is not int
+                    or before != limit or after != before + 1):
+                raise Refused("Refused: the operator review-round grant chain is invalid.")
+            limit = after
+        return limit
+
+    def grant_review_round(self, *, reason: str, expected_limit: int,
+                           grant_id: str) -> dict[str, Any]:
+        """Host/operator only; deliberately not an MCP tool. One additional round.
+
+        The register fact is authoritative and sealed; events.jsonl mirrors it for
+        operators. A retry repairs a missing mirror without granting another round.
+        The driver holds its run lock outside this register lock during live use.
+        """
+        if (not isinstance(reason, str) or not reason.strip()
+                or not isinstance(grant_id, str)
+                or re.fullmatch(r"[a-z0-9][a-z0-9_-]*", grant_id) is None
+                or type(expected_limit) is not int or expected_limit < 1):
+            raise Refused("Refused: an operator grant needs a reason, a plain grant id "
+                          "and a positive whole expected limit.")
+        with self._exclusive():
+            self.wm.refresh()
+            self._refuse_after_release()
+            grants = self._run_facts("review_round_granted")
+            existing = next((g for g in grants if g["grant_id"] == grant_id), None)
+            if existing is not None:
+                if existing["reason"] != reason or existing["previous_limit"] != expected_limit:
+                    raise Refused("Refused: the operator grant id already names another grant.")
+                record = existing
+            else:
+                limit = self.max_review_rounds()
+                if limit != expected_limit:
+                    raise Refused("Refused: the review allowance changed before the operator grant.")
+                record = {"grant_id": grant_id, "reason": reason, "at": now(),
+                          "previous_limit": limit, "limit": limit + 1}
+                self._run_fact(Caller("stemma:operator", None, ""),
+                               "review_round_granted", record)
+            if not any(e.get("event") == "review_round_granted"
+                       and e.get("grant_id") == grant_id
+                       for e in jsonl.read_all(self.run_dir / "events.jsonl")):
+                jsonl.append(self.run_dir / "events.jsonl",
+                             {"event": "review_round_granted", "source": "operator", **record})
+        return record
+
     def review_rounds_exhausted(self) -> bool:
         return len(self.submitted_versions()) >= self.max_review_rounds()
+
+    def review_exhaustion(self) -> ReviewExhaustion | None:
+        """Stop only after the last round's checks settle and release still fails.
+
+        Pending/running checks can still change the answer. Retryable ends must be
+        resolved by the driver before exhaustion is terminal. A releasable draft
+        still needs its lead to call finish_run, so it is never stopped here.
+        """
+        if self.release_state() is not None or not self.review_rounds_exhausted():
+            return None
+        states = checks_api.states(self.run_dir, records=self._ck_records)
+        if any(s.status != "ended" or s.outcome in checks_api.RETRYABLE_OUTCOMES
+               for s in states.values()):
+            return None
+        versions = self.submitted_versions()
+        version = max(versions)
+        failures = self.finish_failures(version)
+        if not failures:
+            return None
+        return ReviewExhaustion(version, len(versions), self.max_review_rounds(), tuple(failures))
+
+    def draft_preflight(self, text: str) -> list[str]:
+        """Exact content prerequisites shared by submission and release.
+
+        No verdicts, reviews or other work caused by submission is required here.
+        A refusal therefore spends neither a review round nor a checking session.
+        """
+        failures = []
+        if not text.strip():
+            failures.append("the draft is empty")
+        for a in self.assumptions():
+            if a["assumption"] not in text:
+                failures.append(f"the deliverable does not list the assumption taken for "
+                                f"branch {a['branch_id']}")
+        for line, raw in tags.malformed_tags(text):
+            failures.append(f"deliverable line {line}: malformed tag {raw!r}")
+        for seg in tags.untagged_number_segments(text):
+            failures.append(f"deliverable line {seg.line}: untagged number in {seg.text[:60]!r}")
+        for short in dict.fromkeys(tags.claim_tags(text)):
+            try:
+                rec = self.get_claim(short)
+            except Refused:
+                failures.append(f"tag c:{short} names no claim")
+                continue
+            if rec["superseded_by"]:
+                failures.append(f"claim {short} is superseded")
+        return failures
 
     def _completion_statement(self, version: int) -> str:
         """When the review rounds ran out: the last permitted round's criticisms, which no
@@ -1856,7 +1963,8 @@ class Register:
         have = self._recorded_reviews(version)
         parts = ["# Completion statement", "",
                  (f"Review rounds stopped by limit (stopped_by_limit): {limit} of {limit} "
-                  f"rounds (max_review_rounds in run.json, a resource limit, not a quality "
+                  f"rounds (max_review_rounds in run.json plus recorded operator grants, "
+                  f"a resource limit, not a quality "
                   f"verdict). Released: version {version}, the last round."), "",
                  "## Material points the last round raised, unresolved", ""]
         material = [(roles.short(role), pt["point"]) for role in roles.FINAL_REVIEWERS
@@ -1880,15 +1988,25 @@ class Register:
         data = self._read(f"draft/answer.v{version}.md")
         with self._exclusive():
             done = self.submitted_versions()
-            self._freeze_criteria(caller, "first review asked for")
+            self._refuse_after_release()
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise Refused("Refused: the draft is not UTF-8 text.") from exc
+            failures = self.draft_preflight(text)
+            if failures:
+                lines = "\n".join(f"{i}. {f}" for i, f in enumerate(failures, start=1))
+                raise Refused(f"Refused: submit_draft: {len(failures)} preflight conditions:\n"
+                              f"{lines}\nNo review round or check was requested.")
             if done and version <= max(done):
                 raise Refused(f"Refused: version {version} is not after version {max(done)}.")
             limit = self.max_review_rounds()
             if len(done) >= limit:
                 raise Refused(f"Refused: the review-round limit is reached ({limit} rounds, "
-                              f"max_review_rounds in run.json, a resource limit). finish_run "
-                              f"releases a reviewed version, listing the last round's "
-                              f"criticisms.")
+                              f"the configured allowance plus recorded operator grants, "
+                              f"a resource limit). A release still requires every existing "
+                              f"condition on the final reviewed version.")
+            self._freeze_criteria(caller, "first review asked for")
             previous = self._previous_round(version, max(done)) if done else None
             try:
                 safeio.write_bytes(self.run_dir, frozen_draft(version), data)
@@ -2140,20 +2258,12 @@ class Register:
                                         f"({_concerns(pt)}): {pt['point'][:300]}")
         if text is None:
             text = safeio.read_text(self.run_dir, frozen_draft(version))
-        for a in self.assumptions():
-            if a["assumption"] not in text:
-                failures.append(f"the deliverable does not list the assumption taken for "
-                                f"branch {a['branch_id']}")
-        for line, raw in tags.malformed_tags(text):
-            failures.append(f"deliverable line {line}: malformed tag {raw!r}")
-        for seg in tags.untagged_number_segments(text):
-            failures.append(f"deliverable line {seg.line}: untagged number in {seg.text[:60]!r}")
+        failures.extend(self.draft_preflight(text))
         states_now = checks_api.states(self.run_dir, records=self._ck_records)
         for short in dict.fromkeys(tags.claim_tags(text)):
             try:
                 rec = self.get_claim(short)
             except Refused:
-                failures.append(f"tag c:{short} names no claim")
                 continue
             sf = self._live_facts(claim_entity(rec["claim_id"]), "second_family")
             if sf and sf[-1]["value"].get("disagrees"):
@@ -2163,8 +2273,6 @@ class Register:
                     # No request at all (a write cut off) is as unfinished as a running one.
                     failures.append(f"claim {short}: Claude's and the second family's "
                                     f"verdicts disagree; the third look has not landed")
-            if rec["superseded_by"]:
-                failures.append(f"claim {short} is superseded")
             verdict = (rec["verdict"] or {}).get("verdict")
             if verdict not in RELEASABLE:
                 failures.append(f"claim {short} has verdict {verdict or 'none'}")
@@ -2251,6 +2359,8 @@ class Register:
                 "open_material_points": self.open_material_points(version),
                 "review_rounds": {"used": len(self.submitted_versions()),
                                   "limit": self.max_review_rounds(),
+                                  "configured_limit": self.configured_review_rounds(),
+                                  "operator_grants": self._run_facts("review_round_granted"),
                                   "note": "a resource limit, never a quality verdict"}}
 
     def frame_failures(self) -> list[str]:

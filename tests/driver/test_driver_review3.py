@@ -104,7 +104,7 @@ def test_usage_limit_stops_launching_and_resume_reruns_the_checks(
     assert len(claim_launches) < 5  # it stopped launching once the limit was seen
     # After the reset, resume relaunches the lead and every check that never did its job.
     fake.configure({"lead": {"sleep_s": 0.3}})
-    resume(cfg, run, checks_api, limits)
+    resume(cfg, run, checks_api, limits, reason="Resume the synthetic test.")
     states = checks_api.states(run).values()
     assert all(s.status == "ended" and s.outcome == "completed" for s in states), [
         (s.request.prompt, s.status, s.outcome) for s in states]
@@ -137,7 +137,7 @@ def test_resume_relaunches_within_the_concurrency_limit(
     assert sum(s.outcome == "failed" for s in checks_api.states(run).values()) == 6
     before = len(fake.calls())
     fake.configure({"lead": {"sleep_s": 1.0}, "claim-checker": {"sleep_s": 0.3}})
-    resume(cfg, run, checks_api, limits)
+    resume(cfg, run, checks_api, limits, reason="Resume the synthetic test.")
     checks = [c for c in fake.calls()[before:] if c["role"] != "lead"]
     spans = [(c["start"], c["end"]) for c in checks]
     most = max(sum(1 for a, b in spans if a <= t < b) for t, _ in spans)
@@ -159,7 +159,7 @@ def test_resume_skips_a_round_a_later_round_replaced(
     checks_api.mark_ended(run, old.request_id, 1, "failed")
     new = checks_api.request_check(run, "claim-checker", prompt, "file_claim", round_no=2)
     fake.configure({"lead": {"sleep_s": 0.5}})
-    resume(cfg, run, checks_api, limits)
+    resume(cfg, run, checks_api, limits, reason="Resume the synthetic test.")
     st = checks_api.states(run)
     assert st[old.request_id].outcome == "failed"
     assert st[new.request_id].outcome == "completed"

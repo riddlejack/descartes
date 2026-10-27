@@ -48,6 +48,11 @@ def main(argv: list[str] | None = None) -> int:
                               "frame critique exist (stop_after = frame)")
     p_resume = sub.add_parser("resume", help="resume a stopped run")
     p_resume.add_argument("run_dir", type=Path)
+    p_resume.add_argument("--reason", required=True, help="operator reason, recorded verbatim")
+    p_resume.add_argument("--grant-review-round-from", type=int, default=None,
+                          help="grant one extra round, conditional on this current limit")
+    p_resume.add_argument("--grant-id", default=None,
+                          help="stable operator grant id; retries never grant twice")
     p_status = sub.add_parser("status", help="print a run's status")
     p_status.add_argument("run_dir", type=Path)
     p_attach = sub.add_parser("attach", help="hand the running lead a new file")
@@ -71,7 +76,8 @@ def main(argv: list[str] | None = None) -> int:
             print(run_dir, flush=True)
             return run_to_end(cfg, run_dir, resume_first=False)
         if args.cmd == "resume":
-            return run_to_end(cfg, args.run_dir, resume_first=True)
+            return run_to_end(cfg, args.run_dir, resume_first=True, operator_reason=args.reason,
+                              grant_from=args.grant_review_round_from, grant_id=args.grant_id)
         st = show_status(cfg, args.run_dir)
         print(json.dumps(st, indent=1))
         return 0

@@ -344,10 +344,10 @@ def test_finish_run_refuses_not_supported_and_untagged(reg: Register) -> None:
     with pytest.raises(Refused, match="has verdict not_supported"):
         reg.finish_run(LEAD, 1)
     (reg.run_dir / "draft/answer.v2.md").write_text("Sales were 40 units.\n")
-    reg.submit_draft(LEAD, 2)
-    frames_and_reviews(reg, 2)
     with pytest.raises(Refused, match="untagged number"):
-        reg.finish_run(LEAD, 2)
+        reg.submit_draft(LEAD, 2)
+    assert reg.submitted_versions() == [1]
+    assert "untagged number" in " ".join(reg.finish_failures(1, "Sales were 40 units."))
 
 
 def test_finish_run_lists_every_missing_producer(reg: Register) -> None:
@@ -465,13 +465,13 @@ def test_waiting_user_branch_proceeds_on_assumption(reg: Register) -> None:
     assert reg.tree()[0]["status"] == "gap_accepted"
     (reg.run_dir / "draft").mkdir()
     (reg.run_dir / "draft/answer.v1.md").write_text("# Answer\n\nThe answer holds.\n")
-    reg.submit_draft(LEAD, 1)
-    assert "does not list the assumption taken for branch b1" in " ".join(reg.finish_failures(1))
-    (reg.run_dir / "draft/answer.v2.md").write_text(
+    with pytest.raises(Refused, match="does not list the assumption taken for branch b1"):
+        reg.submit_draft(LEAD, 1)
+    assert reg.submitted_versions() == []
+    (reg.run_dir / "draft/answer.v1.md").write_text(
         "# Answer\n\nThe answer holds. We assume Europe only.\n")
-    finish_reviews(reg, 1)
-    reg.submit_draft(LEAD, 2)
-    assert "assumption" not in " ".join(reg.finish_failures(2))
+    reg.submit_draft(LEAD, 1)
+    assert "assumption" not in " ".join(reg.finish_failures(1))
 
 
 def test_user_held_needs_a_recorded_assumption(reg: Register) -> None:

@@ -154,8 +154,11 @@ def decide(hook: dict[str, Any], run_dir: Path, *, clock: Callable[[], float] = 
         return StopDecision(False, "", {"why": "frame-only run"})
     from stemma.register.store import Register
 
-    if Register.read_only(run_dir).release_state() == "released":
+    reg = Register.read_only(run_dir)
+    if reg.release_state() == "released":
         return StopDecision(False, "", {"why": "released"})
+    if reg.review_exhaustion() is not None:
+        return StopDecision(False, "", {"why": "review_rounds_exhausted"})
     from stemma.driver.leadtime import lead_time_left
 
     limit = float((run.get("limits") or {}).get("lead_max_s", 24 * 3600.0))
@@ -181,6 +184,8 @@ def decide(hook: dict[str, Any], run_dir: Path, *, clock: Callable[[], float] = 
         flight = in_flight(run_dir)
     if _usage_stopped(run_dir):  # a stop that arrived during the last sleep (#3)
         return StopDecision(False, "", {"why": "a usage stop: the supervisor recovers"})
+    if reg.review_exhaustion() is not None:
+        return StopDecision(False, "", {"why": "review_rounds_exhausted"})
     if clock() >= limit_at:
         return StopDecision(False, "", {"why": "the lead's time limit has passed"})
     after = progress_signature(run_dir)

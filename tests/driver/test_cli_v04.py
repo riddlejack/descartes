@@ -88,7 +88,7 @@ def test_existing_commands_still_parse(monkeypatch: pytest.MonkeyPatch, tmp_path
         calls.append(("create", (cfg, task, stop_after)))
         return tmp_path / "run"
 
-    def run_to_end(cfg: Any, run_dir: Path, resume_first: bool) -> int:
+    def run_to_end(cfg: Any, run_dir: Path, resume_first: bool, **kwargs: Any) -> int:
         calls.append(("run", (cfg, run_dir, resume_first)))
         return 0
 
@@ -99,7 +99,7 @@ def test_existing_commands_still_parse(monkeypatch: pytest.MonkeyPatch, tmp_path
 
     assert main(["start", "--frame-only", "t.json"]) == 0
     assert main(["--plugin-src", "p", "start", "t.json"]) == 0
-    assert main(["resume", "r"]) == 0
+    assert main(["resume", "r", "--reason", "Continue the synthetic test."]) == 0
     assert main(["status", "r"]) == 0
     assert main(["attach", "20261026-070412-2b3c98", "f.pdf"]) == 0
     assert calls == [

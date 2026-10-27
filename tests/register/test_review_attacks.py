@@ -43,8 +43,13 @@ def verified(reg: Register, cid: str) -> None:
                                  "[[c: abcdef123456]]", "[[c:]]", "[[c:abcdef1234567]]",
                                  "[[C:abcdef123456]]"])
 def test_malformed_c_tag_refused_at_release(reg: Register, tag: str) -> None:
-    ready_run(reg, f"# Answer\n\nRevenue was 9.9bn {tag}.\n")
-    fails = " ".join(reg.finish_failures(1))
+    ready_run(reg)
+    bad = f"# Answer\n\nRevenue was 9.9bn {tag}.\n"
+    (reg.run_dir / "draft/answer.v2.md").write_text(bad)
+    with pytest.raises(Refused, match="malformed tag"):
+        reg.submit_draft(LEAD, 2)
+    assert reg.submitted_versions() == [1]
+    fails = " ".join(reg.finish_failures(1, bad))
     assert "malformed tag" in fails and "untagged number" in fails
 
 

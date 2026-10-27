@@ -21,7 +21,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from types import FrameType
@@ -42,6 +42,8 @@ from stemma.driver.launch import LaunchSpec, Session, expectation, launch
 from stemma.driver.runfolder import load_run
 from stemma.driver.settings import ToolSets, tools_for_role, without_live_web
 from stemma.register import checks_api, roles, safeio
+from stemma.register.filing import Refused
+from stemma.register.store import Register
 
 # Checking roles the driver may start (invariant: section 2), short names.
 CHECK_ROLES: Final = frozenset(roles.short(r) for r in roles.CHECKING_ROLES)
@@ -158,6 +160,7 @@ OUTCOME_CODES: Final = {
     "usage_limited": 7,  # the account's usage limit stopped sessions; resume continues
     "frame_complete": 8,  # a frame-only run: the frame, tree and critique response exist
     "lead_cancelled": 9,  # someone stopped the lead's own process on purpose
+    "review_rounds_exhausted": 10,  # all permitted reviews settled; release still fails
     "driver_stopped": 130,  # SIGTERM or SIGINT reached the driver
 }
 
@@ -434,7 +437,7 @@ class Driver:
                     if o.request.role == req.role and o.request.prompt == req.prompt),
                    default=req.round)
 
-    def _due_again(self, st: CheckStateLike) -> None:
+    def _due_again(self, st: CheckStateLike, *, settle: bool = False) -> None:
         """Queue a check to launch again (same request and round, a new session), unless
         a later round replaced it or it used up its attempts."""
         rid, req = st.request.request_id, st.request
@@ -449,7 +452,7 @@ class Driver:
             return
         events.emit(self.run_dir, "check_not_relaunched", request_id=rid, reason=reason,
                     previous_outcome=st.outcome)
-        if st.status == "running":
+        if st.status == "running" or settle:
             self.api.mark_ended(self.run_dir, rid, -1, outcome)
 
     def relaunch_unended_checks(self) -> None:
@@ -519,6 +522,7 @@ class Driver:
         if s.rate_limited is not None:
             return "rate_limited"
         if s.killed_reason in ("canary_failed", "stopped_by_limit", "driver_stopped",
+                               "review_rounds_exhausted",
                                "frame_complete"):
             return s.killed_reason
         if s.init is None or s.killed_reason == "init_timeout":
@@ -876,6 +880,7 @@ class Driver:
         if lead.get("running") or lead.get("outcome") not in ("completed", "failed"):
             return
         if (self.stop_after == "frame" or self.state.get("usage_limited")
+                or self.state.get("review_rounds_exhausted")
                 or self.state.get("release_blocked") or self.released(self.run_dir)):
             return
         n = int(self.state.get("lead_resumes", 0))
@@ -1050,6 +1055,8 @@ class Driver:
             with self._stop_lock:
                 self.state["usage_limited"] = True
                 self._save_state()
+        if self._stop_for_review_exhaustion():
+            return False
         self._resume_lead_if_ended()
         self._lead_time_notices()
         if self.stop_after == "frame" and not self.state.get("frame_complete") \
@@ -1094,6 +1101,44 @@ class Driver:
                 or bool(self._sf_futures))
         self.write_status("running" if busy else "stopped")
         return busy
+
+    def _stop_for_review_exhaustion(self) -> bool:
+        """Do not restart an author when no reviewed candidate can release.
+
+        Let every checker and queued retry settle first. The register, Stop hook
+        and driver all use the same predicate; the driver owns the terminal event.
+        """
+        if (self.stop_after == "frame" or self.state.get("usage_limited")
+                or self._live_checks() or self.relaunch_due or self._sf_futures
+                or self.released(self.run_dir)):
+            return False
+        if not safeio.is_file(self.run_dir, "register/log.jsonl"):
+            return False  # no register has been opened, so no draft was submitted
+        reg = Register.read_only(self.run_dir)
+        if not reg.review_rounds_exhausted():
+            return False
+        # Drain or start any remaining second-family work before declaring that
+        # checking has settled; it may still request a third look at a claim.
+        self._second_family_step()
+        if self._sf_futures:
+            return False
+        for st in self.api.states(self.run_dir).values():
+            if st.status == "ended" and st.outcome in RETRYABLE_OUTCOMES:
+                self._due_again(st, settle=True)
+        if self.relaunch_due:
+            return False
+        exhausted = reg.review_exhaustion()
+        if exhausted is None:
+            return False
+        record = asdict(exhausted)
+        self.state["review_rounds_exhausted"] = record
+        self._save_state()
+        events.emit(self.run_dir, "review_rounds_exhausted", **record)
+        for live in list(self.live.values()):
+            live.session.stop("review_rounds_exhausted", self.limits.stop_grace_s)
+        for name, live in list(self.live.items()):
+            self._end(name, live)
+        return True
 
     # ----- the second family (N1) -----------------------------------------------------
     def _sf_unavailable(self, reason: str) -> None:
@@ -1247,6 +1292,8 @@ class Driver:
             return "revocation_failed"  # whatever the register says, nothing stands
         if self.released(self.run_dir):
             return "released"
+        if self.state.get("review_rounds_exhausted"):
+            return "review_rounds_exhausted"
         try:
             withdrawn = register_release_state(self.run_dir) == "withdrawn"
         except Exception:  # noqa: BLE001 - unreadable register: not released either way
@@ -1311,17 +1358,33 @@ def _start_locked(cfg: DriverConfig, run_dir: Path, api: ChecksApi | None,
 
 def resume(cfg: DriverConfig, run_dir: Path, api: ChecksApi | None = None,
            limits: Limits | None = None, *, released: Released | None = None,
-           revoke: Revoke | None = None) -> int:
+           revoke: Revoke | None = None, reason: str,
+           grant_from: int | None = None, grant_id: str | None = None) -> int:
     with run_lock(run_dir):
-        return _resume_locked(cfg, run_dir, api, limits, released=released, revoke=revoke)
+        return _resume_locked(cfg, run_dir, api, limits, released=released, revoke=revoke,
+                              operator_reason=reason, grant_from=grant_from, grant_id=grant_id)
 
 
 def _resume_locked(cfg: DriverConfig, run_dir: Path, api: ChecksApi | None,
                    limits: Limits | None, *, released: Released | None = None,
-                   revoke: Revoke | None = None, lead_budget_s: float | None = None) -> int:
+                   revoke: Revoke | None = None, lead_budget_s: float | None = None,
+                   operator_reason: str | None = None, grant_from: int | None = None,
+                   grant_id: str | None = None) -> int:
     """`resume` for a caller already holding the run lock. `lead_budget_s` (an automatic
     resume) caps the resumed lead at the wall time it has left."""
+    manual = lead_budget_s is None
+    if manual and (not isinstance(operator_reason, str) or not operator_reason.strip()):
+        raise RunStateError("manual resume requires an operator reason")
+    if (grant_from is None) != (grant_id is None):
+        raise RunStateError("an operator review grant requires its previous limit and grant id")
+    if not manual and (grant_from is not None or operator_reason is not None):
+        raise RunStateError("an automatic resume cannot grant review capacity")
     d = Driver(cfg, run_dir, api, limits, released=released, revoke=revoke)
+    if not d.state["lead"].get("session_id"):
+        raise RunStateError("the lead was never launched; nothing to resume")
+    reg = Register(run_dir)
+    if reg.release_state() is not None or d.state.get("release_blocked"):
+        raise RunStateError("a released, withdrawn or blocked run cannot be resumed")
     d.lead_budget_s = lead_budget_s
     # A lead session that never recorded its end (the driver died) is closed at its last
     # recorded activity before anything new is logged: the downtime is not lead time
@@ -1330,9 +1393,30 @@ def _resume_locked(cfg: DriverConfig, run_dir: Path, api: ChecksApi | None,
     if orphan is not None:
         d.lead_budget_s = (None if lead_budget_s is None else
                            d.limits.lead_max_s - leadtime.lead_time_used(d.run_dir))
+    remaining = d._lead_time_left()
+    if remaining <= 0:
+        raise RunStateError("the lead's recorded time allowance is exhausted; nothing launched")
+    if grant_from is not None and grant_id is not None:
+        assert operator_reason is not None  # invariant: grants are manual
+        try:
+            reg.grant_review_round(reason=operator_reason, expected_limit=grant_from,
+                                   grant_id=grant_id)
+        except Refused as exc:
+            raise RunStateError(str(exc)) from exc
+        from stemma.hooks.arrivals import queue_notice
+
+        queue_notice(run_dir, f"operator_review_grant_{grant_id}",
+                     "The operator granted one more review round. Submission now runs "
+                     "the release checks first; fix anything it lists, then submit your "
+                     "final version.")
+    if reg.review_exhaustion() is not None:
+        raise RunStateError("review_rounds_exhausted: no reviewed draft can release")
+    d.state.pop("review_rounds_exhausted", None)
     events.emit(d.run_dir, "run_resumed", run_id=d.run_id,
                 lead_session_id=d.state["lead"].get("session_id"),
                 automatic=lead_budget_s is not None,
+                **({"operator_reason": operator_reason,
+                    "lead_remaining_s": round(remaining, 3)} if manual else {}),
                 **({"lead_budget_s": round(lead_budget_s, 3)}
                    if lead_budget_s is not None else {}))
     d.recover_usage()
@@ -1427,7 +1511,9 @@ def _resume_refusal(run_dir: Path, lim: Limits) -> tuple[str, str, dict[str, Any
 
 def run_to_end(cfg: DriverConfig, run_dir: Path, *, resume_first: bool,
                api: ChecksApi | None = None, limits: Limits | None = None,
-               sleep: Sleep = time.sleep, clock: Callable[[], float] = time.time) -> int:
+               sleep: Sleep = time.sleep, clock: Callable[[], float] = time.time,
+               operator_reason: str | None = None, grant_from: int | None = None,
+               grant_id: str | None = None) -> int:
     """Start (or resume) a run, and when the account's usage limit stops it, wait until
     the limit resets and resume it, at most `max_usage_resumes` times (resource limits in
     run.json). Each wait is a `usage_wait` event; the count of those events is the count
@@ -1442,7 +1528,8 @@ def run_to_end(cfg: DriverConfig, run_dir: Path, *, resume_first: bool,
     rd = Path(os.path.realpath(run_dir))
     with run_lock(rd):
         lim = limits or Limits.from_json(load_run(rd)["limits"])
-        code = (_resume_locked(cfg, rd, api, limits) if resume_first
+        code = (_resume_locked(cfg, rd, api, limits, operator_reason=operator_reason,
+                               grant_from=grant_from, grant_id=grant_id) if resume_first
                 else _start_locked(cfg, rd, api, limits))
         while code == OUTCOME_CODES["usage_limited"]:
             waits = [e for e in events.read(rd) if e.get("event") == "usage_wait"]

@@ -43,7 +43,7 @@ def test_a_torn_tail_and_bad_records_are_skipped_and_counted(
     assert d.usage_summary["skipped_lines"] == 2
     assert kinds(run, "usage_records_skipped")[-1]["lines"] == 2
     fake.configure({"lead": {"sleep_s": 0.2}})
-    resume(cfg, run, checks_api, limits)  # resume is not blocked either
+    resume(cfg, run, checks_api, limits, reason="Resume the synthetic test.")  # resume is not blocked either
     assert (run / "usage.jsonl.torn").read_text().startswith('{"kind": "session"')
     assert len(usage.read_records(run)) > len(good.splitlines())
 
@@ -77,7 +77,7 @@ def test_a_held_usage_lock_defers_the_write_and_never_blocks(
     assert not usage.read_records(run)
     # 3. Once the lock is free, a resume recovers what was never written.
     fake.configure({"lead": {"sleep_s": 0.2}})
-    resume(cfg, run, checks_api, limits)
+    resume(cfg, run, checks_api, limits, reason="Resume the synthetic test.")
     recs = usage.read_records(run)
     recovered = {r["session"] for r in recs if r.get("recovered")}
     assert "lead" in recovered and any(n.startswith("check-") for n in recovered)
@@ -92,7 +92,7 @@ def test_resume_recovers_usage_the_driver_never_wrote(
     lead_tokens = next(r["tokens"] for r in before if r["role"] == "lead")
     (run / "usage.jsonl").write_text("")  # as if the driver died before writing
     fake.configure({"lead": {"sleep_s": 0.2}})
-    resume(cfg, run, checks_api, limits)
+    resume(cfg, run, checks_api, limits, reason="Resume the synthetic test.")
     recs = usage.read_records(run)
     rec_lead = next(r for r in recs if r["session"] == "lead")
     assert rec_lead["recovered"] and rec_lead["tokens"] == lead_tokens

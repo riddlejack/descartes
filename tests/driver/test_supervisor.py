@@ -123,10 +123,10 @@ def test_no_other_driver_runs_the_run_while_a_supervisor_waits(
     refused: list[str] = []
 
     def sleep(_s: float) -> None:
-        for attempt in (lambda: resume(cfg, run, checks_api, lim),
+        for attempt in (lambda: resume(cfg, run, checks_api, lim, reason="Resume the synthetic test."),
                         lambda: start(cfg, run, checks_api, lim),
                         lambda: run_to_end(cfg, run, resume_first=True, api=checks_api,
-                                           limits=lim)):
+                                           limits=lim, operator_reason="Resume the synthetic test.")):
             with pytest.raises(DriverBusy) as exc:
                 attempt()
             refused.append(str(exc.value))

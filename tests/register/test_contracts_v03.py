@@ -135,7 +135,7 @@ def test_after_the_last_round_submit_refuses_and_release_lists_its_criticisms(
     cid = ready_run(reg)
     reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
     submit(reg, 2, cid)
-    (reg.run_dir / "draft/answer.v3.md").write_text("# v3\n")
+    (reg.run_dir / "draft/answer.v3.md").write_text("# Final draft\n")
     with pytest.raises(Refused, match="review-round limit is reached .2 rounds"):
         reg.submit_draft(LEAD, 3)
     out = reg.finish_run(LEAD, 2)

@@ -129,6 +129,6 @@ def test_a_run_records_every_session_and_subagent(cfg: DriverConfig, tmp: Path, 
 
     # A resume appends to the lead's transcript; the new record counts only the new launch.
     fake.configure({"lead": {"sleep_s": 0.3, "usage": u(1, 1, 1, 1)}})
-    resume(cfg, run, checks_api, limits)
+    resume(cfg, run, checks_api, limits, reason="Resume the synthetic test.")
     leads = [r for r in usage.read_records(run) if r["role"] == "lead"]
     assert [x["tokens"] for x in leads] == [u(10, 200, 3000, 9000), u(1, 1, 1, 1)]

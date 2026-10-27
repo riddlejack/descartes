@@ -92,7 +92,7 @@ def test_release_needs_criteria(reg: Register) -> None:
 def test_a_review_point_names_an_existing_node_or_criterion(reg: Register,
                                                             point: dict[str, Any]) -> None:
     ready_run(reg)
-    (reg.run_dir / "draft/answer.v2.md").write_text("# v2\n")
+    (reg.run_dir / "draft/answer.v2.md").write_text("# Revised draft\n")
     reg.submit_draft(LEAD, 2)
     who = launched(reg, "deciders-eye-reviewer", "draft:2", "s-p")
     with pytest.raises(Refused, match="point 1"):
@@ -441,7 +441,7 @@ def test_a_running_checkers_assignment_never_changes(reg: Register) -> None:
 def test_a_new_round_shows_the_previous_points_and_needs_a_response(reg: Register) -> None:
     cid = ready_run(reg)  # v1 reviewed, no points
     reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
-    (reg.run_dir / "draft/answer.v2.md").write_text("# v2\n")
+    (reg.run_dir / "draft/answer.v2.md").write_text("# Revised draft\n")
     reg.submit_draft(LEAD, 2)  # v1's three reviews are recorded, with no points
     shown = (reg.run_dir / "register/drafts/previous.v2.md").read_text()
     assert "- none" in shown and "(none written)" in shown
@@ -449,7 +449,7 @@ def test_a_new_round_shows_the_previous_points_and_needs_a_response(reg: Registe
         pts = [mat("the count mixes ports and stations", criterion="C2", node="n1"),
                {"point": "a typo", "material": False, "node": "n1"}] if i == 0 else []
         reg.record_review(launched(reg, role, "draft:2", f"s-v2-{i}"), 2, "r", pts)
-    (reg.run_dir / "draft/answer.v3.md").write_text("# v3\n")
+    (reg.run_dir / "draft/answer.v3.md").write_text("# Final draft\n")
     with pytest.raises(Refused, match="answers them before version 3"):
         reg.submit_draft(LEAD, 3)
     (reg.run_dir / "draft/response.v3.md").write_text("v2.de.2: fixed the typo.")
@@ -629,9 +629,9 @@ def test_a_later_version_waits_for_the_previous_round(reg: Register) -> None:
     from test_store import finish_reviews
 
     ready_run(reg)  # v1's reviews recorded
-    (reg.run_dir / "draft/answer.v2.md").write_text("# v2\n")
+    (reg.run_dir / "draft/answer.v2.md").write_text("# Revised draft\n")
     reg.submit_draft(LEAD, 2)
-    (reg.run_dir / "draft/answer.v3.md").write_text("# v3\n")
+    (reg.run_dir / "draft/answer.v3.md").write_text("# Final draft\n")
     with pytest.raises(Refused, match="reviews of version 2 have not finished"):
         reg.submit_draft(LEAD, 3)
     # A review whose session the usage limit ended is rerun on resume: not finished.
@@ -844,7 +844,7 @@ def test_a_review_judges_the_criteria_it_was_asked_to(reg: Register) -> None:
     cid = ready_run(reg)
     reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
     (reg.run_dir / "draft/answer.v2.md").write_text(
-        f"# v2\n\nRevenue was 1.2bn [[c:{cid[:12]}]].\n")
+        f"# Revised draft\n\nRevenue was 1.2bn [[c:{cid[:12]}]].\n")
     reg.submit_draft(LEAD, 2)  # reviews asked against criteria A
     reg.revise_criteria(LEAD, C + "- C3: Names its sources.\n", "the critique asked")  # B
     for i, role in enumerate(("deciders-eye-reviewer", "evidence-auditor", "mechanical-reader")):

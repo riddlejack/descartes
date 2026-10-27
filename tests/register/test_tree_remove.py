@@ -177,7 +177,7 @@ def test_a_node_a_revoked_reviewers_point_names_is_not_removed(reg: Register) ->
     # its review is still recorded and still names the node.
     ready_run(reg)
     reg.tree_upsert(LEAD, node("q9"))
-    (reg.run_dir / "draft/answer.v2.md").write_text("# v2\n")
+    (reg.run_dir / "draft/answer.v2.md").write_text("# Revised draft\n")
     reg.submit_draft(LEAD, 2)
     who = launched(reg, "deciders-eye-reviewer", "draft:2", "s-p")
     reg.record_review(who, 2, "text", [{"point": "p", "material": True, "node": "q9"}])
@@ -188,7 +188,7 @@ def test_a_node_a_revoked_reviewers_point_names_is_not_removed(reg: Register) ->
 def test_a_final_review_point_names_the_node(reg: Register) -> None:
     ready_run(reg)
     reg.tree_upsert(LEAD, node("q9"))
-    (reg.run_dir / "draft/answer.v2.md").write_text("# v2\n")
+    (reg.run_dir / "draft/answer.v2.md").write_text("# Revised draft\n")
     reg.submit_draft(LEAD, 2)
     who = launched(reg, "deciders-eye-reviewer", "draft:2", "s-p")
     reg.record_review(who, 2, "text", [{"point": "p", "material": True, "node": "q9"}])
@@ -283,7 +283,7 @@ def test_a_branch_review_point_on_a_node_removed_meanwhile_is_refused(reg: Regis
 def test_a_final_review_point_on_a_node_removed_meanwhile_is_refused(reg: Register) -> None:
     ready_run(reg)
     reg.tree_upsert(LEAD, node("q9"))
-    (reg.run_dir / "draft/answer.v2.md").write_text("# v2\n")
+    (reg.run_dir / "draft/answer.v2.md").write_text("# Revised draft\n")
     reg.submit_draft(LEAD, 2)
     who = launched(reg, "deciders-eye-reviewer", "draft:2", "s-p")
     _removal_lands_first(reg, Register(reg.run_dir, evidence=FakeEvidence()), "q9")

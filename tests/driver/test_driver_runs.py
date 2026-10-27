@@ -8,6 +8,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -168,7 +169,9 @@ def test_skill_not_copied_cannot_load(cfg: DriverConfig, tmp: Path, fake: Fake,
 
 
 def test_concurrency_limit(cfg: DriverConfig, tmp: Path, fake: Fake, limits: Limits) -> None:
-    fake.configure({"claim-checker": {"sleep_s": 0.4}, "lead": {"sleep_s": 0.2}})
+    fake.configure({"claim-checker": {"sleep_s": 0.4,
+                                       "write_files": {"checker-started": "started"}},
+                    "lead": {"wait_for_file": "checker-started", "sleep_s": 0.2}})
     run = new_run(cfg, tmp, limits)
     for n in range(5):
         checks_api.request_check(run, "claim-checker", f"claim:c{n}", "file_claim")
@@ -242,19 +245,32 @@ def test_resume_relaunches_lead_and_unended_checks(cfg: DriverConfig, tmp: Path,
     fake.configure({"lead": {"sleep_s": 30}, "blind-framer": {"sleep_s": 30},
                     "lead@resume": {"sleep_s": 0.1}})
     run = new_run(cfg, tmp, limits)
-    timer = threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM))
-    timer.start()
+    cancel = threading.Event()
+
+    def stop_after_launch() -> None:
+        deadline = time.monotonic() + 10  # resource limit: test synchronization wait
+        rid = checks_api.request_id_for("blind-framer", "frame:own")
+        while not cancel.wait(0.01):
+            st = checks_api.states(run).get(rid)
+            launched = st is not None and st.status == "running" and calls_for(fake, "blind-framer")
+            if launched or time.monotonic() >= deadline:
+                os.kill(os.getpid(), signal.SIGTERM)
+                return
+
+    stopper = threading.Thread(target=stop_after_launch)
+    stopper.start()
     try:
         assert start(cfg, run, checks_api, limits, released=released) == 130
     finally:
-        timer.cancel()
+        cancel.set()
+        stopper.join(timeout=2)
     rid = checks_api.request_id_for("blind-framer", "frame:own")
     assert checks_api.states(run)[rid].status == "running"  # launched, never ended
     first_sid = calls_for(fake, "lead")[0]["session_id"]
     assert kinds(run, "driver_stopped")
 
     fake.configure({"lead@resume": {"sleep_s": 0.1}, "blind-framer": {}})
-    assert resume(cfg, run, checks_api, limits, released=released) == 0
+    assert resume(cfg, run, checks_api, limits, released=released, reason="Resume the synthetic test.") == 0
     lead = calls_for(fake, "lead")
     assert len(lead) == 2
     assert f"--resume={first_sid}" in lead[1]["argv"]
@@ -264,7 +280,8 @@ def test_resume_relaunches_lead_and_unended_checks(cfg: DriverConfig, tmp: Path,
     st = checks_api.states(run)[rid]
     assert st.status == "ended" and st.outcome == "completed"
     assert st.session_id == framers[1]["session_id"]
-    assert kinds(run, "check_relaunch")[0]["request_id"] == rid
+    # The idea generator may also have been in flight at the interruption.
+    assert rid in {e["request_id"] for e in kinds(run, "check_relaunch")}
 
 
 def test_status_and_cli(cfg: DriverConfig, tmp: Path, fake: Fake, limits: Limits,

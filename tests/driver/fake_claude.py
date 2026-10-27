@@ -146,6 +146,12 @@ def main() -> int:
     if cfg.get("compact"):
         out({"type": "system", "subtype": "compact_boundary",
              "compact_metadata": {"trigger": "auto", "pre_tokens": 1}})
+    if cfg.get("wait_for_file"):
+        deadline = time.monotonic() + 10  # resource limit: test synchronization wait
+        while not (Path(cwd) / cfg["wait_for_file"]).exists():
+            if time.monotonic() >= deadline:
+                raise RuntimeError("test synchronization timed out")
+            time.sleep(0.01)  # resource limit: polling interval
     time.sleep(float(cfg.get("sleep_s", 0)))
     if cfg.get("rate_limited"):  # the account's usage limit refused the turn
         out({"type": "rate_limit_event", "session_id": sid,

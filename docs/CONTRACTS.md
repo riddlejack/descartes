@@ -763,6 +763,23 @@ Each guard has a producer in the live path, or it would block every run.
 - **`gate_status(version)` reads the gate without releasing**: the full list of unmet
   conditions, one per line. The lead calls it after every review round. `finish_run`
   releases when nothing is unmet, so it is never used to probe.
+- **Submission preflight spends no review capacity.** Before freezing a draft or
+  scheduling any check, `submit_draft` lists every content prerequisite failure:
+  empty text, missing recorded assumptions, malformed or missing number tags, and
+  unknown or superseded claim references. A claim verdict is not a submission
+  prerequisite: submission requests those checks. Release repeats the content checks
+  and still requires the verdicts and independent reviews of the exact frozen text.
+- **Operator review grants are explicit resource deviations.** The host-only
+  `grant_review_round(reason, expected_limit, grant_id)` adds one round conditionally
+  and idempotently under the register lock. The authoritative event is a sealed
+  register fact, mirrored in `events.jsonl`; the frozen `run.json` is unchanged.
+  Agents have no grant tool. Release records show the configured allowance, effective
+  allowance and every grant. No grant waives a release condition.
+- **Review exhaustion ends honestly.** After the final permitted round, the driver
+  waits for outstanding checks and retries to settle. If the latest reviewed draft
+  still fails the release gate, it records `review_rounds_exhausted` with all unmet
+  conditions and stops the lead. The Stop hook allows that stop; the driver does not
+  restart it. A releasable draft remains with the lead for `finish_run`.
 - **Reviews carry structured points.** `record_review` takes the review text and a
   list of points, each `{point, material: true|false, node, criterion}` (v0.4: at least
   one of node and criterion set); the reviewer judges materiality, code only reads it.
@@ -778,11 +795,11 @@ Each guard has a producer in the live path, or it would block every run.
   - `framer/critique.md` and `framer/lead-response.md` exist;
   - the three reviews exist for the draft version being released, and none of them
     holds a material point, unless the review-round limit below has been reached;
-  - review rounds: `max_review_rounds` in `run.json` is a recorded resource limit
-    (default 3). After the last permitted round `submit_draft` refuses another, and the
-    release lists every criticism the last round raised that the draft did not
-    resolve, in the completion statement. Reaching the limit is `stopped_by_limit`,
-    never a quality verdict;
+  - review rounds: `max_review_rounds` in `run.json`, plus recorded operator grants,
+    is a resource limit (default 3). After the last permitted round `submit_draft`
+    refuses another. A releasable final version lists every unresolved criticism in
+    its completion statement, marked `stopped_by_limit`. An unreleasable final round
+    ends `review_rounds_exhausted`. Neither resource stop is a quality verdict;
   - every number segment in `deliverable/answer.md` is tagged, and every `c` tag names
     a claim that is not superseded and whose latest verdict is `holds`,
     `holds_with_correction` or `could_not_check`. A `could_not_check` figure is
@@ -863,10 +880,15 @@ Each guard has a producer in the live path, or it would block every run.
   the clean config's `projects/<cwd-slug>/`; a copied config folder is not signed
   in), waits, records artifact-landed events, keeps `status.json` and
   `status.html`, and resumes a stopped run, by itself after a usage stop (section 0).
+- Manual `resume` requires `--reason`, recorded verbatim in `run_resumed`. The
+  driver checks remaining lead time before granting capacity or launching; no time,
+  automatic restart or checking budget is reset. Optional
+  `--grant-review-round-from N --grant-id ID` records the conditional one-round grant
+  under the same supervisor lock. Repeating the same grant cannot add another round.
 - Outcomes and exit codes: `released` 0, `ended_without_release` 1, `canary_failed` 2,
   `stopped_by_limit` 3, `lead_failed` 4, `release_withdrawn` 5, `revocation_failed` 6,
   `usage_limited` 7 (resumes left used up), `frame_complete` 8, `lead_cancelled` 9,
-  `driver_stopped` 130.
+  `review_rounds_exhausted` 10 (unreleased), `driver_stopped` 130.
 - It runs the system under test only through the isolated runner configuration, and
   reads only transcripts of sessions it launched.
 

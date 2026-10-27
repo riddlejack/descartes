@@ -351,7 +351,7 @@ def test_automatic_resumes_are_bounded_and_counted_across_restarts(
     assert kinds(run, "usage_resumes_used_up")[0]["resumes"] == 2
     # A driver started again keeps to the same count.
     assert run_to_end(cfg, run, resume_first=True, api=checks_api, limits=lim,
-                      sleep=waited.append) == OUTCOME_CODES["usage_limited"]
+                      sleep=waited.append, operator_reason="Resume the synthetic test.") == OUTCOME_CODES["usage_limited"]
     assert waited == [5.0, 5.0]
 
 

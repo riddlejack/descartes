@@ -81,11 +81,11 @@ def build(run_dir: Path) -> dict[str, str]:
         (run_dir / "analysis" / f"unrelated_{i}.py").write_text("X = 1\n")
     (run_dir / "draft").mkdir()
     (run_dir / "draft" / "answer.v1.md").write_text(
-        "# Lowmarsh is not on track for 400 benches by 2030\n\n"
+        "# Lowmarsh is not on track for the target\n\n"
         f"There are 212 benches today [[c:{now[:12]}]]. At 40 a year [[c:{rate[:12]}]] "
         f"the town reaches about 372 by 2030 [[c:{proj[:12]}]].\n\n"
         "| Year | Benches |\n|---|---|\n"
-        f"| 2026 | 212 [[c:{now[:12]}]] |\n| 2030 | 372 [[c:{proj[:12]}]] |\n")
+        f"| Current | 212 [[c:{now[:12]}]] |\n| Target year | 372 [[c:{proj[:12]}]] |\n")
     reg.submit_draft(LEAD, 1)
     (run_dir / "tree.json").write_text(json.dumps({"nodes": [
         {"id": "Q", "parent": None, "kind": "question", "status": "answered",
