@@ -759,8 +759,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="the real session's wall-time limit in seconds (run 4: 9000)")
     ap.add_argument("--canary-only", action="store_true",
                     help="start, run the scope canary, and stop; the task is never sent")
-    ap.add_argument("--out", type=Path, required=True,
-                    help="folder the new run folder is created in (outside the repository)")
+    ap.add_argument("--out", type=Path, default=None,
+                    help="folder the new run folder is created in (outside the repository); "
+                         "required, with no default")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the prompt and the launch; create nothing")
     args = ap.parse_args(argv)
@@ -768,6 +769,8 @@ def main(argv: list[str] | None = None) -> int:
         given = [a for a in (args.task, args.launcher, args.question_file) if a is not None]
         if len(given) > 1:
             raise BareError("give one of --task, --launcher or --question-file")
+        if args.out is None:
+            ap.error("the following arguments are required: --out")
         t = (task_from_file(args.task) if args.task is not None else
              task_from_launcher(args.launcher) if args.launcher is not None else
              task(args.question_file))
