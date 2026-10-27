@@ -429,7 +429,9 @@ class _Sessions:
         if f"mcp__{bare.BROKER}__capture" in prompt:  # an as_of arm: the broker's control
             steps[-1] = (f"mcp__{bare.BROKER}__capture",
                          {"url": "https://example.com", "reason": "scope canary"},
-                         json.dumps({"kind": "archive", "status": "ok", "sha256": "ab" * 32})
+                         json.dumps({"kind": "archive", "status": "ok", "sha256": "ab" * 32,
+                                     "bytes_len": 900,
+                                     "archive": {"served_timestamp": "20260101000000"}})
                          if self.controls else json.dumps(
                              {"kind": "archive", "status": "archive_unavailable",
                               "sha256": None}), False)

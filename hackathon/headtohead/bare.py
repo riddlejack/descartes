@@ -494,7 +494,8 @@ def _messages(stream: str) -> list[dict[str, Any]]:
 def _blocks(stream: str, kind: str) -> list[dict[str, Any]]:
     out = []
     for msg in _messages(stream):
-        content = (msg.get("message") or {}).get("content")
+        message = msg.get("message")  # a string on some system lines (permission_denied)
+        content = message.get("content") if isinstance(message, dict) else None
         for block in content if isinstance(content, list) else []:
             if isinstance(block, dict) and block.get("type") == kind:
                 out.append(block)
@@ -551,7 +552,7 @@ def scope_problems(stream: str, marker: Path, token: str, control: Path,
             problems.append(f"{what} was not refused")
         elif expect == "reached" and error:
             problems.append(f"{what} failed, so a refused curl proves nothing")
-        elif expect == "archived" and (error or not _archived(text)):
+        elif expect == "archived" and (error or not _archived(text, as_of or "")):
             problems.append(f"{what} did not return an archived copy, so a refused curl "
                             "proves nothing")
         elif expect not in ("refused", "reached", "archived") and (
@@ -567,14 +568,22 @@ def scope_problems(stream: str, marker: Path, token: str, control: Path,
     return problems
 
 
-def _archived(text: str) -> bool:
-    """Whether a capture's receipt says it is an archived copy that was stored."""
+def _archived(text: str, as_of: str) -> bool:
+    """Whether a capture's receipt says the broker reached an archived copy dated before
+    `as_of` and stored its bytes. Exact facts, not the extraction's verdict: a short page
+    (example.com) is stored with status short_text, and that still proves the reach."""
     try:
         receipt = json.loads(text)
     except ValueError:
         return False
-    return (isinstance(receipt, dict) and receipt.get("kind") == "archive"
-            and receipt.get("status") == "ok" and bool(receipt.get("sha256")))
+    if not isinstance(receipt, dict) or receipt.get("kind") != "archive":
+        return False
+    archive = receipt.get("archive")
+    served = archive.get("served_timestamp") if isinstance(archive, dict) else None
+    cutoff = as_of.replace("-", "") + "000000"
+    return (bool(receipt.get("sha256")) and isinstance(receipt.get("bytes_len"), int)
+            and receipt["bytes_len"] > 0 and isinstance(served, str)
+            and len(served) == 14 and served.isdigit() and served < cutoff)
 
 
 def canary_finished(outcome: dict[str, Any], result: dict[str, Any] | None) -> list[str]:

@@ -175,3 +175,31 @@ def test_the_cli_takes_the_task_the_limit_and_canary_only(
     assert seen["t"]["question"] == TASK["question"] and seen["t"]["as_of"] == AS_OF
     assert "stopped before the task" in capsys.readouterr().out
     assert bare.main(["--task", "t.json", "--question-file", "q.json"]) == 2
+
+
+def test_a_permission_notice_with_a_text_message_does_not_break_the_scope_check() -> None:
+    """Seen live (run-4 dry run): the harness's `permission_denied` system line carries
+    `message` as a string, not an object."""
+    notice = {"type": "system", "subtype": "permission_denied",
+              "message": "Claude requested permissions to read from /x/marker.txt"}
+    stream = json.dumps(notice) + "\n"
+    problems = bare.scope_problems(stream, Path("/x/marker.txt"), "tok", Path("/f/c.txt"),
+                                   "ctl", AS_OF)
+    assert "the canary did not try the Read tool on the marker" in problems
+
+
+@pytest.mark.parametrize("receipt,ok", [
+    # Seen live (run-4 dry run): example.com's archived copy is short, so its status is
+    # short_text; the broker still reached the archive and stored the bytes.
+    ({"kind": "archive", "status": "short_text", "sha256": "7d" * 32, "bytes_len": 713,
+      "archive": {"served_timestamp": "20260930235048"}}, True),
+    ({"kind": "archive", "status": "ok", "sha256": "ab" * 32, "bytes_len": 900,
+      "archive": {"served_timestamp": "20260915000000"}}, True),
+    ({"kind": "archive", "status": "archive_unavailable", "sha256": None,
+      "archive": {}}, False),
+    ({"kind": "archive", "status": "ok", "sha256": "ab" * 32, "bytes_len": 900,
+      "archive": {"served_timestamp": "20261001000000"}}, False),  # not before the date
+    ({"kind": "web", "status": "ok", "sha256": "ab" * 32, "bytes_len": 900}, False)])
+def test_the_broker_control_is_an_archived_copy_dated_before_the_cutoff(
+        receipt: dict[str, Any], ok: bool) -> None:
+    assert bare._archived(json.dumps(receipt), AS_OF) is ok
