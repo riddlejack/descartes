@@ -13,16 +13,25 @@ from __future__ import annotations
 import json
 import os
 import signal
+import stat
 import subprocess
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any
 
 from stemma.driver import canary, clean, events, hostio
-from stemma.driver.config import SESSIONS_DIR, SETTINGS_DIR, DriverConfig
+from stemma.driver.config import (
+    HOST_SECRETS,
+    HOST_SECRETS_DIR,
+    HOST_SECRETS_ENV,
+    HOST_SETTINGS,
+    SESSIONS_DIR,
+    SETTINGS_DIR,
+    DriverConfig,
+)
 from stemma.driver.errors import HarnessError
 from stemma.driver.settings import (
     SESSION_TMP,
@@ -33,8 +42,12 @@ from stemma.driver.settings import (
 )
 
 
-def driver_env(cfg: DriverConfig, run_dir: Path) -> dict[str, str]:
-    """What Stemma adds to the clean environment of each of its sessions."""
+def driver_env(cfg: DriverConfig, run_dir: Path,
+               host: Mapping[str, str] | None = None) -> dict[str, str]:
+    """What Stemma adds to the clean environment of each of its sessions: the run, the
+    interpreter, the named host settings that are set (`HOST_SETTINGS`, none secret), and
+    the path of the run's host-secrets file when the host holds a secret."""
+    env = os.environ if host is None else host
     extra = {
         "STEMMA_RUN_DIR": str(run_dir),
         "STEMMA_PYTHON": str(cfg.python),
@@ -42,7 +55,39 @@ def driver_env(cfg: DriverConfig, run_dir: Path) -> dict[str, str]:
     }
     if cfg.cache_dir is not None:
         extra["STEMMA_CACHE"] = str(cfg.cache_dir)  # the evidence service's fetch cache
+    for k in HOST_SETTINGS:
+        if env.get(k):
+            extra[k] = env[k]
+    secrets = {k: env[k] for k in HOST_SECRETS if env.get(k)}
+    if secrets and (run_dir / "run.json").is_file():
+        extra[HOST_SECRETS_ENV] = str(write_host_secrets(cfg, run_dir, secrets))
+    assert not set(extra) & set(HOST_SECRETS)  # invariant: no secret in an agent's env
     return extra
+
+
+def host_secrets_path(cfg: DriverConfig, run_dir: Path) -> Path:
+    """The run's host-secrets file: outside every run folder, where no session reads."""
+    return Path(os.path.realpath(cfg.runs_dir)) / HOST_SECRETS_DIR / f"{run_dir.name}.json"
+
+
+def write_host_secrets(cfg: DriverConfig, run_dir: Path, secrets: dict[str, str]) -> Path:
+    """Write the secrets once, mode 0600, in a 0700 folder, never through a link."""
+    path = host_secrets_path(cfg, run_dir)
+    folder = path.parent
+    folder.mkdir(mode=0o700, exist_ok=True)
+    st = os.lstat(folder)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+        raise HarnessError(f"{folder} is not a folder of this user")
+    os.chmod(folder, 0o700)
+    data = json.dumps(secrets, sort_keys=True).encode()
+    tmp = folder / f".{path.name}.{os.getpid()}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+    os.replace(tmp, path)
+    return path
 
 
 def scrubbed_env(cfg: DriverConfig, run_dir: Path) -> dict[str, str]:

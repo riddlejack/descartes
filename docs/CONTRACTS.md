@@ -172,6 +172,18 @@ D1 to D10); where an older line below disagrees, section 0 wins.
 - **CLI**: `stemma report|verify|new` call builder W3's entry points
   (`stemma.report.site`, `stemma.report.verify`, `stemma.onboard.new`), or refuse with
   exit code 2 when they are not installed.
+- **Host settings and secrets**: the driver passes the named non-secret host settings
+  (`stemma.driver.config.HOST_SETTINGS`: STEMMA_SEC_IDENTITY, the data layer's mode and
+  fallback, ZETARIS_REST_URL, ZETARIS_ORG_ID, STEMMA_ZETARIS_NAMESPACE, STEMMA_PG_HOST,
+  _PORT, _DB, _USER, _JDBC_HOST) into every session's environment, and so to the MCP
+  server; nothing else from the host. Secrets (ZETARIS_API_KEY, STEMMA_PG_PASSWORD)
+  never enter any agent's environment: the driver writes them to
+  `$STEMMA_RUNS/.host-secrets/<run_id>.json` (mode 0600, folder 0700, outside every run
+  folder, removed when the driver finishes, rewritten on resume) and passes only its
+  path, `STEMMA_HOST_SECRETS`; only the MCP server process loads it, refusing a file
+  that is not a private regular file of this user. Sessions cannot read it (the Read
+  guard and the Bash sandbox deny everything outside the run). The server also serves
+  part D's `query_data`.
 - **Task files notice**: every run's lead receives, with its first tool call, a notice
   naming the task files this run holds (`task/question.md`, then `task/intake.md` and
   `task/options.md` when present, `task/task.json`, the driver's `criteria.md` when the

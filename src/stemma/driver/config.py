@@ -52,6 +52,21 @@ TOOL_ONLY: Final = (
     "framer/critique.md",
 )
 
+# Host settings passed through to every session's environment and so to the MCP server
+# (invariant: the evidence service's and the data layer's own setting names). None is a
+# secret: each is safe for any agent to see.
+HOST_SETTINGS: Final = (
+    "STEMMA_SEC_IDENTITY", "STEMMA_DATALAYER", "STEMMA_DATALAYER_FALLBACK",
+    "ZETARIS_REST_URL", "ZETARIS_ORG_ID", "STEMMA_ZETARIS_NAMESPACE",
+    "STEMMA_PG_HOST", "STEMMA_PG_PORT", "STEMMA_PG_DB", "STEMMA_PG_USER",
+    "STEMMA_PG_JDBC_HOST",
+)
+# Host secrets: never in any agent's environment. The driver writes them to a 0600 file
+# outside the run folder and passes only its path; only the MCP server process reads it.
+HOST_SECRETS: Final = ("ZETARIS_API_KEY", "STEMMA_PG_PASSWORD")
+HOST_SECRETS_ENV: Final = "STEMMA_HOST_SECRETS"
+HOST_SECRETS_DIR: Final = ".host-secrets"  # under $STEMMA_RUNS, beside the run folders
+
 # Models a run may use (invariant: CONTRACTS section 6, `availableModels`; never Haiku).
 AVAILABLE_MODELS: Final = ("claude-opus-5-5", "claude-fable-5-1")
 EFFORTS: Final = ("low", "medium", "high", "xhigh", "max")  # invariant: the harness's levels
