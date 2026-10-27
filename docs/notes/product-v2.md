@@ -177,3 +177,23 @@ Each fix below has a regression test built from the review's own probe.
 
 The bundle builder `verify.code_bundle` is marked as a stop-gap. It is to be replaced by
 W2's public builder, so that verify and `file_claim` re-run the same code.
+
+## Switching to W2's register code (W2 commit 2e4f4f7)
+
+`report/compat.py` looks up W2's public functions at run time. Once the register branch
+is merged, verify runs exactly the code that `finish_run` and `file_claim` run:
+- `manifest.check` for the seal;
+- `manifest.parse_log` for the log;
+- `derivation.build_bundle` for bundles;
+- `filing.rerun_filed` for a claim filed with a stored bundle. Such a claim re-runs from
+  its filed copy, and verify notes when the working copy in `analysis/` has changed
+  since.
+
+Until the merge, the report's stop-gaps run instead. Two stop-gaps remain after the
+merge: `ledger._memory_world` and `ledger._read_only_register`, which reach two private
+register attributes. Each has a STOP-GAP note and should be replaced if W2 adds a
+public read-only register constructor.
+
+Shown on a throwaway merge of both branches (never committed): the full suite gave
+1532 passed and 19 skipped, mypy and ruff were clean, run 1's verify output was the same
+as on this branch, and `stemma verify|report|new` reach these entry points.
