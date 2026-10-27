@@ -179,7 +179,11 @@ def test_cli_frame_only_flag(cfg: DriverConfig, tmp: Path, monkeypatch: pytest.M
         seen["run"] = json.loads((run_dir / "run.json").read_text())
         return 8
 
-    monkeypatch.setattr("stemma.driver.__main__.start", fake_start)
+    def fake_run(_cfg: DriverConfig, run_dir: Path, *, resume_first: bool) -> int:
+        assert not resume_first
+        return fake_start(_cfg, run_dir)
+
+    monkeypatch.setattr("stemma.driver.__main__.run_to_end", fake_run)
     monkeypatch.setattr("stemma.driver.__main__.DriverConfig.from_env",
                         staticmethod(lambda _p=None: cfg))
     assert main(["start", "--frame-only", str(write_task(tmp))]) == 8
@@ -232,3 +236,84 @@ def test_a_reviewer_that_cannot_be_trusted_is_not_resumed(cfg: DriverConfig, tmp
         checks_api.revoke(run, "s-rev1", "wrong effort")
     d = Driver(cfg, run, checks_api, limits)
     assert d._resumable_reviewer(_review_round(run, 2)) is None
+
+
+# --- Automatic resume after a usage stop -----------------------------------------------
+
+def _limited(fake: Fake, resets_at: float | None) -> None:
+    extra = {"resets_at": resets_at} if resets_at is not None else {}
+    fake.configure({"lead": {"sleep_s": 0.3, "rate_limited": True, **extra},
+                    "blind-framer": {"rate_limited": True, **extra}})
+
+
+def test_a_usage_stop_waits_for_the_reset_and_resumes(cfg: DriverConfig, tmp: Path,
+                                                      fake: Fake, limits: Limits) -> None:
+    import time as _t
+
+    from stemma.driver.runner import OUTCOME_CODES, run_to_end
+
+    lim = dataclasses.replace(limits, usage_resume_margin_s=30.0)
+    reset = _t.time() + 3600
+    _limited(fake, reset)
+    run = create_run(cfg, write_task(tmp), limits=lim)
+    waited: list[float] = []
+
+    def sleep(s: float) -> None:  # the limit resets while the driver waits
+        waited.append(s)
+        fake.configure({"lead": {"sleep_s": 0.3}})
+
+    code = run_to_end(cfg, run, resume_first=False, api=checks_api, limits=lim, sleep=sleep)
+    assert code == OUTCOME_CODES["ended_without_release"]  # ran on; the fake never releases
+    assert len(waited) == 1 and 3600 + 30 - 60 < waited[0] <= 3600 + 30
+    w = kinds(run, "usage_wait")
+    assert len(w) == 1 and w[0]["resume"] == 1 and w[0]["resets_at"] == reset
+    assert len(kinds(run, "run_resumed")) == 1
+    framer = [s for s in checks_api.states(run).values() if s.request.role == "blind-framer"]
+    assert framer[0].outcome == "completed"  # relaunched after the reset
+
+
+def test_automatic_resumes_are_bounded_and_counted_across_restarts(
+        cfg: DriverConfig, tmp: Path, fake: Fake, limits: Limits) -> None:
+    from stemma.driver.runner import OUTCOME_CODES, run_to_end
+
+    lim = dataclasses.replace(limits, max_usage_resumes=2, usage_wait_unknown_s=5.0)
+    _limited(fake, None)  # no reset time reported: the recorded default wait
+    run = create_run(cfg, write_task(tmp), limits=lim)
+    waited: list[float] = []
+    code = run_to_end(cfg, run, resume_first=False, api=checks_api, limits=lim,
+                      sleep=waited.append)
+    assert code == OUTCOME_CODES["usage_limited"]
+    assert waited == [5.0, 5.0]
+    assert kinds(run, "usage_resumes_used_up")[0]["resumes"] == 2
+    # A driver started again keeps to the same count.
+    assert run_to_end(cfg, run, resume_first=True, api=checks_api, limits=lim,
+                      sleep=waited.append) == OUTCOME_CODES["usage_limited"]
+    assert waited == [5.0, 5.0]
+
+
+def test_a_reset_too_far_off_is_not_waited_for(cfg: DriverConfig, tmp: Path, fake: Fake,
+                                               limits: Limits) -> None:
+    import time as _t
+
+    from stemma.driver.runner import OUTCOME_CODES, run_to_end
+
+    _limited(fake, _t.time() + 3 * 24 * 3600)  # a weekly limit
+    run = create_run(cfg, write_task(tmp), limits=limits)
+    waited: list[float] = []
+    assert run_to_end(cfg, run, resume_first=False, api=checks_api, limits=limits,
+                      sleep=waited.append) == OUTCOME_CODES["usage_limited"]
+    assert waited == [] and kinds(run, "usage_wait_too_long")
+
+
+def test_an_interrupted_wait_stops_the_driver(cfg: DriverConfig, tmp: Path, fake: Fake,
+                                              limits: Limits) -> None:
+    from stemma.driver.runner import OUTCOME_CODES, run_to_end
+
+    _limited(fake, None)
+    run = create_run(cfg, write_task(tmp), limits=limits)
+
+    def interrupted(_s: float) -> None:
+        raise KeyboardInterrupt
+
+    assert run_to_end(cfg, run, resume_first=False, api=checks_api, limits=limits,
+                      sleep=interrupted) == OUTCOME_CODES["driver_stopped"]

@@ -20,6 +20,7 @@ import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from types import FrameType
 from typing import Any, Final, Protocol, cast
@@ -970,3 +971,68 @@ def show_status(cfg: DriverConfig, run_dir: Path, api: ChecksApi | None = None) 
         return cast(dict[str, Any], json.loads((d.run_dir / "status.json").read_text()))
     except FileNotFoundError:
         raise RunStateError(f"no status.json yet in {d.run_dir}") from None
+
+
+Sleep = Callable[[float], None]
+
+
+def usage_reset_at(run_dir: Path, since: str | None) -> float | None:
+    """The latest reset time (epoch seconds) the harness reported with a usage-limit
+    refusal recorded after `since` (an event time), or None."""
+    best: float | None = None
+    for e in events.read(run_dir):
+        if e.get("event") != "usage_limit_hit" or (since and str(e.get("at")) <= since):
+            continue
+        r = e.get("resets_at")
+        if isinstance(r, int | float) and not isinstance(r, bool):
+            best = float(r) if best is None else max(best, float(r))
+    return best
+
+
+def run_to_end(cfg: DriverConfig, run_dir: Path, *, resume_first: bool,
+               api: ChecksApi | None = None, limits: Limits | None = None,
+               sleep: Sleep = time.sleep, clock: Callable[[], float] = time.time) -> int:
+    """Start (or resume) a run, and when the account's usage limit stops it, wait until
+    the limit resets and resume it, at most `max_usage_resumes` times (resource limits in
+    run.json). Each wait is a `usage_wait` event; the count of those events is the count
+    of automatic resumes, so a restarted driver keeps to the same limit."""
+    rd = Path(os.path.realpath(run_dir))
+    lim = limits or Limits.from_json(load_run(rd)["limits"])
+    code = resume(cfg, rd, api, limits) if resume_first else start(cfg, rd, api, limits)
+    while code == OUTCOME_CODES["usage_limited"]:
+        waits = [e for e in events.read(rd) if e.get("event") == "usage_wait"]
+        if len(waits) >= lim.max_usage_resumes:
+            events.emit(rd, "usage_resumes_used_up", resumes=len(waits),
+                        limit=lim.max_usage_resumes)
+            return code
+        since = str(waits[-1]["at"]) if waits else None
+        reset = usage_reset_at(rd, since)
+        now = clock()
+        wait = (lim.usage_wait_unknown_s if reset is None
+                else max(0.0, reset - now) + lim.usage_resume_margin_s)
+        if wait > lim.usage_wait_max_s:
+            events.emit(rd, "usage_wait_too_long", resets_at=reset, wait_s=round(wait),
+                        limit_s=lim.usage_wait_max_s)
+            return code
+        until = datetime.fromtimestamp(now + wait, UTC).isoformat(timespec="seconds")
+        events.emit(rd, "usage_wait", resume=len(waits) + 1, limit=lim.max_usage_resumes,
+                    resets_at=reset, wait_s=round(wait, 1), until=until)
+        last = _status_or_empty(rd)
+        if last:  # the status page says the run waits, and until when
+            status.write(rd, {**last, "state": "waiting_for_usage_reset",
+                              "resume_at": until})
+        try:
+            sleep(wait)
+        except KeyboardInterrupt:
+            events.emit(rd, "driver_stopped", during="usage_wait")
+            return OUTCOME_CODES["driver_stopped"]
+        code = resume(cfg, rd, api, limits)
+    return code
+
+
+def _status_or_empty(run_dir: Path) -> dict[str, Any]:
+    try:
+        data = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}

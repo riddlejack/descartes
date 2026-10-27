@@ -11,7 +11,7 @@ from pathlib import Path
 from stemma.driver.config import DriverConfig, runs_dir_from_env
 from stemma.driver.errors import DriverError, RunStateError
 from stemma.driver.runfolder import RUN_ID, create_run
-from stemma.driver.runner import resume, show_status, start
+from stemma.driver.runner import run_to_end, show_status
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -40,9 +40,9 @@ def main(argv: list[str] | None = None) -> int:
             run_dir = create_run(cfg, args.task,
                                  stop_after="frame" if args.frame_only else None)
             print(run_dir, flush=True)
-            return start(cfg, run_dir)
+            return run_to_end(cfg, run_dir, resume_first=False)
         if args.cmd == "resume":
-            return resume(cfg, args.run_dir)
+            return run_to_end(cfg, args.run_dir, resume_first=True)
         st = show_status(cfg, args.run_dir)
         print(json.dumps(st, indent=1))
         return 0

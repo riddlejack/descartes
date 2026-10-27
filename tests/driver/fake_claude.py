@@ -143,7 +143,9 @@ def main() -> int:
     time.sleep(float(cfg.get("sleep_s", 0)))
     if cfg.get("rate_limited"):  # the account's usage limit refused the turn
         out({"type": "rate_limit_event", "session_id": sid,
-             "rate_limit_info": {"status": "rejected", "rateLimitType": "five_hour"}})
+             "rate_limit_info": {"status": "rejected", "rateLimitType": "five_hour",
+                                 **({"resetsAt": cfg["resets_at"]} if "resets_at" in cfg
+                                    else {})}})
         out({"type": "result", "subtype": "success", "is_error": False, "result": "",
              "session_id": sid, "num_turns": 0, "permission_denials": []})
         record["end"] = time.time()

@@ -1528,6 +1528,18 @@ class Register:
                             "under": n.get("set_aside_by")})
         return out
 
+    def run_record(self, version: int) -> dict[str, Any]:
+        """What the deliverable and the viewer show beside the answer (v0.4): the
+        criteria, the nodes set aside with their reasons, the assumptions taken in place
+        of the user's answers, and the material points the released version's reviews
+        left open (only possible at the review-round limit)."""
+        return {"version": version, "criteria": self.criteria(),
+                "set_aside": self.set_aside_nodes(), "assumptions": self.assumptions(),
+                "open_material_points": self.open_material_points(version),
+                "review_rounds": {"used": len(self.submitted_versions()),
+                                  "limit": self.max_review_rounds(),
+                                  "note": "a resource limit, never a quality verdict"}}
+
     def frame_failures(self) -> list[str]:
         """What a frame-only run lacks before it ends (CONTRACTS v0.4 section 9): intake.md,
         criteria.md with a criterion, frame.md, a tree, the blind framer's critique, and
@@ -1580,6 +1592,8 @@ class Register:
                 raise Refused(gate_refusal(failures))
             self._write("deliverable/answer.md", text)
             self._write("deliverable/answer.reader.md", self._render_reader(text))
+            self._write("deliverable/record.json", json.dumps(
+                self.run_record(version), indent=2, ensure_ascii=False))
             extra: dict[str, Any] = {}
             if self.review_rounds_exhausted():
                 self._write("deliverable/completion.md", self._completion_statement(version))

@@ -440,3 +440,18 @@ def test_a_resumed_reviewer_session_answers_its_new_round_once_verified(
     assert reg.await_checks(["branch:b1"], 0)["landed"] == {}
     checks_api.mark_verified(reg.run_dir, "s-mem", "claude-opus-5-5", "high")
     assert reg.await_checks(["branch:b1"], 0)["landed"]["branch:b1"]["round"] == 2
+
+
+def test_the_release_writes_the_runs_record(reg: Register) -> None:
+    cid = ready_run(reg)
+    reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
+    reg.tree_upsert(LEAD, {"id": "q9", "kind": "question", "statement": "stations?",
+                           "set_aside": "the target counts ports"})
+    reg.finish_run(LEAD, 1)
+    rec = json.loads((reg.run_dir / "deliverable/record.json").read_text())
+    assert rec["criteria"] == {"C1": "Says whether the target is met.",
+                               "C2": "Says which count the target uses."}
+    assert rec["set_aside"] == [{"id": "q9", "statement": "stations?",
+                                 "reason": "the target counts ports"}]
+    assert rec["open_material_points"]["count"] == 0
+    assert rec["review_rounds"]["used"] == 1
