@@ -8,6 +8,7 @@
     python run.py conformance              World Model's conformance suite, live
     python run.py record RUN_DIR PACK_DIR  record a finished run as a replayable pack
     python run.py cleanup RUN_DIR          remove a finished run's copies from Zetaris and Postgres
+    python run.py verify RUN_DIR           re-check a recorded run offline: hashes, quotes, sums
 
 A replay is never shown as live: every recorded line is marked [replay] with its file's
 SHA-256, and only what runs now (the conformance suite, the data layer over the replayed
@@ -156,6 +157,12 @@ def cmd_record(run_dir: Path, pack: Path) -> int:
     return 0
 
 
+def cmd_verify(run_dir: Path, as_json: bool) -> int:
+    from stemma.report.verify import main as verify_main
+
+    return verify_main([str(run_dir), *(["--json"] if as_json else [])])
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python run.py", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -176,6 +183,9 @@ def main(argv: list[str] | None = None) -> int:
     rc = sub.add_parser("record", help="record a finished run as a replayable pack")
     rc.add_argument("run_dir", type=Path)
     rc.add_argument("pack", type=Path)
+    vf = sub.add_parser("verify", help="re-check a recorded run offline, with no keys")
+    vf.add_argument("run_dir", type=Path)
+    vf.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     if args.cmd is None:
         if _truthy(os.environ.get("SAMPLE_MODE")):
@@ -194,6 +204,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_conformance()
     if args.cmd == "cleanup":
         return cmd_cleanup(args.run_dir)
+    if args.cmd == "verify":
+        return cmd_verify(args.run_dir, args.json)
     return cmd_record(args.run_dir, args.pack)
 
 
