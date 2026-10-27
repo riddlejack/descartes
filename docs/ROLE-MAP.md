@@ -55,12 +55,12 @@ Model claude-opus-5-5, effort high. Tools: Read, Write, Edit, Skill, Agent(stemm
   - Prevents: every question made a choice between options (run 1's O1 to O5), options placed before research shaping what gets researched, a working answer that cannot fail, and frame-level flaws that reviewers of a finished draft almost never catch. Evidence: decision D2, run 1 diagnosis cause C1 and D-11, E6a results and the design addendum of 26 October, Codex review of the v2 texts.
 - Define each key term there and why it matters; when one has two reasonable readings both cheap to measure, research both and say which the stated target uses, asking only if they would change the whole research.
   - Prevents: one reading picked silently when the other was cheap to show (run 1's "ports" and "stations"), an ambiguous term resolved by widening, and the rule lost in the arms that load no method. Evidence: decision D3, run 1 diagnosis point A2 and D-6, Codex review of the v2 texts.
-- Build the tree with tree_upsert from the scoped question alone: question nodes, depth as child questions, one measure per leaf, a list question's candidates as its first part, a decision's parts as criteria each option is assessed under, one open_lane node, each node with its doubt, how it would be settled and the answer flipping the headline; mark one to three cruxes.
-  - Prevents: one structure holding options, a rival, a check and a gate beside the real sub-questions (run 1's seven roots); depth hidden as methods inside nodes; in the v2 tree check, leaves packing several measures, a list question whose tree never asked for the list, and a decision whose top parts were each one option's terms. Evidence: decision D2, run 1 diagnosis causes C3 and C4, v2 tree check notes (Q1, Q2, Q3, Q4).
+- Build the tree with tree_upsert from the scoped question alone: each node one short question, parts as children, the how in settles_by, never the statement; a list question's candidates first, a decision's parts asked of every option; one open_lane node; same-source leaves share a branch_id; one to three cruxes.
+  - Prevents: one structure holding options, a rival, a check and a gate beside the real sub-questions (run 1's seven roots); few fat nodes made work packages, with children, rules and how-to notes inside their sentences (median 37 to 51 words a node against 11 to 15 for the plain model); a list question whose tree never asked for the list, and a decision whose top parts were each one option's terms; a finer tree starting one worker per leaf. Evidence: decision D2, run 1 diagnosis causes C3 and C4, v2 tree check notes (Q1, Q3), tree-skill diagnosis of 27 October ("Size and density", lines 1 and 7, "Consequence to watch in the fix").
 - Set aside, with tree_upsert and a reason, only nodes whose every answer leaves the headline unchanged, never hard ones; branch the rest, holding any that waits on another's answer.
   - Prevents: irrelevant branches protected by "never drop" and all dispatched at once, without reopening hard, decisive branches dropped because they were hard. Evidence: decision D5, run 1 diagnosis cause C5, lesson 4.3.
-- Then call request_frame_critique and answer every point of framer/critique.md in framer/lead-response.md.
-  - Prevents: a wrong premise cascading, and a tree approved only by the mind that drew it. Evidence: design step 3, lessons 4.3 and 8.3.
+- Then call request_frame_critique, answer every point of framer/critique.md in framer/lead-response.md, making accepted changes by adding, splitting, moving, merging or removing nodes, never adding words.
+  - Prevents: a wrong premise cascading, a tree approved only by the mind that drew it, and a critique answered by annotation (in the v2 tree check the critique round roughly doubled Q1's node text, its change lines pasted into statements). Evidence: design step 3, lessons 4.3 and 8.3, tree-skill diagnosis of 27 October ("The critique round", line 6).
 - Each branches/<branch_id>/order.md has exactly these headings: Intent; Place in the tree; What would change the answer; End product; Out of scope; Known facts (each a claim id, or marked unverified); Where to look; What to return.
   - Prevents: hand-offs that keep facts and drop purpose and limits, and seeded "facts" that were never checked. Evidence: design step 5, P1 principles 4 and 5, lesson 3.5, contract section 3.
 - Read branch records for findings and limits, never sources, routing implications where they bear and echo_candidates pairs to their workers, and re-cutting the tree when findings contradict the frame.
@@ -274,12 +274,12 @@ Model claude-opus-5-5, effort high. Tools: Read, Skill, record_frame.
   - Prevents: a critique anchored on the lead's frame before your own is recalled. Evidence: design step 3, lesson 8.5.
 - Ask first, in this order: is every node part of the question asked, or of the broader decision when the scope is broader_decision; is any part of it missing; is each set-aside justified, given that neither of its answers may change the headline; are the criteria drawn only from the question and the user's answers in task/intake.md and task/task.json, any threshold the user gave included, naming by id each criterion that adds a requirement neither states; and does a sub-question exist that would separate the working answer from its rival.
   - Prevents: no role asking whether the work answers the question that was asked, set-asides nobody challenges, and a tree with no node that could tell the working answer from its rival. Evidence: W1 brief, decision D2, decision D5, run 1 diagnosis cause C9, run 1 framer/critique.md point 1.
-- Then check the tree's shape: a decision's top parts are criteria every option is assessed under, never one option's terms; a list question first finds its candidates; each leaf asks one measure.
-  - Prevents: a decision tree whose top parts each belong to one option, a list question that never asks for the list, and leaves packing several measures, which the framer's critique was not asked to look for (v2 tree check). Evidence: decision D2, v2 tree check notes (Q1, Q3, Q2 and Q4).
+- Then check the tree's form: each node is one short question with one idea; a node that packs several questions, a list, a rule or a method is split into children or has the how moved to settles_by; no parent restates its children; no node has a single child; each child is a part of its parent, and together the children leave no way the parent's answer could come out that none of them covers (name the missing one); a decision's top parts are what every option is assessed under, never one option's terms; a list question first finds its candidates.
+  - Prevents: a decision tree whose top parts each belong to one option, a list question that never asks for the list, and node form the critique never looked at (fat nodes packing several ideas, parents restating their children, single children, children filed under the wrong parent), and a group missing a sibling (an overrun cut as waiting, extra work and slower work, leaving out crew size and hours on duty; 22 such gaps in nine trees). Evidence: decision D2, v2 tree check notes (Q1, Q3), tree-skill diagnosis of 27 October ("Wrong nesting", line 5), tree check 2 Results (minto-install).
 - Then say where your frame and its reasons differ from the lead's (the metric, the structure, a definition, any specific with no basis, a missing analogue or bound), the weakest premise, and, if any question-type cards are installed, those that should have loaded.
   - Prevents: frame-level flaws that no later reviewer catches, and lenses missing for a mixed question (provisional: not yet settled by a test). Evidence: design step 3, lessons 2.0 and 8.3, E6a results and the design addendum of 26 October; provisional, not settled by E6a: it tested no blind-first reviewer; the design addendum's component test would.
-- State each point so the lead can act on it: what to change, and what evidence would show you are right.
-  - Prevents: a critique the lead can acknowledge without changing anything. Evidence: design step 3, D1 principle 11 on refuting rather than mentioning.
+- State each point as a change to the tree's structure (add, split, move, merge or remove a node) or to frame.md, never as words to add inside a node, with the evidence that would show you are right.
+  - Prevents: a critique the lead can acknowledge without changing anything, and change lines that the lead pastes into node statements (Q3.3's three measures, Q2.2's lapse conditions, Q0's output definition). Evidence: design step 3, D1 principle 11 on refuting rather than mentioning, tree-skill diagnosis of 27 October ("The critique round", line 5).
 - Push for a sharper frame, not a wider or more cautious one.
   - Prevents: framing critique that only adds hedges, scope or branches. Evidence: design section 6 order on timidity, decision D1.
 
@@ -518,103 +518,57 @@ loaded instead in the placebo arm of switch S1.
 
 ### method (decomposition-method)
 
-- Think the frame and tree through in prose in frame.md first; enter the tree with tree_upsert only once the prose holds together.
-  - Prevents: structure emitted before the thinking is done, the earlier method's "single most important rule". Evidence: the earlier method, "write the decomposition first, format last".
-- Decompose the question asked.
-  - Prevents: a tree built for a bigger question than the one asked (run 1 turned "is the U.S. on track" into "which measures to fund"). Evidence: decision D1 and decision D2, run 1 diagnosis "In short" and cause C1.
-- The tree breaks the question, in the user's words and read narrowly unless the scope says otherwise, into the sub-questions that together answer it.
-  - Prevents: a thin request widened toward "the question behind the question". Evidence: decision D1 (narrow reading by default), run 1 diagnosis causes C2 and D-12.
-- The purpose says what form and precision the answer needs, never what else to research.
-  - Prevents: the purpose line used as licence to add research (run 1's "decide whether the target needs new measures" became five options and a lever tree). Evidence: decision D1, run 1 diagnosis cause C2 and D-3.
-- A sub-question that matters only to a broader decision stays out of the tree and goes in the closing note on what was not researched.
-  - Prevents: unasked branches (about a third of run 1's worker spend and of its memo), and a reader never told what was left out. Evidence: decision D1, run 1 diagnosis "In short" and node table (K1, K2, L1 to L4).
-- Let the question's type pick the frame.
-  - Prevents: every question made a choice between options, the root of run 1's tree. Evidence: decision D2, run 1 diagnosis cause C1 and "Where it came from".
-- A fact or forecast question gets an answer with its confidence.
-  - Prevents: options and a recommendation hung on a question that asked for a fact. Evidence: decision D2, run 1 diagnosis D-11.
-- A "why" question gets a cause, separating the normal level from the causes of shortfall.
-  - Prevents: remedies proposed before the cause is known. Evidence: decision D2, the earlier method's tree-type router, run 1 diagnosis D-11.
-- A decision question gets options: fixed now when the user named them, with the tree's top parts as the shared criteria, each asked of every option, so that no part is one option's own terms; otherwise worked out after the research, from the findings.
-  - Prevents: options placed before research shaping which nodes get researched, one nested tree per option (run 1's five trees under O1 to O5), and top parts that are each one option's terms (the v2 tree check's decision question: one buyer's offer, another buyer's price). Evidence: decision D2, run 1 diagnosis "Options at the top", D-11 and point A5, v2 tree check notes (Q1).
-- Recommend nothing the user did not ask for.
-  - Prevents: a headline ending in a spending recommendation nobody asked for (run 1). Evidence: decision D2 (under-prescribe), run 1 diagnosis point A3.
-- A question that asks for a list or a ranking ("which are the most attractive") makes finding the candidates its first part, then how each is judged.
-  - Prevents: a list question whose tree never asks for the list, so the candidates surface only five levels down (the v2 tree check's opportunities question). Evidence: v2 tree check notes (Q3), decision D2.
-- Hold a working answer and its rival in frame.md, never in the tree.
-  - Prevents: anchoring on one answer, and a rival stored as a branch that duplicates another node's work (run 1's R1 under T). Evidence: decision D2, run 1 diagnosis D-7 and point B6.
-- State the working answer so that evidence could prove it wrong, and the strongest rival answer.
-  - Prevents: a hypothesis that cannot fail, and a rival that is a straw man. Evidence: design step 2, the earlier method step 2.
-- While you build the tree, ask whether a sub-question exists whose answer would separate the two, and add it if it is missing.
-  - Prevents: a tree with no node that could tell the working answer from its rival (run 1's level-against-slope flaw, found only by the framer). Evidence: decision D2 (the rival as a challenge while the tree is built), run 1 framer/critique.md point 1.
-- After the research, the rival is the adversary the draft is tested against.
-  - Prevents: the rival vanishing once the tree is built. Evidence: decision D2 (the rival as an adversarial review after the research), design step 11.
-- Settle the terms.
-  - Prevents: an ambiguous term resolved by widening or never resolved. Evidence: decision D3, run 1 diagnosis point A2.
-- Write what each key term of the question means and, in one clause, why the definition matters.
-  - Prevents: a definition that changes the count by a multiple left unstated or unexplained (ports, chargers and stations in run 1). Evidence: decision D3, run 1 diagnosis D-6.
-- When a term has two reasonable readings and both are cheap to measure, research both and say which one the stated target or its source uses.
-  - Prevents: one reading picked silently when the other was cheap to show. Evidence: decision D3 (run 1's "ports" and "stations"), run 1 diagnosis D-6.
-- Ask the user only when the readings would change the whole research; otherwise pick one and say so.
-  - Prevents: a run blocked on a question nobody will answer, and a choice of reading hidden from the reader. Evidence: decision D3, design steps 1 and 16.
-- Choose the top cut deliberately.
-  - Prevents: the first cut that came to mind becoming the tree. Evidence: the earlier method step 3.
-- Try two or three ways to split the question: by the equation that produces the result, by the stages of a process or funnel, by competing causes, or by independent lines of evidence.
-  - Prevents: a cut chosen without alternatives, and options offered as a cut (run 1). Evidence: the earlier method step 3 and its source-logic router, decision D2.
-- For each, say what it reveals and what it hides.
-  - Prevents: a cut whose blind spot nobody named. Evidence: the earlier method step 3.
-- Pick the cut that would make a wrong answer easiest to disconfirm, and say why.
-  - Prevents: a cut chosen for tidiness rather than for testing the answer. Evidence: the earlier method's router, "pick the one that would make a wrong answer easiest to disconfirm".
-- Some fits recur: a profit or cost question puts its controlling equation at the root; a sizing question starts from the population or customer funnel and converts to value afterwards; a question whether a named change would work is tested on what must hold for it to.
-  - Prevents: the commonest mis-cuts the earlier router named (an equation root for a proposal that feasibility can kill, revenue before the funnel). Evidence: the earlier method's tree-type and source-logic routers.
-- One division principle per sibling group, at every depth.
-  - Prevents: overlap and gaps below the top level, where the earlier method found exclusivity "quietly dies". Evidence: the earlier method step 4.
-- State it in one line where the group appears.
-  - Prevents: a principle held in the head and lost in the tree. Evidence: the earlier method step 4.
-- Siblings do not overlap and together cover their parent question; say what the group leaves out.
-  - Prevents: double-counted effects and silently missing branches. Evidence: the earlier method step 4, P3 R4.
-- When siblings can interact, state the rule that assigns each effect to exactly one of them.
-  - Prevents: one effect counted under two branches. Evidence: the earlier method step 4, run 1 diagnosis D-2 (the pace and change rule kept its cut clean).
-- Deep levels are where overlap creeps in, so the deeper the group, the more explicit its principle.
-  - Prevents: discipline held only at the top level. Evidence: the earlier method step 4.
-- Draw depth as sub-questions.
-  - Prevents: depth written as methods inside nodes, invisible to every reader of the tree (run 1). Evidence: decision D2, run 1 diagnosis cause C4 and D-1.
-- Each node is a question with how doubtful its answer is, what would settle it (the measurable variable or observable stand-in, and where it would come from) and the answer at which the headline would change.
-  - Prevents: research with no stopping point and no link to the answer. Evidence: design step 3, contract section 5 tree fields, the earlier method steps 5 and 7.
-- How a node will be answered becomes its child questions, such as which official series and on what basis, or what counts and what does not, never notes inside the node.
-  - Prevents: the analysis plan hidden in "settled by" prose and work orders, so the trouble over which count to use surfaced late (run 1). Evidence: decision D2 (its "today's count" example), run 1 diagnosis cause C4.
-- A leaf asks for one measure; a leaf naming several measures that are answered separately becomes one leaf per measure.
-  - Prevents: leaves that pack several measures into one sentence, hiding depth the reader cannot see (four leaves in the v2 tree check). Evidence: decision D2 (depth drawn as sub-questions), v2 tree check notes (Q1, Q2, Q4).
-- No option, rival, gate, independent check or work plan is a node; keep one open lane for primary-source reading nobody planned that bears on the question.
-  - Prevents: one structure holding six different things, so the tree reads as broken (run 1's O1 to O5, R1, TB and T0); the unplanned reading that most changed answers having no home. Evidence: decision D2, run 1 diagnosis cause C3 and the node table; lesson 4.3, design step 3.
-- A parent states what its children together imply, not a category label.
-  - Prevents: "intellectually blank" summaries that hide unfinished thinking. Evidence: the earlier method step 4, D1 principle 2.
-- Rank, set aside, then order.
-  - Prevents: every node treated as equal, everything dispatched at once (run 1's five workers at 07:22). Evidence: decision D5, run 1 diagnosis cause C5.
-- Rank nodes by how much each could change the headline and how doubtful it is, and mark the one to three the answer turns on.
-  - Prevents: effort placed by ease rather than by what could change the answer. Evidence: the earlier method step 6, design step 3.
-- Set a node aside only when neither of its possible answers could change the headline, and record why on the node; a node that is merely hard to answer is never set aside.
-  - Prevents: irrelevant branches protected by "never drop", without reopening the older failure of a hard, decisive branch dropped because it was hard. Evidence: decision D5, run 1 diagnosis cause C5 and point A12, lesson 4.3.
-- Branches run in parallel unless one's value depends on another's answer; then hold it, and say so in its order.
-  - Prevents: work spent on a branch an earlier answer would have made moot, without serialising branches that are independent. Evidence: decision D5, run 1 diagnosis point A13.
-- Group leaves into lines of evidence.
-  - Prevents: one worker per leaf, splitting a single source across agents. Evidence: design step 4, P1 principle 2.
-- Leaves that rest on the same sources become one line of work; the line, not the leaf, is what one worker takes.
-  - Prevents: duplicated reading and lost cross-leaf detail. Evidence: design step 4.
-- Check, and revise once if a check fails.
-  - Prevents: a tree approved in under a minute without a look back. Evidence: lesson 4.3, the earlier method step 8.
-- Is every node part of the question asked, and is any part of it missing?
-  - Prevents: no step anywhere asking "is this the question that was asked?" (run 1). Evidence: decision D1 and decision D2, run 1 diagnosis cause C9.
-- Is each division principle stated, and is the separation real?
-  - Prevents: overlap just below the top that the root hides. Evidence: the earlier method step 8.
-- Would settling the crux settle the answer?
-  - Prevents: a crux that does not decide anything. Evidence: the earlier method step 8.
-- What finding would force a re-cut rather than a re-weighting?
-  - Prevents: a tree defended after the evidence has broken it. Evidence: the earlier method step 8, design step 10.
-- Write that last answer into frame.md.
-  - Prevents: the re-cut trigger forgotten when the finding arrives. Evidence: design step 10.
-- Use no stock framework (SWOT, five forces, the four Ps) unless it fits this question, and then say why.
-  - Prevents: a borrowed framework that would fit any question. Evidence: the earlier method's guardrails, P3 failure kind 14.
-- Give no branch equal depth for symmetry.
-  - Prevents: depth spread for appearance. Evidence: the earlier method's guardrails.
-- The tree states what must be answered; the orders say who looks where, so keep the two separate and let leaves change without re-approving the top.
-  - Prevents: a tree frozen into a work plan, so downstream findings cannot amend the leaves. Evidence: design step 3, lesson 4.3.
+- The tree breaks the question asked into the sub-questions whose answers, together, answer it.
+  - Prevents: a tree built for a bigger question than the one asked (run 1 turned "is the U.S. on track" into "which measures to fund"). Evidence: decision D1, run 1 diagnosis cause C1, tree-skill diagnosis of 27 October (books' trees as the referee).
+- Your reasoning about the question (its terms, the working answer and its rival, why you chose this cut) goes in frame.md; the tree holds only the questions.
+  - Prevents: reasoning, rules and output definitions written into node statements (the v2 tree check's Q0 "Output: ..." and "Division principle:" in Q1's and Q2's nodes). Evidence: tree-skill diagnosis of 27 October, "The evidence" and lines 3 and 7.
+- Cut by the logic that produces the answer.
+  - Prevents: a top cut taken from how the material is reported rather than from what produces the answer (Q3 cut a growth-opportunities question by reporting pool, leaving the opportunities four and five levels down). Evidence: tree-skill diagnosis of 27 October, "Wrong nesting"; the earlier method's top-cut step.
+- Try two or three first cuts: the equation behind a number (revenue and cost; volume and price), the stages of a process, the competing causes, the conditions a choice depends on, or a standard framework when it fits this question (Ansoff's four routes for where growth can come from).
+  - Prevents: the first cut that comes to mind kept untested, and a fitting standard framework ruled out by a blanket ban. Evidence: tree-skill diagnosis of 27 October, "Wrong nesting" (Q3); the earlier method's top-cut step.
+- Keep the cut under which a wrong answer would show most easily, and say why in frame.md.
+  - Prevents: a cut chosen for convenience, with no record of why it beat the others. Evidence: tree-skill diagnosis of 27 October; the earlier method's top-cut step, design step 3.
+- Each node is one short question.
+  - Prevents: few fat nodes packed with several ideas (median 37 to 51 words a node against 11 to 15 in the plain model's trees; 5 to 9 nodes over 40 words against none). Evidence: tree-skill diagnosis of 27 October, "Size and density".
+- One idea, plain words, readable alone.
+  - Prevents: first sentences that pack several ideas, which lost the blind comparison even with the rest of each node collapsed. Evidence: tree-skill diagnosis of 27 October, "What the owner saw" (Q1.1).
+- The root is the question as the user asked it; a question with several parts gets each part as a child.
+  - Prevents: a root restated with options, routing rules and output definitions (Q1's Q0 grew from 113 to 182 words), and a multi-part question kept as one node. Evidence: tree-skill diagnosis of 27 October, "The critique round" and "The evidence"; decision D1.
+- A node that needs "and", a list, a parenthesis, a rule, a bound, a source or a pointer to another node is either several questions, which become its children, or a note on how to answer it, which goes in settles_by.
+  - Prevents: children, bounding rules and work-plan notes written inside a node's sentence (Q3.3's three measures as one sentence, Q2.2's "does it expire, need exclusivity, or lapse", "Counting rule:", "Holds on Q1.1", "Run first"). Evidence: tree-skill diagnosis of 27 October, "The evidence" and "The critique round".
+- Children split their parent.
+  - Prevents: children that are methods for answering the parent rather than its parts ("which trials count, how intake was measured"). Evidence: tree-skill diagnosis of 27 October, line 7.
+- Each child is a part of its parent, not a method for answering it; together they answer the parent; no two overlap.
+  - Prevents: children filed under a parent they are not part of (Q3's Q1.1.1c under Q1.1.1b; Q1's Q1.1a moved under Q2.1), and siblings that overlap or leave a gap. Evidence: tree-skill diagnosis of 27 October, "Wrong nesting"; the earlier method's division-principle step.
+- A parent does not list or summarise its children.
+  - Prevents: parents that restate their children ("Children:" and "Children together" in Q1's, Q3's and Q4's nodes). Evidence: tree-skill diagnosis of 27 October, "The evidence" and line 2.
+- A node has no children or at least two.
+  - Prevents: single children, which add a level without dividing anything (Q1.3 and Q2.1 in Q1; four parents in Q3). Evidence: tree-skill diagnosis of 27 October, "Wrong nesting".
+- Go deeper where a node still has parts
+  - Prevents: a thin tree, with parts that would be researched separately left inside one node (Stemma's 11 to 21 nodes against the plain model's 43 to 61 lines). Evidence: tree-skill diagnosis of 27 October, "Size and density".
+- that would be researched separately; stop when one finding would answer it.
+  - Prevents: depth added for its own sake past the point where one finding settles a node. Evidence: tree-skill diagnosis of 27 October; the earlier method's guardrails.
+- Branches differ in depth.
+  - Prevents: depth spread evenly for appearance. Evidence: the earlier method's guardrails, tree-skill diagnosis of 27 October.
+- The tree holds only sub-questions of the question asked.
+  - Prevents: a structure holding options, a rival, a check and a gate beside the real sub-questions (run 1's seven roots). Evidence: decision D2, run 1 diagnosis causes C3 and C4, tree-skill diagnosis of 27 October.
+- No option, rival, check or work plan is a node.
+  - Prevents: options, the rival answer, independent checks and work plans entered as nodes. Evidence: decision D2, run 1 diagnosis cause C3, tree-skill diagnosis of 27 October.
+- For a decision among named options, the top parts are what the choice turns on, asked of every option alike.
+  - Prevents: a decision tree whose top parts each belong to one option (in the v2 tree check, two of Q1's four top parts were one option's terms). Evidence: decision D2, v2 tree check notes (Q1), tree-skill diagnosis of 27 October.
+- For a question asking which options are best, the first part finds the candidates.
+  - Prevents: a list question whose tree never asks for the list (Q3's opportunities named only five levels down). Evidence: v2 tree check notes (Q3), tree-skill diagnosis of 27 October, "Wrong nesting".
+- Keep one open_lane node for primary reading nobody planned.
+  - Prevents: a tree that leaves no place for what nobody thought to ask. Evidence: decision D2, contract section 2, tree-skill diagnosis of 27 October.
+- Fill the fields, not the statement.
+  - Prevents: a node's doubt, settling route and flip point written into its sentence. Evidence: tree-skill diagnosis of 27 October, line 1.
+- doubt, settles_by and flip_point are for leaves; a parent needs none.
+  - Prevents: every node made a work package, so nodes are expensive and few (the method's old rule 7 and the lead's line asked for these fields on every node; the store does not). Evidence: tree-skill diagnosis of 27 October, line 1; register/store.py defaults them to null.
+- Mark the one to three nodes the answer turns on as crux.
+  - Prevents: effort spread evenly instead of on what decides the answer. Evidence: the earlier method's ranking step, decision D5, tree-skill diagnosis of 27 October.
+- Leaves that rest on the same sources share one branch_id: a branch, not a leaf, is one worker's job.
+  - Prevents: a finer tree starting one worker per leaf, multiplying workers that read the same sources. Evidence: tree-skill diagnosis of 27 October, "Consequence to watch in the fix"; the earlier method's lines-of-evidence step.
+- Revise by restructuring.
+  - Prevents: a critique answered by annotation, so the tree never changes shape. Evidence: tree-skill diagnosis of 27 October, line 6.
+- When a check or a critique finds a gap, an overlap or a node doing two jobs, add, split, move or merge nodes; never fix a tree by adding words to a node.
+  - Prevents: the critique round doubling node text instead of changing the structure (Q1: Q0 113 to 182 words, Q2 34 to 79, Q3.3 40 to 77). Evidence: tree-skill diagnosis of 27 October, "The critique round" and lines 5 and 6.
