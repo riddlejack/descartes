@@ -51,6 +51,11 @@ def _read_json(path: Path) -> Any:
         return None
 
 
+def _usage_stopped(run_dir: Path) -> bool:
+    state = _read_json(run_dir / STATE)
+    return isinstance(state, dict) and bool(state.get("usage_limited"))
+
+
 def _lead_started(run_dir: Path) -> float | None:
     for e in jsonl.read_all(run_dir / "events.jsonl"):
         if e.get("event") == "session_launched" and e.get("role") == "lead":
@@ -140,6 +145,10 @@ def decide(hook: dict[str, Any], run_dir: Path, *, clock: Callable[[], float] = 
     lead = (state.get("lead") or {}) if isinstance(state, dict) else {}
     if not session or session != lead.get("session_id"):
         return StopDecision(False, "", {"why": "not the lead's session"})
+    if _usage_stopped(run_dir):
+        # The supervisor stops launching checks at a usage stop and recovers the run
+        # after the reset: waiting here would only burn the lead's time (review #3).
+        return StopDecision(False, "", {"why": "a usage stop: the supervisor recovers"})
     run = _read_json(run_dir / "run.json") or {}
     if run.get("stop_after") == "frame":
         return StopDecision(False, "", {"why": "frame-only run"})
@@ -147,20 +156,30 @@ def decide(hook: dict[str, Any], run_dir: Path, *, clock: Callable[[], float] = 
 
     if Register.read_only(run_dir).release_state() == "released":
         return StopDecision(False, "", {"why": "released"})
-    started = _lead_started(run_dir)
+    from stemma.driver.leadtime import lead_time_left
+
     limit = float((run.get("limits") or {}).get("lead_max_s", 24 * 3600.0))
-    if started is not None and clock() - started >= limit:
+    # The lead's cumulative execution time, as the driver counts it: pauses between
+    # sessions (usage waits) are not work (review #2).
+    left = lead_time_left(run_dir, limit, now=clock())
+    if left <= 0:
         return StopDecision(False, "", {"why": "the lead's time limit has passed"})
     previous = _read_json(run_dir / HOOK_STATE) or {}
+    launch = int(lead.get("launches", 0))
+    if int(previous.get("launch", launch)) != launch:
+        previous = {}  # a new driver-authorised launch starts its idle count afresh (#7)
     before = progress_signature(run_dir)
     flight = in_flight(run_dir)
+    limit_at = clock() + left
     if any(flight.values()):
-        deadline = clock() + wait_s
-        if started is not None:
-            deadline = min(deadline, started + limit)  # never past the lead's time limit
+        deadline = min(clock() + wait_s, limit_at)
         while clock() < deadline and progress_signature(run_dir) == before:
-            sleep(POLL_S)
+            if _usage_stopped(run_dir):
+                return StopDecision(False, "", {"why": "a usage stop: the supervisor recovers"})
+            sleep(max(0.0, min(POLL_S, deadline - clock())))  # never past the deadline (#6)
         flight = in_flight(run_dir)
+    if clock() >= limit_at:
+        return StopDecision(False, "", {"why": "the lead's time limit has passed"})
     after = progress_signature(run_dir)
     last = tuple(tuple(x) for x in previous.get("signature") or ())
     idle = int(previous.get("idle", 0)) + 1 if after == last else 0
@@ -169,6 +188,6 @@ def decide(hook: dict[str, Any], run_dir: Path, *, clock: Callable[[], float] = 
     from stemma.driver import hostio
 
     hostio.write_json(run_dir, HOOK_STATE, {"signature": [list(x) for x in after],
-                                            "idle": idle,
+                                            "idle": idle, "launch": launch,
                                             "refusals": int(previous.get("refusals", 0)) + 1})
     return StopDecision(True, reason_text(flight), {"in_flight": flight, "idle": idle})
