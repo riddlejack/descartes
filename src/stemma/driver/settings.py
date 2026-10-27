@@ -47,9 +47,12 @@ CLAIM_CHECKER_DENY: Final = (
     "branches/**/record.md", "branches/**/order.md", "branches/**/restatement.md",
 )
 # The idea generator reads task/ only (the hook allows three files there; this is the
-# harness-side backstop). Invariant: brief T3.
+# harness-side backstop). Invariant: brief T3. Never framer/ as a folder: the harness's
+# read denial also refuses writes, and framer/ideas.md is the one file it writes (the
+# first live run, 20261027-172220-5afcb1, lost its tree that way).
 IDEA_GENERATOR_DENY: Final = (
-    "frame.md", "intake.md", "criteria.md", "history/", "tree.json", "tree.md", "framer/",
+    "frame.md", "intake.md", "criteria.md", "history/", "tree.json", "tree.md",
+    "framer/own-frame.md", "framer/critique.md", "framer/lead-response.md",
     "branches/", "draft/", "deliverable/", "reviews/", "analysis/", "register/", "store/",
     "checks/",
 )

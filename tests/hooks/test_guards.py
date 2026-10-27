@@ -94,6 +94,15 @@ def test_the_idea_generator_reads_nothing_the_run_made(run_dir: Path, rel: str) 
     assert r.returncode == 2 and r.stderr.startswith("Refused"), rel
 
 
+def test_no_harness_denial_covers_the_idea_list_its_writer_must_write(run_dir: Path) -> None:
+    from stemma.driver import settings as st
+    deny = st.read_denials(run_dir, "idea-generator", "ideas:own")
+    for pattern in deny:
+        folder = pattern.endswith("/") and "framer/ideas.md".startswith(pattern)
+        assert pattern != "framer/ideas.md" and not folder, pattern
+    assert {"frame.md", "framer/own-frame.md", "framer/critique.md"} <= set(deny)
+
+
 def test_the_blind_frame_cannot_read_the_idea_list(run_dir: Path) -> None:
     from stemma.driver import settings as st
     assert "framer/ideas.md" in st.read_denials(run_dir, "blind-framer", "frame:own")
