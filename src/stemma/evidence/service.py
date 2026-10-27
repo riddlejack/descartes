@@ -621,12 +621,15 @@ class EvidenceService:
 
     def _sec_capture(self, ref: FilingRef, document: str | None, reason: str) -> dict[str, Any]:
         receipt = self._base_receipt("sec", reason)
-        receipt["sec"] = dict(ref.as_dict(), document=document or ref.primary_document)
         as_of = receipt["as_of"]
         if as_of is not None and ref.filing_date >= as_of:
+            # Nothing about the filing but the accession the agent gave: its form,
+            # company and date are information from on or after as_of (CONTRACTS 0d).
+            receipt["sec"] = {"accession": ref.accession}
             receipt["status"] = CaptureStatus.FILED_AFTER_AS_OF
-            receipt["detail"] = f"filed {ref.filing_date}, not before as_of {as_of}"
+            receipt["detail"] = f"not filed before as_of {as_of}"
             return self._finish(receipt, None, None)
+        receipt["sec"] = dict(ref.as_dict(), document=document or ref.primary_document)
         url = ref.document_url(document)
         receipt["requested_url"] = url
 

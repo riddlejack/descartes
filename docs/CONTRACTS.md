@@ -371,8 +371,10 @@ D1 to D10); where an older line below disagrees, section 0 wins.
 - **The shell.** Every session's sandbox has `network.allowedDomains: []`,
   `allowUnsandboxedCommands: false` and `failIfUnavailable: true`, as in every run.
 - **The broker.** Every other path to the network runs in the MCP server: `capture`
-  takes an archived copy dated before `as_of` (section 4), the `sec_*` tools keep only
-  filings dated before it, and discovery is `find_archived` (below).
+  takes an archived copy dated before `as_of` (section 4), and the `sec_*` tools keep
+  only filings dated before it. A refusal says nothing dated on or after `as_of`: a
+  `sec_capture` of a later filing returns only the accession it was given, never the
+  filing's form, company, document or date.
 
 ## 1. Parts and owners
 - **A. Evidence service:** `src/stemma/evidence/`, `tests/evidence/`.
