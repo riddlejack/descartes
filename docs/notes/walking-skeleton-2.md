@@ -38,7 +38,7 @@ A release after the third review round, with the last round's points listed in
   - a lead launch stopped after 4 hours;
   - at most 3 launches per check request;
   - `max_review_rounds` 3.
-- Harness: Claude Code 2.1.308, the clean config (signed into the new account), the real
+- Harness: Claude Code 2.1.308, the clean config (a signed-in Claude Code configuration), the real
   evidence service, the merged plugin with part C's v0.3.1 texts, and part B's register,
   guards and driver.
 

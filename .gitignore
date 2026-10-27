@@ -11,3 +11,17 @@ cache/
 node_modules/
 .claude/settings.local.json
 .claude/worktrees/
+.env.*
+*.env
+!.env.example
+*.db
+*.sqlite
+*.sqlite3
+.DS_Store
+runs-local/
+.claude/.cc-writes/
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+*-journal

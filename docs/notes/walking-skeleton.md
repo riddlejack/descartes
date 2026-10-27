@@ -72,7 +72,8 @@ steps (29 refusals), all fixed during the run (listed below).
 The run also straddled the account's five-hour usage stop and was resumed twice.
 
 The run folder is kept as a recording of a real run that did not release, for the
-sample pack: `~/.private/runs/stemma2-walking-skeleton/20261026-070412-2b3c98` (a
+sample pack: `<runs>/stemma2-walking-skeleton/20261026-070412-2b3c98`, outside the
+repository (a
 byte-identical copy of the scratch run folder; 11,624 files). Its last draft is
 `register/drafts/answer.v11.md`; there is no `deliverable/answer.md`.
 

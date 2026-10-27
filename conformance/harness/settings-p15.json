@@ -2,5 +2,5 @@
  "permissions": {"allow": ["Bash"]},
  "sandbox": {"enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false, "autoAllowBashIfSandboxed": true,
    "network": {"allowedDomains": []},
-   "filesystem": {"denyRead": ["<HOME>", "<HOME>/Desktop/stemma-2/.claude/worktrees/part-b-register-guards-driver-bd46bc/runs"],
-                  "allowRead": ["<HOME>/Desktop/stemma-2/.claude/worktrees/part-b-register-guards-driver-bd46bc/runs/p15/cwd", "<HOME>/Desktop/stemma-2/.claude/worktrees/part-b-register-guards-driver-bd46bc/.venv", "<HOME>/Desktop/stemma-2/.claude/worktrees/part-b-register-guards-driver-bd46bc/src"]}}}
+   "filesystem": {"denyRead": ["<HOME>", "<REPO>/runs"],
+                  "allowRead": ["<REPO>/runs/p15/cwd", "<REPO>/.venv", "<REPO>/src"]}}}

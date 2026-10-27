@@ -4,6 +4,9 @@ World Model's own conformance runner, unmodified, passes all eight of its checks
 against the Python engine that the claim register imports (`stemma.register.wm`),
 through a bridge that holds no World Model logic.
 
+Local absolute paths in the recorded output below are replaced by placeholders
+(`<REPO>` for this repository, `<TMPDIR>` for the system temporary folder).
+
 ## The command
 
 From the repository root:
@@ -33,7 +36,7 @@ Environment of the recorded run: Node v24.14.1, tsx 4.23.0 (pinned in
 ## Passing output (exit code 0)
 
     
-    World Model conformance: implementation = <HOME>/Desktop/stemma-2/.claude/worktrees/part-b-register-guards-driver-bd46bc/conformance/bridge.ts
+    World Model conformance: implementation = <REPO>/conformance/bridge.ts
     
       PASS sid-001 stable ids: diacritics and NBSP normalize identically (NFKD + strip marks)
       PASS sid-002 stable ids: distinct names stay distinct (no over-normalization)
@@ -118,7 +121,7 @@ Breakage 1: the auto-merge boundary read as `>` instead of `>=`.
              return "review"
 
     
-    World Model conformance: implementation = <HOME>/Desktop/stemma-2/.claude/worktrees/part-b-register-guards-driver-bd46bc/conformance/bridge.ts
+    World Model conformance: implementation = <REPO>/conformance/bridge.ts
     
       PASS sid-001 stable ids: diacritics and NBSP normalize identically (NFKD + strip marks)
       PASS sid-002 stable ids: distinct names stay distinct (no over-normalization)
@@ -150,7 +153,7 @@ Breakage 2: a new open edge no longer closes the old one.
                          "validTo" in other
 
     
-    World Model conformance: implementation = <HOME>/Desktop/stemma-2/.claude/worktrees/part-b-register-guards-driver-bd46bc/conformance/bridge.ts
+    World Model conformance: implementation = <REPO>/conformance/bridge.ts
     
       PASS sid-001 stable ids: diacritics and NBSP normalize identically (NFKD + strip marks)
       PASS sid-002 stable ids: distinct names stay distinct (no over-normalization)
@@ -182,7 +185,7 @@ Breakage 3: a write without provenance is given a default one instead of refused
          if not isinstance(source, Mapping):
 
     
-    World Model conformance: implementation = <HOME>/Desktop/stemma-2/.claude/worktrees/part-b-register-guards-driver-bd46bc/conformance/bridge.ts
+    World Model conformance: implementation = <REPO>/conformance/bridge.ts
     
       PASS sid-001 stable ids: diacritics and NBSP normalize identically (NFKD + strip marks)
       PASS sid-002 stable ids: distinct names stay distinct (no over-normalization)
@@ -207,7 +210,7 @@ was written. Output:
 
 ```
 
-World Model conformance: implementation = <HOME>/Desktop/stemma-2/.claude/worktrees/part-b-register-guards-driver-bd46bc/conformance/bridge.ts
+World Model conformance: implementation = <REPO>/conformance/bridge.ts
 
   PASS sid-001 stable ids: diacritics and NBSP normalize identically (NFKD + strip marks)
   PASS sid-002 stable ids: distinct names stay distinct (no over-normalization)
@@ -219,5 +222,5 @@ World Model conformance: implementation = <HOME>/Desktop/stemma-2/.claude/worktr
   PASS audit-001 every mutation writes an audit entry in order
 
   8/8 checks passed
-file logs written: 5 (in /var/folders/9r/k5rv44qj39bdsvrj04pwz1480000gn/T//wm-conformance-file.DZF3X0)
+file logs written: 5 (in <TMPDIR>/wm-conformance-file.DZF3X0)
 ```

@@ -1,17 +1,30 @@
 #!/usr/bin/env bash
-# Finish the local Zetaris install, after the owner has run the registry sign-in
+# Finish the local Zetaris install, after the account holder has run the registry sign-in
 # (`docker login zetarishackathon.azurecr.io`, pasted from the Zetaris download page).
 #
-# Run:  bash ~/.private/zetaris/finish-install.sh
+# Run:  STEMMA_ZETARIS_HOME=<folder> bash hackathon/zetaris/finish-install.sh
+# where <folder> is outside the repository and holds the unzipped bundle in
+# zetaris-platform/ (and later admin.txt and stemma.env).
 #
 # It runs Zetaris's own preflight, pulls the images (about 4 GB), starts the stack,
 # waits for Zetaris's own verify.sh to pass (the first start under emulation can take
 # 30 minutes or more), and connects Stemma's evidence database to Zetaris's network.
-# Everything it prints also goes to ~/.private/zetaris/install.log. It never prints
+# Everything it prints also goes to $STEMMA_ZETARIS_HOME/install.log. It never prints
 # a password.
 set -euo pipefail
 
-Z="$HOME/.private/zetaris"
+Z="${STEMMA_ZETARIS_HOME:?set STEMMA_ZETARIS_HOME to the folder that holds zetaris-platform/}"
+if [ ! -d "$Z" ]; then
+    echo "STEMMA_ZETARIS_HOME is not a folder: $Z" >&2
+    exit 2
+fi
+# Absolute from here on: the script changes directory below, and a relative path would
+# then point somewhere else.
+Z="$(cd "$Z" && pwd -P)"
+if [ ! -d "$Z/zetaris-platform" ]; then
+    echo "No Zetaris bundle at $Z/zetaris-platform (STEMMA_ZETARIS_HOME=$Z)." >&2
+    exit 2
+fi
 P="$Z/zetaris-platform"
 LOG="$Z/install.log"
 # Resource limit: how long to wait for the first start (90 checks, 30 s apart).
@@ -50,14 +63,14 @@ else
     echo "stemma-evidence-pg connected to Zetaris's network (zetaris_default)."
 fi
 
-cat <<'EOF'
+cat <<EOF
 
-Zetaris is running. One last step for the owner (about 2 minutes):
+Zetaris is running. One last step for the account holder (about 2 minutes):
   1. Open http://localhost:3300 and sign in with the email and password in
-     ~/.private/zetaris/admin.txt
+     $Z/admin.txt
   2. Sidebar: Management -> API Tokens -> "+" -> copy the key (shown once).
-  3. Add this line to ~/.private/zetaris/stemma.env:  ZETARIS_API_KEY=<the key>
+  3. Add this line to $Z/stemma.env:  ZETARIS_API_KEY=<the key>
   4. Sidebar: Management -> Organisation. If the ID is not 1, also add
      ZETARIS_ORG_ID=<the ID> to the same file.
-Then tell the orchestrator; builder D registers the semantic layer and runs the tests.
+Then run the checks and live tests in hackathon/zetaris/README.md.
 EOF

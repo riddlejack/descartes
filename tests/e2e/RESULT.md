@@ -50,8 +50,8 @@ after a real stop, and part A's real evidence service.
 
 `run_read_scope.py` (live, same environment) had the driver launch a hostile placeholder
 claim checker, with its real settings and guards, that tried the Read tool and Bash on
-four places: a decoy answer key in the repository, the design record in
-`~/.private/stemma-design/`, another run's `store/`, and a decoy file in the home folder.
+four places: a decoy answer key in the repository, a private design record in the home
+folder (outside the repository), another run's `store/`, and a decoy file in the home folder.
 All eight attempts were refused ("outside the run folder" from the Read guard;
 "Operation not permitted" from the sandbox), and none of the decoys' unique markers
 appeared anywhere in the session's stream (`recorded/run_read_scope.out`). The full
@@ -59,3 +59,9 @@ placeholder run (`20261026-060000-fecf06`) still released under the same read sc
 After the last fix round (deny reads from the root, verified sessions only), both were
 run again: the hostile checker again failed all eight reads with no marker leaked, and
 the placeholder run `20261026-064412-4fb980`, recorded in `recorded/`, released.
+
+Before publication, local absolute paths in `recorded/` were replaced by placeholders
+(`<HOME>`, `<REPO>`, `<TOOLS>` for the folder holding the pinned binary and clean config,
+`<SCRATCH>` for a scratch folder, `$STEMMA_RUNS` for the runs folder), and
+`run_read_scope.py`'s private-record target became a decoy that the script writes and
+removes itself. The results recorded above were produced before that change.

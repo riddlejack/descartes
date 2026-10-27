@@ -1,8 +1,9 @@
 # Harness probes (builder B), Claude Code 2.1.308, clean config
 
 Every answer below was shown by a tiny headless run of the pinned binary
-(`~/.private/runs/tools/claude-code-2.1.308/node_modules/.bin/claude`) with
-`CLAUDE_CONFIG_DIR=~/.private/runs/tools/claude-clean-config`, launched with
+(`<TOOLS>/claude-code-2.1.308/node_modules/.bin/claude`, the `STEMMA_CLAUDE_BIN`) with
+`CLAUDE_CONFIG_DIR=<TOOLS>/claude-clean-config` (the `STEMMA_CLAUDE_CONFIG`; how to
+make one is in `.env.example`), launched with
 `--plugin-dir <probe plugin named "stemma">`, `--agent stemma:lead`, `-p`,
 `--output-format stream-json --verbose`. The probe kit (plugin, hooks, MCP server,
 settings files, runner) and each run's `out.jsonl` and `probe.log` are in

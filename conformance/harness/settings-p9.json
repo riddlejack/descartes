@@ -1,8 +1,8 @@
 {"syncClaudeAiPlugins": false, "syncClaudeAiSkills": false, "disableClaudeAiConnectors": true,
  "disableBundledSkills": true,
  "enabledPlugins": {"cc-plugin-agents-md@builtin": false, "cc-plugin-telemetry@builtin": false, "cc-plugin-plugin-authoring@builtin": false},
- "permissions": {"deny": ["WebFetch", "Agent(fork)", "Read(/<SCRATCH>)", "Edit(/<SCRATCH>)", "Write(/<SCRATCH>)"],
+ "permissions": {"deny": ["WebFetch", "Agent(fork)", "Read(/<PROBE_RUNS>/p9/cwd/secret/**)", "Edit(/<PROBE_RUNS>/p9/cwd/register/**)", "Write(/<PROBE_RUNS>/p9/cwd/register/**)"],
                  "allow": ["Bash", "Read", "Grep", "Glob", "Write", "Edit"]},
  "sandbox": {"enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false, "autoAllowBashIfSandboxed": true,
    "network": {"allowedDomains": []},
-   "filesystem": {"denyWrite": ["<SCRATCH>", "<SCRATCH>"], "denyRead": ["<SCRATCH>"]}}}
+   "filesystem": {"denyWrite": ["<PROBE_RUNS>/p9/cwd/register", "<PROBE_RUNS>/p9/cwd/run.json"], "denyRead": ["<PROBE_RUNS>/p9/cwd/secret"]}}}
