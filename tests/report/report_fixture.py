@@ -115,10 +115,17 @@ EXCLUDED = ["events.jsonl", "status.json", "status.html", "usage.jsonl", "usage.
 
 
 def seal(run_dir: Path) -> str:
-    """Write release/manifest.json as finish_run will (stemma-release-manifest/1) and
-    return its SHA-256. Test-only stand-in for W2's writer."""
+    """Write release/manifest.json as finish_run does (stemma-release-manifest/1) and
+    return its SHA-256: with the register's own `manifest.seal` once merged, else a
+    test-only stand-in for it."""
     import fnmatch
     import hashlib
+
+    from stemma.report.compat import w2
+
+    w2_seal = w2("stemma.register.manifest", "seal")
+    if w2_seal is not None:
+        return str(w2_seal(run_dir, 1, "20300101-000000-abcdef")["manifest_sha256"])
 
     def excluded(rel: str) -> bool:
         return any(fnmatch.fnmatchcase(rel, p) or (p.startswith("**/") and

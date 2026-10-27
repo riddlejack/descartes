@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from stemma.report import safefs
+from stemma.report.compat import w2
 from stemma.report.errors import RunReadError
 
 LOG: Final = "register/log.jsonl"
@@ -41,6 +42,12 @@ class Log:
 
 def read_log(run_dir: Path) -> Log:
     data = safefs.read_bytes(run_dir, LOG, LOG_MAX_BYTES)
+    parse_log = w2("stemma.register.manifest", "parse_log")
+    if parse_log is not None:  # the register's own parser: a torn or corrupt line refused
+        try:
+            parse_log(data)
+        except w2("stemma.register.manifest", "LogError") as exc:
+            raise RunReadError(str(exc)) from exc
     if data and not data.endswith(b"\n"):
         tail = len(data) - (data.rfind(b"\n") + 1)
         raise RunReadError(f"{LOG} ends with {tail:,} bytes after its last newline (an "

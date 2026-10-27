@@ -53,6 +53,7 @@ from stemma.evidence.errors import EvidenceError
 from stemma.evidence.quotes import find_quote
 from stemma.register.derivation import DerivationError
 from stemma.report import ledger, runread, safefs
+from stemma.report.compat import w2
 from stemma.report.errors import RunReadError
 from stemma.report.runread import FINAL_REVIEW_FILES, RUN_ENTITY, Run
 
@@ -144,7 +145,8 @@ def summary_line(s: Section) -> str:
         "captures": f"{_n(s.done)} captures re-hashed against their receipts, {bad} changed",
         "texts": f"{_n(s.done)} stored texts present at their recorded length, {bad} differ",
         "quotations": f"{_n(s.done)} quotations re-checked in the stored text, {bad} missing",
-        "calculations": f"{_n(s.done)} calculations re-run in the sandbox, {bad} differ",
+        "calculations": f"{_n(s.done)} calculations re-run in the sandbox, {bad} differ"
+                        + (f"; {s.extra}" if s.extra else ""),
         "log": f"{s.extra}; {_n(s.done)} claim ids match their content, {bad} differ",
         "fingerprints": f"{_n(s.done)} recorded files re-hashed (drafts, frames, reviews, "
                         f"branch records), {bad} changed",
@@ -201,6 +203,17 @@ def check_seal(run_dir: Path, log: ledger.Log | None, expect: str | None,
         man = json.loads(raw)
     except (ValueError, RecursionError):
         sec.failures.append(f"{MANIFEST} is not JSON.")
+        return sec
+    pin = "pinned outside the run" if seal.state == "pinned" else (
+        "the run's own manifest, not pinned: pass --expect <sha256> with a digest kept "
+        "outside the run folder")
+    w2_check = w2("stemma.register.manifest", "check")
+    if w2_check is not None:  # the register's own check, as finish_run sealed it
+        sec.failures += [f"{line}." for line in w2_check(run_dir, expect)
+                         if "not the pinned" not in line]
+        files = man.get("files") if isinstance(man, dict) else None
+        sec.done = len(files) if isinstance(files, list) else 0
+        sec.extra = f"{_n(sec.done)} sealed files, the log among them, re-hashed against {pin}"
         return sec
     if not isinstance(man, dict) or man.get("format") != MANIFEST_FORMAT:
         sec.failures.append(f"{MANIFEST} is not a {MANIFEST_FORMAT} manifest.")
@@ -262,9 +275,6 @@ def check_seal(run_dir: Path, log: ledger.Log | None, expect: str | None,
         sec.done += 1
     elif log_path is None:
         sec.failures.append(f"{MANIFEST} does not seal the register's log.")
-    pin = "pinned outside the run" if seal.state == "pinned" else (
-        "the run's own manifest, not pinned: pass --expect <sha256> with a digest kept "
-        "outside the run folder")
     sec.extra = (f"{_n(sec.done)} sealed files and the log re-hashed against {pin}"
                  + (f"; {appended} log transaction(s) appended after the release"
                     if appended else ""))
@@ -441,6 +451,19 @@ def _imported_names(source: bytes) -> set[str]:
     return names
 
 
+def bundle_for(run_dir: Path, script: str) -> Any:
+    """The re-run bundle of an `analysis/` script: W2's `build_bundle` (the code
+    `file_claim` runs) once merged, else this module's stop-gap `code_bundle`."""
+    build = w2("stemma.register.derivation", "build_bundle")
+    if build is None:
+        return code_bundle(run_dir, script)
+    try:
+        safefs.parts(script)
+    except RunReadError as exc:
+        raise DerivationError(f"script {script!r} is not a .py file in analysis/") from exc
+    return build(run_dir, script)
+
+
 def code_bundle(run_dir: Path, script: str) -> Any:
     """STOP-GAP, to be replaced by W2's public bundle builder in
     `stemma.register.derivation` once both branches are merged, so that verify and
@@ -502,67 +525,118 @@ def experiment_key(code: Any, values: dict[str, float], documents: dict[str, str
 Memo = dict[str, Any]  # experiment key -> the re-run's result
 
 
+def memoized(fn: Rerunner, memo: Memo | None) -> Rerunner:
+    """`fn`, reusing a result when the code, inputs and documents are byte-identical to a
+    re-run already done in this process (the tamper demo's second pass)."""
+    if memo is None:
+        return fn
+
+    def run(code: Any, values: dict[str, float], documents: dict[str, str] | None = None
+            ) -> Any:
+        key = experiment_key(code, values, documents or {})
+        if key not in memo:
+            memo[key] = fn(code, values, documents) if documents else fn(code, values)
+        return memo[key]
+
+    return run
+
+
+class _Evidence:
+    """The stored text of a receipt, read confined and bounded, in the shape the
+    register's re-run asks for (`read_text`; QuoteCheckFailed when there is none)."""
+
+    def __init__(self, run: Run) -> None:
+        self.run = run
+
+    def read_text(self, run_dir: Path, receipt_id: str) -> str:
+        from stemma.register.evidence_port import QuoteCheckFailed
+
+        rec = runread.receipt(self.run.dir, receipt_id)
+        text = runread.stored_text(self.run.dir, rec) if rec else None
+        if text is None:
+            raise QuoteCheckFailed(f"receipt {receipt_id} has no stored text")
+        return text
+
+
 def _rerun_one(run: Run, c: dict[str, Any], rerun_fn: Rerunner,
-               memo: Memo | None = None) -> tuple[str | None, str | None]:
-    """(failure, not-run reason) for one estimated claim; both None when it reproduced.
-    With a memo, a re-run whose code, inputs and documents are byte-identical to one
-    already run in this process reuses that result (the tamper demo's second pass)."""
+               memo: Memo | None = None) -> tuple[str | None, str | None, str | None]:
+    """(failure, not-run reason, note) for one estimated claim; failure and not-run are
+    None when it reproduced. The note says the working copy in analysis/ no longer
+    matches the bundle filed with the claim (the re-run used the filed copy)."""
     try:
-        return _rerun_checked(run, c, rerun_fn, memo)
+        return _rerun_checked(run, c, memoized(rerun_fn, memo))
     except RunReadError as exc:
-        return f"{_cid(c)}: {exc}.", None
+        return f"{_cid(c)}: {exc}.", None, None
     except MALFORMED as exc:
-        return f"{_cid(c)}: a record is not in its expected shape ({type(exc).__name__}).", None
+        return (f"{_cid(c)}: a record is not in its expected shape ({type(exc).__name__}).",
+                None, None)
 
 
-def _rerun_checked(run: Run, c: dict[str, Any], rerun_fn: Rerunner,
-                   memo: Memo | None) -> tuple[str | None, str | None]:
-    deriv = c.get("derivation") or {}
-    value = c.get("value") or {}
-    script = deriv.get("script")
-    if not isinstance(script, str):
-        return f"{_cid(c)}: an estimated claim with no recorded script.", None
-    try:
-        code = code_bundle(run.dir, script)
-    except DerivationError as exc:
-        return f"{_cid(c)}: {script} cannot be re-run: {exc}.", None
-    values: dict[str, float] = {}
-    for given in deriv.get("inputs") or []:
+def _lookup(run: Run) -> Callable[[str], tuple[str, float]]:
+    from stemma.register.filing import Refused
+
+    def lookup(given: str) -> tuple[str, float]:
         inp = run.claim(str(given))
         number = (inp or {}).get("value", {}) or {}
         num = number.get("number") if isinstance(number, dict) else None
         if inp is None or not isinstance(num, int | float) or isinstance(num, bool):
-            return f"{_cid(c)}: input {given} is not a claim with a number.", None
-        values[str(inp["claim_id"])] = float(num)
-    documents: dict[str, str] = {}
-    for rid in deriv.get("documents") or []:
-        rec = runread.receipt(run.dir, rid)
-        text = runread.stored_text(run.dir, rec) if rec else None
-        if text is None:
-            return f"{_cid(c)}: document {rid} named by {script} has no stored text.", None
-        documents[str(rid)] = text
-    key = experiment_key(code, values, documents)
+            raise Refused(f"Refused: input {given} is not a claim with a number.")
+        return str(inp["claim_id"]), float(num)
+
+    return lookup
+
+
+def _rerun_checked(run: Run, c: dict[str, Any], fn: Rerunner
+                   ) -> tuple[str | None, str | None, str | None]:
+    from stemma.register.filing import Refused
+
+    deriv = c.get("derivation") or {}
+    value = c.get("value") or {}
+    script = deriv.get("script")
+    if not isinstance(script, str):
+        return f"{_cid(c)}: an estimated claim with no recorded script.", None, None
+    filed = deriv.get("bundle_sha256")
+    rerun_filed = w2("stemma.register.filing", "rerun_filed")
+    note = None
     try:
-        if memo is not None and key in memo:
-            rr = memo[key]
+        if isinstance(filed, str) and rerun_filed is not None:
+            # v0.4: the bundle filed with the claim, from the store, as file_claim ran it
+            rr = rerun_filed(run.dir, c, _lookup(run), _Evidence(run), fn)
+            try:
+                if bundle_for(run.dir, script).sha256 != filed:
+                    note = f"{_cid(c)}: {script} in analysis/ differs from the filed copy"
+            except DerivationError:
+                note = f"{_cid(c)}: {script} is no longer in analysis/"
         else:
-            rr = rerun_fn(code, values, documents) if documents else rerun_fn(code, values)
-            if memo is not None:
-                memo[key] = rr
+            # A claim filed before bundles were stored: the script as it is now.
+            code = bundle_for(run.dir, script)
+            lookup = _lookup(run)
+            values = dict(lookup(str(g)) for g in deriv.get("inputs") or [])
+            documents: dict[str, str] = {}
+            for rid in deriv.get("documents") or []:
+                rec = runread.receipt(run.dir, rid)
+                text = runread.stored_text(run.dir, rec) if rec else None
+                if text is None:
+                    return ((f"{_cid(c)}: document {rid} named by {script} has no stored "
+                            f"text."), None, None)
+                documents[str(rid)] = text
+            rr = fn(code, values, documents) if documents else fn(code, values)
+    except Refused as exc:
+        return f"{_cid(c)}: {str(exc).removeprefix('Refused: ')}", None, None
     except DerivationError as exc:
         if "sandbox-exec is not available" in str(exc):
-            return None, f"{_cid(c)}: {exc}"
-        return f"{_cid(c)}: {script} could not be re-run: {exc}.", None
+            return None, f"{_cid(c)}: {exc}", None
+        return f"{_cid(c)}: {script} could not be re-run: {exc}.", None, None
     if rr.number is None:
         last = [ln.strip() for ln in str(rr.stderr_tail).splitlines() if ln.strip()]
         why = f" Its last error line: {last[-1][:200]}" if last else ""
         return ((f"{_cid(c)}: {script} reported no result on re-run (exit {rr.exit_code})."
-                f"{why}"), None)
+                f"{why}"), None, note)
     want = value.get("number")
     if not isinstance(want, int | float) or rr.number != float(want):
         return ((f"{_cid(c)}: {script} now reports {rr.number!r}; the claim says "
-                f"{value.get('number')!r}."), None)
-    return None, None
+                f"{value.get('number')!r}."), None, note)
+    return None, None, note
 
 
 def check_calculations(run: Run, rerun_fn: Rerunner | None = None,
@@ -574,13 +648,18 @@ def check_calculations(run: Run, rerun_fn: Rerunner | None = None,
     todo = [c for c in run.claims.values() if c.get("tier") == "estimated"]
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         results = list(pool.map(lambda c: _rerun_one(run, c, fn, memo), todo))
-    for failure, not_run in results:
+    drifted = 0
+    for failure, not_run, note in results:
+        drifted += note is not None
         if not_run:
             sec.not_run.append(not_run)
             continue
         sec.done += 1
         if failure:
             sec.failures.append(failure)
+    if drifted:
+        sec.extra = (f"{drifted} re-run from the copy filed with the claim, whose working "
+                     f"copy in analysis/ has changed since")
     return sec
 
 
