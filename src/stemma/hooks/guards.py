@@ -171,6 +171,45 @@ def guard_lead_tool(hook: dict[str, Any]) -> Decision | None:
     return None
 
 
+# --- An as_of run sees no live web (CONTRACTS section 0d) ------------------------------
+
+# Built-in tools that reach the live web; the driver also leaves them out of an as_of
+# run's sessions. Invariant: what they return may postdate the run's as_of date.
+LIVE_WEB_TOOLS = frozenset({"WebSearch", "WebFetch"})
+
+
+def run_as_of(run_dir: Path) -> str | None:
+    """run.json's `as_of` (driver-written, tool-only), or None. Raises GuardInputError
+    when run.json is missing or unreadable, or its as_of is not a date: the caller
+    then refuses, so a broken run.json never opens the live web."""
+    try:
+        value = json.loads((run_dir / "run.json").read_text(encoding="utf-8")).get("as_of")
+    except (OSError, ValueError, AttributeError) as exc:
+        raise GuardInputError(f"run.json cannot be read: {exc}") from exc
+    if value is None:
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise GuardInputError(f"run.json as_of is not a YYYY-MM-DD date: {value!r}")
+    return value
+
+
+def guard_live_web(hook: dict[str, Any], run_dir: Path) -> Decision | None:
+    """A refusal when a live web tool is called in an as_of run, or when run.json cannot
+    say whether the run is one; None otherwise. Every caller, subagents included."""
+    tool = hook.get("tool_name")
+    if tool not in LIVE_WEB_TOOLS:
+        return None
+    try:
+        as_of = run_as_of(run_dir)
+    except GuardInputError as exc:
+        return refuse(hook, f"Refused: {tool} is not available: whether this run has an "
+                            f"as_of date cannot be read ({exc}).")
+    if as_of is None:
+        return None
+    return refuse(hook, f"Refused: this run is as of {as_of}; {tool} reaches the live web, "
+                        f"which may show what happened after that date.")
+
+
 def lead_read_refusal(rel: PurePosixPath) -> str | None:
     text = str(rel)
     if any(r.fullmatch(text) for r in _LEAD_READ_RES):

@@ -40,7 +40,7 @@ from stemma.driver.config import (
 from stemma.driver.errors import DriverBusy, DriverError, HarnessError, RunStateError
 from stemma.driver.launch import LaunchSpec, Session, expectation, launch
 from stemma.driver.runfolder import load_run
-from stemma.driver.settings import ToolSets, tools_for_role
+from stemma.driver.settings import ToolSets, tools_for_role, without_live_web
 from stemma.register import checks_api, roles, safeio
 
 # Checking roles the driver may start (invariant: section 2), short names.
@@ -344,11 +344,14 @@ class Driver:
               request_id: str | None) -> LaunchSpec:
         m = self.models[role]
         tools: ToolSets = tools_for_role(role, self.tools)
+        as_of = self.run.get("as_of") or None
+        if as_of:
+            tools = without_live_web(tools)
         # The lead starts no worker under s2 single_loop, nor in a frame-only run.
         deny_agent = role == "lead" and (self.run["switches"]["s2_shape"] == "single_loop"
                                          or self.stop_after == "frame")
         return LaunchSpec(name, role, prompt, m["model"], m["effort"], session_id, resume,
-                          tools, request_id, deny_agent)
+                          tools, request_id, deny_agent, as_of)
 
     def start_lead(self, resume: bool) -> None:
         lead = self.state["lead"]

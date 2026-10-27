@@ -36,6 +36,9 @@ DENIED_AGENT_TYPES: Final = (
     "fork", "general-purpose", "Explore", "Plan", "claude", "statusline-setup",
     "claude-code-guide",
 )
+# Built-in tools that reach the live web. A session of an as_of run has neither (CONTRACTS
+# section 0d): what they return may show information dated after as_of. Invariant.
+LIVE_WEB_TOOLS: Final = frozenset({"WebFetch", "WebSearch"})
 _TOOL = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\(.*\))?$")
 
 # What the blind roles may not read (section 6), as run-relative patterns. A trailing "/"
@@ -108,6 +111,15 @@ def tools_for_role(role: str, agent_tools: dict[str, list[str]]) -> ToolSets:
     sets = split_tools(lists)
     main = tuple(sorted({t.split("(", 1)[0] for t in own if not t.startswith("mcp__")}))
     return ToolSets(sets.builtin, sets.allow, main)
+
+
+def without_live_web(tools: ToolSets) -> ToolSets:
+    """The session's tools less every live web tool, by name or as a rule (as_of runs)."""
+    def keep(t: str) -> bool:
+        return t.split("(", 1)[0] not in LIVE_WEB_TOOLS
+    return ToolSets(tuple(t for t in tools.builtin if keep(t)),
+                    tuple(t for t in tools.allow if keep(t)),
+                    tuple(t for t in tools.main if keep(t)))
 
 
 def _abs(run_dir: Path, pattern: str) -> str:
@@ -259,11 +271,14 @@ def read_scope(python: Path) -> ReadScope:
 def stemma_settings_extra(run_dir: Path, role: str, prompt: str, tools: ToolSets,
                           claude_config: Path, *, cache_dir: Path | None = None,
                           deny_agent: bool = False, scope: ReadScope | None = None,
-                          session_id: str | None = None) -> dict[str, Any]:
+                          session_id: str | None = None,
+                          as_of: str | None = None) -> dict[str, Any]:
     """Stemma's rules on top of the clean base: permissions and the sandbox.
     `run_dir` must be the resolved real path. `deny_agent` denies the Agent tool outright
-    (the lead under s2 single_loop)."""
+    (the lead under s2 single_loop). With `as_of`, every live web tool is denied too."""
     deny: list[str] = ["WebFetch"] + [f"Agent({a})" for a in DENIED_AGENT_TYPES]
+    if as_of:
+        deny += sorted(LIVE_WEB_TOOLS - {"WebFetch"})
     # Only the host starts checking roles and the lead (section 6, v0.2.4).
     deny += [f"Agent({r})" for r in HOST_STARTED_ROLES]
     if deny_agent:

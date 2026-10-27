@@ -26,6 +26,7 @@ def run_dir(tmp_path: Path) -> Path:
     (d / "task/arrivals/1/late.csv").write_text("a,b")
     (d / "task/question.md").write_text("q")
     (d / "branches/b1/record.md").write_text("record")
+    (d / "run.json").write_text('{"as_of": null}')  # the driver writes it before any session
     return d
 
 

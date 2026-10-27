@@ -357,6 +357,23 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   verdict checks its points' nodes again under the same lock before it writes, so a
   point never lands on a node removed after the first check.
 
+## 0d. An as_of run sees no live web (reality-graded runs, 27 Oct)
+- **Why.** A run with `as_of` is graded against what happened after that date, so
+  nothing it reads or searches may show later information. Date-filtered web search
+  leaks (updated pages, ranking, related-content modules), so it is not used.
+- **Built-in web tools.** When `run.json` has `as_of`, the driver leaves `WebSearch`
+  and `WebFetch` out of every session's `--tools` (by name or as a rule) and denies
+  both in its settings; the guard refuses both to every caller, subagents included,
+  and refuses them too when `run.json` is missing, unreadable, or its `as_of` is not a
+  `YYYY-MM-DD` date. Tool arguments never change this; only `run.json` (driver-written,
+  tool-only) says what the run is. A run without `as_of` is unchanged (`WebFetch` stays
+  denied in every run).
+- **The shell.** Every session's sandbox has `network.allowedDomains: []`,
+  `allowUnsandboxedCommands: false` and `failIfUnavailable: true`, as in every run.
+- **The broker.** Every other path to the network runs in the MCP server: `capture`
+  takes an archived copy dated before `as_of` (section 4), the `sec_*` tools keep only
+  filings dated before it, and discovery is `find_archived` (below).
+
 ## 1. Parts and owners
 - **A. Evidence service:** `src/stemma/evidence/`, `tests/evidence/`.
 - **B. Register, guards and driver:** `src/stemma/register/`, `src/stemma/hooks/`,

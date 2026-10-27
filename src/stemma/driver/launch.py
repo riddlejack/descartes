@@ -129,6 +129,7 @@ class LaunchSpec:
     tools: ToolSets
     request_id: str | None = None  # set for checking sessions
     deny_agent: bool = False  # the lead under s2 single_loop may start no subagent
+    as_of: str | None = None  # the run's as_of date: no live web tool (CONTRACTS 0d)
 
 
 @dataclass
@@ -278,7 +279,7 @@ def launch(cfg: DriverConfig, run_dir: Path, plugin_dir: Path, spec: LaunchSpec,
         agent=f"stemma:{spec.role}",
         settings_extra=stemma_settings_extra(run_dir, spec.role, spec.prompt, spec.tools,
                                              cfg.claude_config, cache_dir=cfg.cache_dir,
-                                             deny_agent=spec.deny_agent,
+                                             deny_agent=spec.deny_agent, as_of=spec.as_of,
                                              scope=session_read_scope(cfg),
                                              session_id=spec.session_id),
         env_extra={**driver_env(cfg, run_dir),
