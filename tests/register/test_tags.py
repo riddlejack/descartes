@@ -280,3 +280,10 @@ def test_full_stop_then_capital_without_space_splits() -> None:
 
 def test_link_with_digits_does_not_split_at_lowercase() -> None:
     assert untagged("See [r](https://x.com/report-2024.pdf) [[nc:source]].") == []
+
+
+def test_a_scale_suffix_needs_no_letter_after_it() -> None:
+    from stemma.register.tags import NUMBER_TOKEN
+
+    assert NUMBER_TOKEN.findall("7 more, 3 kinds, 5 xyz") == ["7", "3", "5"]
+    assert NUMBER_TOKEN.findall("1.2bn, 2 m, 3k and 4x faster") == ["1.2bn", "2 m", "3k", "4x"]
