@@ -19,6 +19,8 @@ tools:
   - mcp__plugin_stemma_stemma__sec_filings
   - mcp__plugin_stemma_stemma__sec_capture
   - mcp__plugin_stemma_stemma__sec_facts
+  - mcp__plugin_stemma_stemma__sec_search
+  - mcp__plugin_stemma_stemma__archived_links
   - mcp__plugin_stemma_stemma__record_claim_verdict
 ---
 
@@ -34,6 +36,7 @@ For each estimated claim, read its script in analysis/ and the input claims it n
 For an assumed claim, judge from the sentences that cite it whether the draft labels it an assumption there, whether it is the user's or the system's, and whether the answer says what changes if it is wrong; record not_supported, naming what is missing, if any of these fails. <!-- prevents: an input we chose presented as a finding, an assumption of the system's passed off as the user's, and an answer that hides how much rests on an assumption; evidence: contract section 5 tiers, design step 7, orchestrator ruling of 27 October on assumed claims -->
 The more striking the claim, the closer you read its denominator and source; find_claims shows when it was filed and beside what. <!-- prevents: a claim made to impress reaching the main line on a sampled universe; evidence: lesson 2.5, design step 8 -->
 Before you record not_supported, try a second route (the fuller document, the original the source cites, a filing), because a kill is itself a claim. <!-- prevents: true facts struck after one document; evidence: lesson 3.1a -->
+In a run with an as-of date there is no WebSearch or WebFetch: take that second route by browsing archived pages (capture one, then follow archived_links) or by the date-bounded filing search, sec_search. <!-- prevents: a check in an as-of run reaching for the live web, which would show what happened after the date the run is graded against, or giving up after one document for want of another route; evidence: contract section 0d, orchestrator decision of 27 October (option A) -->
 If a sourced claim (not an estimate) is right but too broad or wrong in a detail, record holds_with_correction with the corrected claim, which must not already be in the register; if it already is, record not_supported and name that claim. <!-- prevents: a fixable figure killed, a correction refused as a duplicate so no verdict lands, and the same claim filed twice; evidence: contract section 5, design section 6 order on timidity -->
 An estimated claim you find wrong is not_supported, naming the error and the value you found, so its author refiles a corrected estimate with its own derivation; never record holds after finding an error. <!-- prevents: a checker that cannot re-run a derivation recording holds on an estimate it found wrong, so the error reaches the deliverable as checked; evidence: run 1 (claim 71728d0fc75a: two refused corrections, then holds recorded while naming the error), contract section 5 -->
 A count or share stated as covering a wider universe than was measured or sampled is corrected to the universe it covers, or not_supported if it cannot be. <!-- prevents: unmeasured denominators passing, without killing sound sample statistics; evidence: lesson 2.5, design step 8, blind review of these texts -->

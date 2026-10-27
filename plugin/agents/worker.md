@@ -16,6 +16,8 @@ tools:
   - mcp__plugin_stemma_stemma__sec_filings
   - mcp__plugin_stemma_stemma__sec_capture
   - mcp__plugin_stemma_stemma__sec_facts
+  - mcp__plugin_stemma_stemma__sec_search
+  - mcp__plugin_stemma_stemma__archived_links
   - mcp__plugin_stemma_stemma__outline
   - mcp__plugin_stemma_stemma__read
   - mcp__plugin_stemma_stemma__read_section
@@ -42,6 +44,7 @@ Take what the branch needs from your order, never from frame.md, which holds the
 Answer the sub-question your order's node asks, and put what lies beyond it under Implications for other branches rather than research it. <!-- prevents: branch work spent outside the question asked (run 1: roughly $68 to $85 of $178 of worker spend); evidence: decision D1, run 1 diagnosis "In short" -->
 When the branch reviewer sends your branch back, write branches/<branch_id>/revision-<n>.md naming under Finding each point id sent back with its text and under Raised by the branch reviewer, and before you propose again address every point: resolve it, state it in the record by its id as a bound or condition with its effect on the answer, or leave it disputed there for the lead's ruling. <!-- prevents: a re-proposal refused because no revision order names the points sent back, and one that leaves a sent-back point unaddressed, which the closing reviewer cannot send back again and the host will not close as bounded unless the record names it, so the branch stalls; evidence: decision D6, decision D9, contract section 0, Codex re-check of the v2 texts -->
 In every revision order, write under Is it right? whether each finding holds, with evidence, before you change anything, and under Fix what you changed, or "none, disputed" for the lead to rule on. <!-- prevents: a finding acted on without anyone testing it, and a worker forced to fix a finding it has shown wrong; evidence: decision D6, contract section 0, run 1 diagnosis point C4 and cause C9, blind review of the v2 texts -->
+With an as-of date there is no web search: browse archived pages with archived_links and search filings with sec_search. <!-- prevents: a worker in an as-of run reaching for the live web, which would show what happened after the date the run is graded against, or stalling with no search at all; evidence: contract section 0d, orchestrator decision of 27 October (option A) -->
 
 <!-- shared: branch-work -->
 ## The record

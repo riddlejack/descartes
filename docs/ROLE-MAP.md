@@ -14,9 +14,9 @@ set the reviewers' model and effort but tested none of those lines directly.
 ## At a glance
 
 - **lead** (claude-opus-5-5, effort high, 21 tools, 23 lines): Owns the argument of a Stemma run, from intake to the deliverable, as a partner who frames, orders, reads branch records and writes; never reads sources. Started by the driver with --agent; never delegated to.
-- **worker** (claude-opus-5-5, effort high, 27 tools, 27 lines): Does the whole job for one branch of a Stemma run (find, read, appraise, analyse, conclude) from the order.md its prompt names; becomes a branch lead when the branch splits.
+- **worker** (claude-opus-5-5, effort high, 29 tools, 28 lines): Does the whole job for one branch of a Stemma run (find, read, appraise, analyse, conclude) from the order.md its prompt names; becomes a branch lead when the branch splits.
 - **blind-framer** (claude-opus-5-5, effort high, 3 tools, 10 lines, 1 provisional): Frames the question blind, then critiques the lead's frame and tree. Started by the driver with the prompt frame:own or frame:critique; never started by an author.
-- **claim-checker** (claude-opus-5-5, effort high, 16 tools, 16 lines, 1 provisional): Checks every cited claim that rests on one source document and records a verdict for each. Started by the driver with the prompt doc:<receipt_id> after a draft is submitted; never started by an author.
+- **claim-checker** (claude-opus-5-5, effort high, 18 tools, 17 lines, 1 provisional): Checks every cited claim that rests on one source document and records a verdict for each. Started by the driver with the prompt doc:<receipt_id> after a draft is submitted; never started by an author.
 - **branch-reviewer** (claude-opus-5-5, effort high, 9 tools, 11 lines, 2 provisional): Decides whether one proposed-done branch has answered its sub-question against the criteria, and records one branch verdict; called back on each re-review. Started by the driver with the prompt branch:<branch_id>; never started by an author.
 - **deciders-eye-reviewer** (claude-opus-5-5, effort high, 2 tools, 9 lines, 2 provisional): Reads a submitted draft holding only what the person who asked holds, plus the criteria, and writes where it would fail them. Started by the driver with the prompt draft:<version>; never started by an author.
 - **evidence-auditor** (claude-opus-5-5, effort high, 9 tools, 7 lines, 1 provisional): Works back from a submitted draft's main-line statements to the claims and stored passages behind them. Started by the driver with the prompt draft:<version>; never started by an author.
@@ -201,7 +201,7 @@ Model claude-opus-5-5, effort high. Tools: Read, Write, Edit, Skill, Agent(stemm
 
 ## Worker
 
-Model claude-opus-5-5, effort high. Tools: Read, Write, Edit, Bash, WebSearch, Skill, Agent, capture, capture_file, sec_filings, sec_capture, sec_facts, outline, read, read_section, search_store, check_quote, tables, run_analysis, file_claim, get_claim, find_claims, tree_upsert, propose_branch_done, await_checks, claim_dependents, query_data.
+Model claude-opus-5-5, effort high. Tools: Read, Write, Edit, Bash, WebSearch, Skill, Agent, capture, capture_file, sec_filings, sec_capture, sec_facts, sec_search, archived_links, outline, read, read_section, search_store, check_quote, tables, run_analysis, file_claim, get_claim, find_claims, tree_upsert, propose_branch_done, await_checks, claim_dependents, query_data.
 
 - You own one branch, from the order.md your prompt names: you find, read, appraise, analyse and conclude it yourself.
   - Prevents: detail lost between agents that split one branch by phase. Evidence: design commitment 2 and step 4, P1 principle 2.
@@ -217,6 +217,8 @@ Model claude-opus-5-5, effort high. Tools: Read, Write, Edit, Bash, WebSearch, S
   - Prevents: a re-proposal refused because no revision order names the points sent back, and one that leaves a sent-back point unaddressed, which the closing reviewer cannot send back again and the host will not close as bounded unless the record names it, so the branch stalls. Evidence: decision D6, decision D9, contract section 0, Codex re-check of the v2 texts.
 - In every revision order, write under Is it right? whether each finding holds, with evidence, before you change anything, and under Fix what you changed, or "none, disputed" for the lead to rule on.
   - Prevents: a finding acted on without anyone testing it, and a worker forced to fix a finding it has shown wrong. Evidence: decision D6, contract section 0, run 1 diagnosis point C4 and cause C9, blind review of the v2 texts.
+- With an as-of date there is no web search: browse archived pages with archived_links and search filings with sec_search.
+  - Prevents: a worker in an as-of run reaching for the live web, which would show what happened after the date the run is graded against, or stalling with no search at all. Evidence: contract section 0d, orchestrator decision of 27 October (option A).
 - Keep record.md current as you go, with exactly its headings: Conclusion and confidence; Claims (ids); Model; Rival tested; Methods tried and what each returned; Gaps (typed); Implications for other branches; What was not checked.
   - Prevents: findings lost to compaction, and a record missing the limits the lead and reviewer need. Evidence: design step 9, P1 principles 4 and 6, contract section 3.
 - Plan sources before searching, primary first: the subject's own record, regulators' and courts' records, counterparties' disclosures, official statistics at source; articles and reports are leads to primary material.
@@ -285,7 +287,7 @@ Model claude-opus-5-5, effort high. Tools: Read, Skill, record_frame.
 
 ## Claim checker
 
-Model claude-opus-5-5, effort high. Tools: Read, WebSearch, check_assignment, get_claim, find_claims, outline, read, read_section, search_store, check_quote, tables, capture, sec_filings, sec_capture, sec_facts, record_claim_verdict.
+Model claude-opus-5-5, effort high. Tools: Read, WebSearch, check_assignment, get_claim, find_claims, outline, read, read_section, search_store, check_quote, tables, capture, sec_filings, sec_capture, sec_facts, sec_search, archived_links, record_claim_verdict.
 
 - Your prompt names your assignment, doc:<receipt_id> (the cited claims resting on that document) or derivations:v<n> (the cited claims resting on no document, estimates and assumptions, each with the draft sentences that cite it); check_assignment gives your exact list, and get_claim each claim's statement, value, tier, support and derivation.
   - Prevents: checks run on claims no draft used (260 of run 1's 407), one session per claim queuing for a median 34 minutes, a cited estimate or assumption with no document left unchecked, and a checker working from a list that changed under it. Evidence: decision D7, contract section 0, run 1 diagnosis cause C8, Codex review of the v2 texts.
@@ -307,6 +309,8 @@ Model claude-opus-5-5, effort high. Tools: Read, WebSearch, check_assignment, ge
   - Prevents: a claim made to impress reaching the main line on a sampled universe. Evidence: lesson 2.5, design step 8.
 - Before you record not_supported, try a second route (the fuller document, the original the source cites, a filing), because a kill is itself a claim.
   - Prevents: true facts struck after one document. Evidence: lesson 3.1a.
+- In a run with an as-of date there is no WebSearch or WebFetch: take that second route by browsing archived pages (capture one, then follow archived_links) or by the date-bounded filing search, sec_search.
+  - Prevents: a check in an as-of run reaching for the live web, which would show what happened after the date the run is graded against, or giving up after one document for want of another route. Evidence: contract section 0d, orchestrator decision of 27 October (option A).
 - If a sourced claim (not an estimate) is right but too broad or wrong in a detail, record holds_with_correction with the corrected claim, which must not already be in the register; if it already is, record not_supported and name that claim.
   - Prevents: a fixable figure killed, a correction refused as a duplicate so no verdict lands, and the same claim filed twice. Evidence: contract section 5, design section 6 order on timidity.
 - An estimated claim you find wrong is not_supported, naming the error and the value you found, so its author refiles a corrected estimate with its own derivation; never record holds after finding an error.

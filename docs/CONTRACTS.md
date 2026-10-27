@@ -508,6 +508,15 @@ Unicode code points in the stored text.
   `sec_capture(accession, document=None)` → a receipt;
   `sec_facts(company, concept, filed_before=None)` → as-filed XBRL facts, each with
   its filing date and the receipt of the filing it came from.
+- `sec_search(query, forms=None, cik=None, page=1)` → EDGAR full-text search hits
+  (`accession`, `form`, `filing_date`, `filers`, `ciks`, `document`), 100 a page, pages
+  1 to 20; in an `as_of` run the host sets the end date to the day before `as_of` and
+  withholds any hit filed on or after it without a trace (no total, no highlighted
+  text) (section 0d).
+- `archived_links(sha256)` → the links of a captured HTML page, absolute against the
+  page's own URL, each with its text; a link into the Wayback Machine is given as the
+  page it copies; refused for a page that is not HTML, and in an `as_of` run for a page
+  captured from the live web (section 0d).
 - `outline(sha256)`, `read(sha256, start, length)`, `read_section(sha256, anchor)`:
   reading in parts; no tool returns a whole long document at once.
 - `search_store(query, mode="words"|"exact", sha256=None, limit)` → hits with
