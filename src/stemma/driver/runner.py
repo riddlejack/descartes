@@ -273,8 +273,20 @@ class Driver:
             self._save_state()
 
     def _launch_allowed(self) -> bool:
-        """Under `_stop_lock`: no usage stop has been seen."""
-        return not (self._usage_stop or self.state.get("usage_limited"))
+        """Under `_stop_lock`: no usage stop has been seen. A reader thread marks its
+        session rate-limited before it waits for this lock, so a rejection it is still
+        persisting is seen here too (Codex re-check #4)."""
+        return not (self._usage_stop or self.state.get("usage_limited")
+                    or any(lv.session.rate_limited is not None for lv in self.live.values()))
+
+    def clear_usage_stop(self) -> None:
+        """Before a resume after a usage stop: clear the stop, in memory and on disk, under
+        the shared lock, so the resumed lead's Stop hook does not read the old one
+        (Codex re-check A)."""
+        with self._stop_lock:
+            self._usage_stop = False
+            self.state["usage_limited"] = False
+            self._save_state()
 
     # ----- launching ---------------------------------------------------------------
     def _check_plugin(self) -> None:
@@ -432,8 +444,8 @@ class Driver:
     def relaunch_unended_checks(self) -> None:
         """On resume: queue every check whose session never ended, and every check whose
         session ended without doing its job for a reason outside it (the usage limit, a
-        crash, a failed launch, a failed canary). They launch within the usual limits."""
-        self.state["usage_limited"] = False
+        crash, a failed launch, a failed canary). They launch within the usual limits.
+        The usage stop itself is cleared before the lead launches (clear_usage_stop)."""
         for _rid, st in sorted(self.api.states(self.run_dir).items()):
             retry = st.status == "ended" and st.outcome in RETRYABLE_OUTCOMES
             if st.status == "running" or retry:
@@ -894,6 +906,10 @@ class Driver:
                             reason="a usage stop arrived before the launch")
                 return
             queue_notice(self.run_dir, f"lead_resumed_{n + 1}", " ".join(lines))
+            if not self._launch_allowed():  # read again after the notice, same lock (#4)
+                events.emit(self.run_dir, "lead_not_resumed", resumes=n,
+                            reason="a usage stop arrived before the launch")
+                return
             self.state["lead_resumes"] = n + 1
             self._save_state()
             events.emit(self.run_dir, "lead_resumed_after_end", resume=n + 1,
@@ -1145,12 +1161,20 @@ def _resume_locked(cfg: DriverConfig, run_dir: Path, api: ChecksApi | None,
     resume) caps the resumed lead at the wall time it has left."""
     d = Driver(cfg, run_dir, api, limits, released=released, revoke=revoke)
     d.lead_budget_s = lead_budget_s
+    # A lead session that never recorded its end (the driver died) is closed at its last
+    # recorded activity before anything new is logged: the downtime is not lead time
+    # (Codex re-check B).
+    orphan = leadtime.close_orphaned_lead(d.run_dir)
+    if orphan is not None:
+        d.lead_budget_s = (None if lead_budget_s is None else
+                           d.limits.lead_max_s - leadtime.lead_time_used(d.run_dir))
     events.emit(d.run_dir, "run_resumed", run_id=d.run_id,
                 lead_session_id=d.state["lead"].get("session_id"),
                 automatic=lead_budget_s is not None,
                 **({"lead_budget_s": round(lead_budget_s, 3)}
                    if lead_budget_s is not None else {}))
     d.recover_usage()
+    d.clear_usage_stop()
     d.start_lead(resume=True)
     d.relaunch_unended_checks()
     return d.watch()

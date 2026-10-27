@@ -212,3 +212,40 @@ def test_the_plugin_registers_the_stop_hook() -> None:
                        .read_text())["hooks"]
     cmd = hooks["Stop"][0]["hooks"][0]
     assert cmd["command"].endswith("-m stemma.hooks stop") and cmd["timeout"] > stop.WAIT_S
+
+
+# --- Codex re-check of 299f381 ---------------------------------------------------------
+
+def test_a_usage_stop_during_the_last_sleep_lets_the_lead_stop(run_dir: Path) -> None:
+    # Re-check #3: the stop lands while the hook sleeps for the last time.
+    _branch(run_dir, "b1")
+    state = json.loads((run_dir / ".stemma/driver-state.json").read_text())
+    c = Clock()
+
+    def sleep(s: float) -> None:
+        c.sleep(s)
+        if c.t - 4070908800.0 >= 10:  # the final sleep of a 10 s wait
+            (run_dir / ".stemma/driver-state.json").write_text(
+                json.dumps({**state, "usage_limited": True}))
+
+    d = stop.decide(hook(), run_dir, clock=c, sleep=sleep, wait_s=10)
+    assert not d.block and "usage stop" in d.detail["why"]
+
+
+def test_scanning_time_is_not_added_to_the_time_left(run_dir: Path) -> None:
+    # Re-check #6: every clock read costs 1 s (a slow scan); 20 s of lead time left.
+    run = json.loads((run_dir / "run.json").read_text())
+    (run_dir / "run.json").write_text(json.dumps({**run, "limits": {"lead_max_s": 20}}))
+    _branch(run_dir, "b1")
+    t = [4070908800.0]
+
+    def clock() -> float:
+        t[0] += 1.0
+        return t[0]
+
+    def sleep(s: float) -> None:
+        t[0] += s
+
+    d = stop.decide(hook(), run_dir, clock=clock, sleep=sleep, wait_s=240)
+    assert not d.block
+    assert t[0] - 4070908800.0 <= 20 + 2  # the account's 20 s, not 20 plus the scans
