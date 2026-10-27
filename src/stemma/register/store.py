@@ -367,38 +367,100 @@ class Register:
                     out.append(cid)
         return out
 
+    def second_family_eligible(self, cid: str) -> bool:
+        """Whether a claim is one the second family looks at (shared with the replay):
+        not superseded, resting on a source passage, with a Claude verdict from a
+        verified session."""
+        rec = self._claim_record(cid)
+        if rec["superseded_by"] or not rec.get("support") or rec["verdict"] is None:
+            return False
+        return rec["verdict_session"] in self._verified()
+
     def second_family_due(self) -> list[str]:
-        """Cited claims a second family should look at now: not superseded, resting on a
-        source passage, with a Claude verdict from a verified session, and not looked at
-        yet."""
+        """Cited, eligible claims not looked at yet."""
         self.wm.refresh()
-        verified = self._verified()
-        due = []
-        for cid in self.cited_claims():
-            rec = self._claim_record(cid)
-            if rec["superseded_by"] or not rec.get("support") or rec["verdict"] is None:
-                continue
-            if rec["verdict_session"] not in verified:
-                continue
-            if self._live_facts(claim_entity(cid), "second_family"):
-                continue
-            due.append(cid)
-        return due
+        return [cid for cid in self.cited_claims() if self.second_family_eligible(cid)
+                and not self._live_facts(claim_entity(cid), "second_family")]
+
+    def _released_now(self) -> bool:
+        """Under the lock: finish_run has recorded the release (the run is sealed)."""
+        return bool(self._run_facts("finished"))
+
+    def _refuse_after_release(self) -> None:
+        if self._released_now():
+            raise Refused("Refused: the run is released and sealed; a late second-family "
+                          "result is discarded.")
+
+    def _ensure_recheck(self, cid: str, body: dict[str, Any]) -> str | None:
+        """Under the lock: the third look a disagreement needs, created once, recoverably:
+        a disagreement recorded with no request yet (a write cut off between them) gets
+        its request here, on the next call (Codex review of N1, #5)."""
+        prompt = f"recheck:{cid}"
+        existing = checks_api.for_prompt(self.run_dir, "claim-checker", prompt,
+                                         records=self._ck_records)
+        if existing:
+            return existing[-1].request.request_id
+        rec = self._claim_record(cid)
+        claude = rec["verdict"] or {}
+        listing = {
+            "claim_id": cid, "round": 1, "statement": rec["statement"],
+            "value": rec.get("value"), "support": rec.get("support"),
+            "claude_verdict": {"verdict": body["compared_with"]["verdict"],
+                               "evidence": claude.get("evidence")},
+            "second_family": {"verdict": body["verdict"], "reason": body["reason"],
+                              "model": body.get("served_model") or body.get("model_asked")},
+            "claims": [cid],
+        }
+        source = {"kind": "register", "at": now(), "by": "stemma:host-second-family"}
+        self._write_once(assignment_file(prompt, 1),
+                         json.dumps(listing, indent=2, ensure_ascii=False), prompt, 1)
+        self._ensure_entity(RUN_ENTITY, "run", "run", source)
+        if not any(r["prompt"] == prompt for r in self._run_facts("recheck_listed")):
+            self.wm.assertFact({"about": RUN_ENTITY, "predicate": "recheck_listed",
+                                "value": {"prompt": prompt, "round": 1, "claims": [cid]},
+                                "source": source})
+        return checks_api.request_check(self.run_dir, roles.CLAIM_CHECKER, prompt,
+                                        "second_family_disagrees", round_no=1).request_id
+
+    def repair_rechecks(self) -> list[str]:
+        """Host only: request every third look a recorded disagreement is still missing
+        (never after the release). Returns the claims repaired."""
+        with self._exclusive():
+            self.wm.refresh()
+            if self._released_now():
+                return []
+            repaired = []
+            for cid in self.cited_claims():
+                facts = self._live_facts(claim_entity(cid), "second_family")
+                if not facts or not facts[-1]["value"].get("disagrees"):
+                    continue
+                if not checks_api.for_prompt(self.run_dir, "claim-checker", f"recheck:{cid}",
+                                             records=self._ck_records):
+                    self._ensure_recheck(cid, facts[-1]["value"])
+                    repaired.append(cid)
+            return repaired
 
     def record_second_family(self, cid: str, answer: Any) -> dict[str, Any]:
         """Host only (the driver): a second family's answer on a cited claim, beside the
-        Claude verdict it was compared with. On a disagreement the host asks one fresh
-        Claude checker for a third look, prompt `recheck:<claim_id>`, with both opinions
-        in its assignment; its verdict, the newest, decides."""
+        Claude verdict it was compared with, refused once the run is released (checked
+        under the same lock as the write; review #2). On a disagreement the host asks one
+        fresh Claude checker for a third look, prompt `recheck:<claim_id>`, with both
+        opinions in its assignment; its verdict, the newest, decides. The receipt kept is
+        cleaned to an allowlist with secrets scrubbed (review #4)."""
         from stemma.register import second_family as sf
 
         with self._exclusive():
             self.wm.refresh()
+            self._refuse_after_release()
             rec = self._claim_record(cid)
             claude = rec["verdict"] or {}
-            body = {"verdict": answer.verdict, "reason": answer.reason,
+            body = {"verdict": answer.verdict, "reason": sf.clean_text(answer.reason),
                     "model_asked": answer.model_asked, "served_model": answer.served_model,
-                    "receipt": answer.receipt,
+                    "receipt": sf.clean_receipt(answer.receipt),
+                    "attempts": [{"model": a["model"], "problem": sf.clean_text(a["problem"])
+                                  if a.get("problem") else None,
+                                  "receipt": sf.clean_receipt(a.get("receipt"))}
+                                 for a in getattr(answer, "attempts", [])],
                     "compared_with": {"verdict": claude.get("verdict"),
                                       "session": rec["verdict_session"]},
                     "disagrees": sf.disagrees(claude.get("verdict"), answer.verdict),
@@ -407,53 +469,47 @@ class Register:
             self.wm.assertFact({"about": claim_entity(cid), "predicate": "second_family",
                                 "value": body, "source": source})
             if body["disagrees"]:
-                prompt = f"recheck:{cid}"
-                rnd = len(checks_api.for_prompt(self.run_dir, "claim-checker", prompt,
-                                                records=self._ck_records)) + 1
-                listing = {
-                    "claim_id": cid, "round": rnd, "statement": rec["statement"],
-                    "value": rec.get("value"), "support": rec.get("support"),
-                    "claude_verdict": {"verdict": claude.get("verdict"),
-                                       "evidence": claude.get("evidence")},
-                    "second_family": {"verdict": answer.verdict, "reason": answer.reason,
-                                      "model": answer.served_model or answer.model_asked},
-                    "claims": [cid],
-                }
-                self._write_once(assignment_file(prompt, rnd),
-                                 json.dumps(listing, indent=2, ensure_ascii=False), prompt, rnd)
-                self._ensure_entity(RUN_ENTITY, "run", "run", source)
-                self.wm.assertFact({"about": RUN_ENTITY, "predicate": "recheck_listed",
-                                    "value": {"prompt": prompt, "round": rnd, "claims": [cid]},
-                                    "source": source})
-                body["recheck_requested"] = checks_api.request_check(
-                    self.run_dir, roles.CLAIM_CHECKER, prompt, "second_family_disagrees",
-                    round_no=rnd).request_id
+                body["recheck_requested"] = self._ensure_recheck(cid, body)
             self.rebuild_index()
         return body
 
-    def record_second_family_failure(self, cid: str, reason: str) -> None:
-        """Host only: this claim got no usable second-family answer (unreadable, or a
-        model other than the one pinned answered). Recorded on the claim, loudly; the
-        claim is not asked again and its Claude verdict stands."""
+    def record_second_family_failure(self, cid: str, reason: str,
+                                     attempts: list[dict[str, Any]] | None = None) -> None:
+        """Host only: this claim got no usable second-family answer (unreadable, another
+        model than the one pinned, or its passage could not be placed). Recorded on the
+        claim, loudly; it is not asked again and its Claude verdict stands. Refused after
+        the release."""
+        from stemma.register import second_family as sf
+
         with self._exclusive():
             self.wm.refresh()
+            self._refuse_after_release()
             source = {"kind": "register", "at": now(), "by": "stemma:host-second-family"}
             self.wm.assertFact({"about": claim_entity(cid), "predicate": "second_family",
-                                "value": {"verdict": None, "failed": reason[:2000],
+                                "value": {"verdict": None, "failed": sf.clean_text(reason),
                                           "disagrees": False, "at": now(),
+                                          "attempts": [
+                                              {"model": a.get("model"),
+                                               "problem": sf.clean_text(a["problem"])
+                                               if a.get("problem") else None,
+                                               "receipt": sf.clean_receipt(a.get("receipt"))}
+                                              for a in attempts or []],
                                           "compared_with": {"verdict": None,
                                                             "session": None}},
                                 "source": source})
 
     def second_family_unavailable(self, reason: str) -> None:
         """Host only: the second family could not be asked; recorded loudly, never a
-        refusal of the release."""
+        refusal of the release; nothing is recorded once the run is sealed."""
+        from stemma.register import second_family as sf
+
         with self._exclusive():
             self.wm.refresh()
+            self._refuse_after_release()
             source = {"kind": "register", "at": now(), "by": "stemma:host-second-family"}
             self._ensure_entity(RUN_ENTITY, "run", "run", source)
             self.wm.assertFact({"about": RUN_ENTITY, "predicate": "second_family_unavailable",
-                                "value": {"reason": reason[:2000], "at": now()},
+                                "value": {"reason": sf.clean_text(reason), "at": now()},
                                 "source": source})
 
     def second_family_record(self) -> dict[str, Any]:
@@ -1934,11 +1990,13 @@ class Register:
                 failures.append(f"tag c:{short} names no claim")
                 continue
             sf = self._live_facts(claim_entity(rec["claim_id"]), "second_family")
-            if sf and sf[-1]["value"].get("disagrees") and any(
-                    st.request.prompt == f"recheck:{rec['claim_id']}"
-                    and st.status != "ended" for st in states_now.values()):
-                failures.append(f"claim {short}: Claude's and the second family's verdicts "
-                                f"disagree; the third look has not landed")
+            if sf and sf[-1]["value"].get("disagrees"):
+                looks = [st for st in states_now.values()
+                         if st.request.prompt == f"recheck:{rec['claim_id']}"]
+                if not looks or any(st.status != "ended" for st in looks):
+                    # No request at all (a write cut off) is as unfinished as a running one.
+                    failures.append(f"claim {short}: Claude's and the second family's "
+                                    f"verdicts disagree; the third look has not landed")
             if rec["superseded_by"]:
                 failures.append(f"claim {short} is superseded")
             verdict = (rec["verdict"] or {}).get("verdict")

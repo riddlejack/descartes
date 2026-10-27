@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Protocol
 
@@ -57,8 +57,13 @@ class SecondFamilyUnavailable(Exception):
 
 
 class SecondFamilyFailed(Exception):
-    """This claim got no usable answer (unreadable, or answered by a model other than
-    the one pinned): recorded loudly on the claim, never a silent substitute."""
+    """This claim got no usable answer (unreadable, answered by a model other than the
+    one pinned, or its passage could not be placed): recorded loudly on the claim, never
+    a silent substitute. Carries every attempt made, for the spend."""
+
+    def __init__(self, message: str, attempts: list[dict[str, Any]] | None = None) -> None:
+        super().__init__(message)
+        self.attempts = attempts or []
 
 
 @dataclass(frozen=True)
@@ -68,6 +73,43 @@ class Answer:
     model_asked: str
     served_model: str | None
     receipt: dict[str, Any]
+    attempts: list[dict[str, Any]] = field(default_factory=list)  # every attempt, for spend
+
+
+# The receipt fields kept in the run's record (review #4): an allowlist, numbers and
+# known strings only; headers, ids and anything a gateway could reflect are dropped.
+RECEIPT_FIELDS: Final = ("provider", "contract", "purpose", "route", "pinned",
+                         "request_sha256", "request_bytes", "messages", "ms", "http_status",
+                         "served_model", "finish_reason", "response_sha256", "ok")
+USAGE_FIELDS: Final = ("prompt_tokens", "completion_tokens", "total_tokens")
+
+
+def clean_receipt(receipt: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A receipt as the run may keep it: allowlisted fields, every string scrubbed of
+    any registered secret, usage as whole numbers only."""
+    if receipt is None:
+        return None
+    from stemma.datalayer.querylog import scrub
+
+    out: dict[str, Any] = {}
+    for k in RECEIPT_FIELDS:
+        v = receipt.get(k)
+        if isinstance(v, bool | int | float) or v is None:
+            out[k] = v
+        elif isinstance(v, str):
+            out[k] = scrub(v)[:200]
+    raw_usage = receipt.get("usage")
+    usage: dict[str, Any] = raw_usage if isinstance(raw_usage, dict) else {}
+    out["usage"] = {k: int(usage[k]) for k in USAGE_FIELDS
+                    if isinstance(usage.get(k), int) and not isinstance(usage.get(k), bool)}
+    return out
+
+
+def clean_text(text: str) -> str:
+    """A failure message as the run may keep it: scrubbed of registered secrets."""
+    from stemma.datalayer.querylog import scrub
+
+    return str(scrub(text))[:2000]
 
 
 class Asker(Protocol):
@@ -97,6 +139,8 @@ def nightshift_asker(client: Any) -> Asker:
         except NightshiftOffline as exc:
             raise SecondFamilyUnavailable(f"nightshift_offline: {exc}") from exc
         except NightshiftError as exc:
+            if "is not listed by GET /v1/models" in str(exc):  # not routable: the run's
+                raise SecondFamilyUnavailable(f"model_not_listed: {exc}") from exc
             raise SecondFamilyUnavailable(f"nightshift_error: {exc}") from exc
         return res.text, res.served_model, dict(res.receipt)
 
@@ -147,60 +191,105 @@ def messages(claim: dict[str, Any], found: Sequence[dict[str, str]]) -> list[dic
             {"role": "user", "content": "\n".join(lines)}]
 
 
+_FENCE_END = re.compile(r"\s*```\s*$")
+_FENCE_START = re.compile(r"```(?:json)?\s*$", re.IGNORECASE)
+
+
 def parse(text: str | None) -> tuple[str, str]:
-    """The model's verdict and reason, read from its final answer only: reasoning the
-    model writes first (in a think block or as plain text, which may itself quote the
-    answer format) is never read as the verdict. The last JSON object in the text whose
-    `verdict` is one of the three answers is the answer; anything else is a typed error."""
+    """The model's verdict and reason, from its final answer only (Codex review of N1,
+    #1): every complete think block is removed; an unfinished one is refused; then the
+    reply must END with exactly one JSON object, optionally in a code fence, nothing
+    after it, holding only `verdict` (one of the three answers) and `reason` (text).
+    An object found anywhere else (in reasoning, in an example, nested inside another
+    value) is never the verdict. Anything else is a typed error."""
     if not text:
         raise ValueError("the answer is empty")
     body = re.sub(r"<think>.*?</think>", " ", text, flags=re.DOTALL | re.IGNORECASE)
+    if re.search(r"<think>", body, re.IGNORECASE) or re.search(r"</think>", body,
+                                                                re.IGNORECASE):
+        raise ValueError("the answer holds unfinished reasoning")
+    body = _FENCE_END.sub("", body.rstrip()).rstrip()
+    if not body.endswith("}"):
+        raise ValueError("the answer does not end with a JSON object")
     decoder = json.JSONDecoder()
-    found: tuple[str, str] | None = None
-    for m in re.finditer(r"\{", body):
+    found: dict[str, Any] | None = None
+    start = -1
+    for m in re.finditer(r"\{", body):  # the outermost object that ends the reply
         try:
-            obj, _end = decoder.raw_decode(body, m.start())
+            obj, end = decoder.raw_decode(body, m.start())
         except json.JSONDecodeError:
             continue
-        if isinstance(obj, dict) and obj.get("verdict") in ANSWERS:
-            reason = obj.get("reason")
-            found = (str(obj["verdict"]),
-                     (reason if isinstance(reason, str) else "")[:REASON_MAX_CHARS])
-    if found is None:
-        raise ValueError("the answer holds no JSON object with a verdict of "
-                         f"{', '.join(ANSWERS)}")
-    return found
+        if end == len(body):
+            found, start = obj, m.start()
+            break
+    if not isinstance(found, dict):
+        raise ValueError("the answer does not end with one complete JSON object")  # noqa: TRY004
+    if not set(found) <= {"verdict", "reason"} or found.get("verdict") not in ANSWERS:
+        raise ValueError("the final object is not {verdict: one of "
+                         f"{', '.join(ANSWERS)}, reason: text}}")
+    reason = found.get("reason", "")
+    if not isinstance(reason, str):
+        raise ValueError("the final object's reason is not text")  # noqa: TRY004
+    _ = _FENCE_START.sub("", body[:start])  # what precedes is reasoning, never read
+    return str(found["verdict"]), reason[:REASON_MAX_CHARS]
+
+
+def _attempt(model: str, receipt: dict[str, Any] | None, problem: str | None) -> dict[str, Any]:
+    return {"model": model, "receipt": receipt, "problem": problem}
 
 
 def ask(asker: Asker, run_dir: Path, claim: dict[str, Any], evidence: Evidence,
         models: Sequence[str] = (PRIMARY_MODEL, FALLBACK_MODEL)) -> Answer:
-    """Ask the first model that answers usably; the fallback is tried when the primary
-    cannot be asked or answers unreadably. Raises SecondFamilyUnavailable when none can."""
-    msgs = messages(claim, passages(run_dir, claim, evidence))
+    """Ask the first model that answers usably. The fallback is tried only when the
+    primary could not be asked or answered unreadably; an answer named by a model other
+    than the one pinned ends this claim's look at once (review #7). A passage that could
+    not be placed in the stored text ends it before asking (review #6). Every attempt's
+    receipt is kept (review #8). Raises SecondFamilyUnavailable when no model could be
+    asked at all, SecondFamilyFailed otherwise."""
+    found = passages(run_dir, claim, evidence)
+    unplaced = [f"{p['receipt_id']}: {p['placed']}" for p in found if p["placed"] != "yes"]
+    if unplaced:
+        raise SecondFamilyFailed("the stored passage could not be placed (" +
+                                 "; ".join(unplaced) + "); nothing was asked", [])
+    msgs = messages(claim, found)
     problems: list[str] = []
+    attempts: list[dict[str, Any]] = []
     answered = False  # some model answered: a failure is this claim's, not the run's
     for model in models:
         try:
             text, served, receipt = asker(model, msgs)
         except SecondFamilyUnavailable as exc:
             problems.append(f"{model}: {exc}")
+            attempts.append(_attempt(model, None, str(exc)))
             if str(exc).startswith("provider_auth_failed"):
                 break  # the same key fails for every model
+            if str(exc).startswith("nightshift_error"):
+                answered = True  # the gateway answered, badly: this claim's failure
+            continue
+        except Exception as exc:  # noqa: BLE001 - a malformed answer is this claim's failure
+            answered = True
+            problems.append(f"{model}: malformed response ({type(exc).__name__})")
+            attempts.append(_attempt(model, None, f"malformed response ({type(exc).__name__})"))
             continue
         answered = True
         if not model.startswith("meterless/") and served != model:
-            # A pinned model answered by another one: never a silent substitute.
-            problems.append(f"{model}: answered by {served or 'an unnamed model'}, not the "
-                            f"model pinned")
-            continue
+            problem = (f"{model}: answered by {served or 'an unnamed model'}, not the "
+                       f"model pinned")
+            attempts.append(_attempt(model, receipt, problem))
+            raise SecondFamilyFailed("; ".join([*problems, problem]), attempts)
+        finish = receipt.get("finish_reason")
         try:
+            if finish not in (None, "stop"):
+                raise ValueError(f"the answer did not complete (finish_reason {finish})")
             verdict, reason = parse(text)
         except (ValueError, json.JSONDecodeError) as exc:
             problems.append(f"{model}: unreadable answer ({exc})")
+            attempts.append(_attempt(model, receipt, f"unreadable answer ({exc})"))
             continue
-        return Answer(verdict, reason, model, served, receipt)
+        attempts.append(_attempt(model, receipt, None))
+        return Answer(verdict, reason, model, served, receipt, attempts)
     if answered:
-        raise SecondFamilyFailed("; ".join(problems))
+        raise SecondFamilyFailed("; ".join(problems), attempts)
     raise SecondFamilyUnavailable("; ".join(problems))
 
 

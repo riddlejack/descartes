@@ -1082,6 +1082,20 @@ class Driver:
         if not self.second.get("enabled"):
             return
         from stemma.register import second_family as sf
+        from stemma.register.filing import Refused
+
+        def record(what: str, call: Any) -> Any:
+            """One register write; a sealed run discards it (the register refuses inside
+            its own lock), anything else is loud and never fatal."""
+            try:
+                return call()
+            except Refused as exc:
+                events.emit(self.run_dir, "second_family_after_release", claim_id=cid,
+                            what=what, detail=sf.clean_text(str(exc)))
+            except Exception as exc:  # noqa: BLE001 - loud, never fatal
+                events.emit(self.run_dir, "second_family_not_recorded", claim_id=cid,
+                            what=what, error=sf.clean_text(f"{type(exc).__name__}: {exc}"))
+            return None
 
         for cid, fut in list(self._sf_futures.items()):
             if not fut.done():
@@ -1090,35 +1104,26 @@ class Driver:
             try:
                 answer = fut.result()
             except sf.SecondFamilyUnavailable as exc:
-                self._sf_unavailable(str(exc))
+                self._sf_unavailable(sf.clean_text(str(exc)))
                 continue
-            except sf.SecondFamilyFailed as exc:
-                events.emit(self.run_dir, "second_family_failed", claim_id=cid, error=str(exc))
-                if not self.released(self.run_dir):
-                    try:
-                        self._sf_reg().record_second_family_failure(cid, str(exc))
-                    except Exception as exc2:  # noqa: BLE001 - loud, never fatal
-                        events.emit(self.run_dir, "second_family_not_recorded", claim_id=cid,
-                                    error=f"{type(exc2).__name__}: {exc2}")
+            except Exception as exc:  # noqa: BLE001 - a terminal failure for this claim
+                # Recorded so the claim is never asked again (Codex review of N1, #3).
+                msg = sf.clean_text(str(exc) if isinstance(exc, sf.SecondFamilyFailed)
+                                    else f"unexpected {type(exc).__name__}")
+                attempts = exc.attempts if isinstance(exc, sf.SecondFamilyFailed) else []
+                events.emit(self.run_dir, "second_family_failed", claim_id=cid, error=msg)
+                record("failure", lambda m=msg, at=attempts, c=cid:
+                       self._sf_reg().record_second_family_failure(c, m, at))
                 continue
-            except Exception as exc:  # noqa: BLE001 - loud, never fatal
-                events.emit(self.run_dir, "second_family_failed", claim_id=cid,
-                            error=f"{type(exc).__name__}: {exc}")
-                continue
-            if self.released(self.run_dir):
-                events.emit(self.run_dir, "second_family_after_release", claim_id=cid,
-                            verdict=answer.verdict)  # the sealed record stays as it was
-                continue
-            try:
-                body = self._sf_reg().record_second_family(cid, answer)
-            except Exception as exc:  # noqa: BLE001 - loud, never fatal
-                events.emit(self.run_dir, "second_family_not_recorded", claim_id=cid,
-                            error=f"{type(exc).__name__}: {exc}")
-                continue
-            events.emit(self.run_dir, "second_family_answered", claim_id=cid,
-                        verdict=body["verdict"], served_model=body.get("served_model"),
-                        claude=body["compared_with"]["verdict"],
-                        disagrees=body["disagrees"])
+            body = record("answer", lambda a=answer, c=cid:
+                          self._sf_reg().record_second_family(c, a))
+            if body is not None:
+                events.emit(self.run_dir, "second_family_answered", claim_id=cid,
+                            verdict=body["verdict"], served_model=body.get("served_model"),
+                            claude=body["compared_with"]["verdict"],
+                            disagrees=body["disagrees"])
+        cid = ""
+        record("repair", lambda: self._sf_reg().repair_rechecks())
         if self.state.get("second_family_unavailable") or self.released(self.run_dir):
             return
         try:
@@ -1139,11 +1144,23 @@ class Driver:
             self._sf_pool = concurrent.futures.ThreadPoolExecutor(
                 max_workers=self.limits.max_second_family, thread_name_prefix="second-family")
         models = tuple(self.second.get("models") or (sf.PRIMARY_MODEL, sf.FALLBACK_MODEL))
-        for cid in due[: max(0, self.limits.max_second_family - len(self._sf_futures))]:
+        tried: dict[str, int] = self.state.setdefault("second_family_attempts", {})
+        for cid in due:
+            if len(self._sf_futures) >= self.limits.max_second_family:
+                break
+            if int(tried.get(cid, 0)) >= self.limits.max_second_family_attempts:
+                # Asked as often as the limit allows and still not recorded: a terminal
+                # failure, never one more request (review #3).
+                record("failure", lambda c=cid: self._sf_reg().record_second_family_failure(
+                    c, f"no answer recorded after {tried[c]} attempts"))
+                continue
+            tried[cid] = int(tried.get(cid, 0)) + 1
+            self._save_state()
             claim = reg.get_claim(cid)
             self._sf_futures[cid] = self._sf_pool.submit(
                 sf.ask, self._sf_asker, self.run_dir, claim, reg.evidence, models)
-            events.emit(self.run_dir, "second_family_asked", claim_id=cid, models=list(models))
+            events.emit(self.run_dir, "second_family_asked", claim_id=cid, models=list(models),
+                        attempt=tried[cid])
 
     def watch(self) -> int:
         def handler(signum: int, _frame: FrameType | None) -> None:

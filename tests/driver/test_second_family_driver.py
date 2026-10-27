@@ -146,3 +146,24 @@ def test_the_token_never_reaches_a_session(cfg: DriverConfig, tmp: Path, limits:
     run = create_run(cfg, write_task(tmp), limits=limits)
     assert json.loads((run / "run.json").read_text())["second_family"]["enabled"] is True
     assert "rt-secret-token-77" not in json.dumps(driver_env(cfg, run))
+
+
+def test_an_unexpected_failure_is_terminal_and_never_asked_again(
+        cfg: DriverConfig, tmp: Path, limits: Limits, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Codex review of N1, #3: five steps, one request.
+    run, cid = seeded(cfg, tmp, limits, monkeypatch, second_family=True)
+    calls: list[str] = []
+
+    def broken(model: str, msgs: list[dict[str, str]]) -> Any:
+        calls.append(model)
+        raise AttributeError("'NoneType' object has no attribute 'get'")
+
+    monkeypatch.setattr(runner, "make_asker", lambda rd: broken)
+    d = Driver(cfg, run, checks_api, limits)
+    for _ in range(5):
+        drive(d)
+    assert len(calls) == 2  # the primary, then the fallback, once
+    reg = Register(run, evidence=Ev())
+    rec = reg._live_facts(f"claim:stemma:{cid}", "second_family")[-1]["value"]
+    assert rec["verdict"] is None and "malformed response" in rec["failed"]
+    assert reg.second_family_due() == []

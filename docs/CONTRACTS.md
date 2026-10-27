@@ -299,6 +299,26 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   than the one pinned is a failed second-family verdict for that claim (recorded on the
   claim, loudly, never a silent substitute); the claim's Claude verdict stands and it is
   not asked again. An unreadable answer from both models is the same.
+- **Reading the answer** (Codex review of N1): only a final answer counts: every complete
+  think block is removed, an unfinished one is refused, and the reply must end with one
+  JSON object, `{verdict, reason}` and nothing else, nothing after it; an answer cut
+  short (`finish_reason` other than `stop`) is unreadable. A passage that cannot be
+  placed in the stored text ends the claim's look before anything is asked; an answer
+  named by another model ends it at once (no fallback rescues it); a gateway error or a
+  malformed response is this claim's failure, while a refused key, an offline gateway
+  or an unlisted model is the run's. A failure is recorded on the claim (never asked
+  again); a claim is put to the second family at most `max_second_family_attempts`
+  times (a resource limit, default 2).
+- **What is kept:** the receipt is cut to an allowlist (route, pinned, sizes and
+  digests, timing, HTTP status, served model, finish reason, whole-number usage), every
+  string scrubbed of registered secrets; headers and response ids are dropped. Every
+  attempt's cleaned receipt is kept, for the spend.
+- **Sealed runs:** every second-family write checks, inside the register's lock, that
+  the run is not released, and refuses after the seal (a late answer is discarded,
+  logged only to events.jsonl).
+- **The third look is recoverable:** a disagreement whose request was cut off by a crash
+  gets it on the driver's next step (`repair_rechecks`), and the gate counts a
+  disagreement with no request as an unfinished third look.
 - **Role text:** the claim checker's text must handle `recheck:<claim_id>`.
 - **Replay:** `tests/e2e/replay_n1.py <copy of run 1>` builds every question from run 1's
   stored passages (248 claims with a Claude verdict and a passage; run 1 started 407

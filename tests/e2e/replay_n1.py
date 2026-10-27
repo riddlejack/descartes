@@ -31,14 +31,27 @@ from stemma.register.store import Register
 CONCURRENCY = 2
 
 
-def claims_with_verdicts(reg: Register) -> list[dict[str, Any]]:
-    """Every claim Claude recorded a verdict on that rests on a stored passage."""
-    out = []
-    for c in reg.find_claims(include_superseded=True):
-        rec = reg.get_claim(c["claim_id"])
-        if rec["verdict"] is not None and rec.get("support"):
-            out.append(rec)
-    return out
+def claims_with_verdicts(reg: Register, cited: bool) -> list[dict[str, Any]]:
+    """The claims to ask about, by the driver's own rule (Register.second_family_due:
+    cited, not superseded, on a passage, with a verified Claude verdict) with --cited;
+    without it, every claim the same rule admits whether cited or not (a replay beyond
+    what the driver asks, labelled so in the summary)."""
+    if cited:
+        ids = reg.second_family_due()
+    else:
+        ids = [c["claim_id"] for c in reg.find_claims()
+               if reg.second_family_eligible(c["claim_id"])]
+    return [reg.get_claim(cid) for cid in ids]
+
+
+def _usage(attempts: list[dict[str, Any]]) -> dict[str, int]:
+    """Every attempt's tokens, failed ones included."""
+    out: Counter[str] = Counter()
+    for a in attempts:
+        for k, v in ((a.get("receipt") or {}).get("usage") or {}).items():
+            if isinstance(v, int) and not isinstance(v, bool):
+                out[k] += v
+    return dict(out)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -58,10 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         run = Path(tmp) / "run"
         shutil.copytree(args.run, run, symlinks=True)
         reg = Register.read_only(run)
-        claims = claims_with_verdicts(reg)
-        if args.cited:
-            cited = set(reg.cited_claims())
-            claims = [c for c in claims if c["claim_id"] in cited]
+        claims = claims_with_verdicts(reg, args.cited)
         if args.skip:
             done = {r["claim_id"] for r in json.loads(args.skip.read_text())["results"]}
             claims = [c for c in claims if c["claim_id"] not in done]
@@ -72,7 +82,10 @@ def main(argv: list[str] | None = None) -> int:
         summary: dict[str, Any] = {
             "claims_with_claude_verdicts": len(claims),
             "claude_verdicts": dict(Counter(c["verdict"]["verdict"] for c in claims)),
-            "passages_not_placed": unplaced, "models": list(models), "live": args.live}
+            "passages_not_placed": unplaced, "models": list(models), "live": args.live,
+            "eligibility": ("the driver's own (cited, eligible, not yet looked at)"
+                            if args.cited else
+                            "every eligible claim, cited or not: beyond what the driver asks")}
         if not args.live:
             if questions:
                 summary["sample_question"] = questions[0][1]
@@ -93,21 +106,27 @@ def main(argv: list[str] | None = None) -> int:
                     results.append({"claim_id": c["claim_id"], "claude": claude,
                                     "second_family": a.verdict, "reason": a.reason,
                                     "served_model": a.served_model,
-                                    "usage": a.receipt.get("usage") or {},
+                                    "usage": _usage(a.attempts), "attempts": len(a.attempts),
                                     "ms": a.receipt.get("ms"),
                                     "disagrees": sf.disagrees(claude, a.verdict)})
-                except (sf.SecondFamilyUnavailable, sf.SecondFamilyFailed) as exc:
+                except sf.SecondFamilyFailed as exc:
                     results.append({"claim_id": c["claim_id"], "claude": claude,
-                                    "unavailable": str(exc)})
-        summary["answers"] = dict(Counter(r.get("second_family", "unavailable")
-                                          for r in results))
+                                    "failed": sf.clean_text(str(exc)),
+                                    "usage": _usage(exc.attempts),
+                                    "attempts": len(exc.attempts)})
+                except sf.SecondFamilyUnavailable as exc:
+                    results.append({"claim_id": c["claim_id"], "claude": claude,
+                                    "unavailable": sf.clean_text(str(exc))})
+        summary["answers"] = dict(Counter(
+            r.get("second_family") or ("failed" if "failed" in r else "unavailable")
+            for r in results))
         summary["disagreements"] = sum(1 for r in results if r.get("disagrees"))
         tokens: Counter[str] = Counter()
         for r in results:
             for k, v in (r.get("usage") or {}).items():
                 if isinstance(v, int):
                     tokens[k] += v
-        summary["tokens"] = dict(tokens)  # the cost, as the receipts report it
+        summary["tokens"] = dict(tokens)  # every attempt's, failed ones included
         ms = [r["ms"] for r in results if isinstance(r.get("ms"), int)]
         summary["seconds_per_answer"] = round(sum(ms) / len(ms) / 1000, 1) if ms else None
         summary["served_models"] = dict(Counter(r.get("served_model") for r in results

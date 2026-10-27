@@ -300,3 +300,154 @@ def test_the_answer_gets_a_realistic_token_budget(reg: Register) -> None:
     sf.ask(sf.nightshift_asker(client(t)), reg.run_dir, claim(), FakeEvidence())
     post = next(c for c in t.calls if c["method"] == "POST")
     assert post["body"]["max_tokens"] == sf.MAX_TOKENS >= 2048
+
+
+# --- Codex review of N1 (580e335), one test per probe -------------------------------
+
+@pytest.mark.parametrize("text", [
+    '<think>The format is {"verdict": "supports", "reason": "x"}',  # unfinished reasoning
+    'For example {"verdict": "supports", "reason": "x"} is the shape. Let me check.',
+    '{"verdict": "does_not_support", "reason": "x", "example": {"verdict": "supports"}}',
+    '{"verdict": "does_not_support", "reason": {"verdict": "supports"}}',
+    '{"verdict": "supports", "reason": "x"} and then more text',
+    '{"verdict": "supports", "reason": "x"}\n{"note": 1}',
+])
+def test_only_a_final_schema_valid_verdict_is_read(text: str) -> None:
+    with pytest.raises((ValueError, json.JSONDecodeError)):
+        sf.parse(text)
+
+
+def test_a_fenced_final_answer_after_reasoning_is_read() -> None:
+    text = ('I think it is {"verdict": "supports"} at first, but the year differs.\n'
+            '```json\n{"verdict": "does_not_support", "reason": "FY2024"}\n```')
+    assert sf.parse(text) == ("does_not_support", "FY2024")
+
+
+def test_an_unfinished_answer_is_not_read(reg: Register) -> None:
+    def asker(model: str, msgs: Any) -> tuple[str, str, dict[str, Any]]:
+        return ('{"verdict": "supports", "reason": "x"}', model, {"finish_reason": "length"})
+
+    with pytest.raises(sf.SecondFamilyFailed, match="did not complete"):
+        sf.ask(asker, reg.run_dir, claim(), FakeEvidence())
+
+
+def test_a_late_answer_never_writes_into_a_sealed_release(reg: Register) -> None:
+    cid = _held(reg)
+    reg.finish_run(LEAD, 1)
+    log = (reg.run_dir / "register/log.jsonl").read_bytes()
+    for write in (lambda: reg.record_second_family(cid, answer("does_not_support")),
+                  lambda: reg.record_second_family_failure(cid, "x"),
+                  lambda: reg.second_family_unavailable("x")):
+        with pytest.raises(Refused, match="released and sealed"):
+            write()
+    assert (reg.run_dir / "register/log.jsonl").read_bytes() == log
+    assert not [r for r in checks_api.states(reg.run_dir).values()
+                if r.request.prompt.startswith("recheck:")]
+    assert reg.repair_rechecks() == []
+
+
+def test_a_malformed_gateway_answer_is_this_claims_failure(reg: Register) -> None:
+    class NullMessage(FakeTransport):
+        def __call__(self, method: str, url: str, body: bytes | None, headers: dict[str, str],
+                     timeout: float) -> HttpAnswer:
+            if method == "GET":
+                return super().__call__(method, url, body, headers, timeout)
+            self.calls.append({"method": method})
+            return HttpAnswer(200, {}, json.dumps({"choices": [{"message": None}]}).encode())
+
+    t = NullMessage([])
+    with pytest.raises(sf.SecondFamilyFailed, match="nightshift_error"):
+        sf.ask(sf.nightshift_asker(client(t)), reg.run_dir, claim(), FakeEvidence())
+
+
+def test_no_token_reaches_the_runs_record(reg: Register) -> None:
+    class Reflecting(FakeTransport):
+        def __call__(self, method: str, url: str, body: bytes | None, headers: dict[str, str],
+                     timeout: float) -> HttpAnswer:
+            ans = super().__call__(method, url, body, headers, timeout)
+            if method == "GET":
+                return ans
+            raw = json.loads(ans.body)
+            raw["id"] = f"resp-{TOKEN}"
+            return HttpAnswer(200, {"x-request-id": TOKEN, "meterless-route": TOKEN},
+                              json.dumps(raw).encode())
+
+    cid = _held(reg)
+    t = Reflecting(['{"verdict": "supports", "reason": "ok"}'])
+    ans = sf.ask(sf.nightshift_asker(client(t)), reg.run_dir, reg.get_claim(cid), FakeEvidence())
+    reg.record_second_family(cid, ans)
+    for p in reg.run_dir.rglob("*"):
+        if p.is_file():
+            assert TOKEN.encode() not in p.read_bytes(), p
+    rec = reg._live_facts(f"claim:stemma:{cid}", "second_family")[-1]["value"]
+    assert set(rec["receipt"]) <= set(sf.RECEIPT_FIELDS) | {"usage"}
+
+
+def test_a_disagreement_whose_request_was_cut_off_still_blocks_and_is_repaired(
+        reg: Register, monkeypatch: pytest.MonkeyPatch) -> None:
+    cid = _held(reg)
+
+    def cut(*_a: Any, **_k: Any) -> Any:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(reg, "_ensure_recheck", cut)
+    with pytest.raises(OSError):
+        reg.record_second_family(cid, answer("does_not_support"))
+    monkeypatch.undo()
+    assert reg._live_facts(f"claim:stemma:{cid}", "second_family")  # recorded before the cut
+    assert any("the third look has not landed" in f for f in reg.finish_failures(1))
+    assert reg.repair_rechecks() == [cid]
+    assert any(r.prompt == f"recheck:{cid}" for r in checks_api.pending_checks(reg.run_dir))
+    assert reg.repair_rechecks() == []  # once
+
+
+def test_missing_stored_evidence_is_a_failure_never_a_passage(reg: Register) -> None:
+    class NoText(FakeEvidence):
+        def read_text(self, run_dir: Path, receipt_id: str) -> str:
+            from stemma.register.evidence_port import QuoteCheckFailed
+
+            raise QuoteCheckFailed("no stored text")
+
+    asked: list[str] = []
+
+    def asker(model: str, msgs: Any) -> tuple[str, str, dict[str, Any]]:
+        asked.append(model)
+        return '{"verdict": "supports"}', model, {}
+
+    with pytest.raises(sf.SecondFamilyFailed, match="could not be placed"):
+        sf.ask(asker, reg.run_dir, claim(), NoText())
+    assert asked == []
+
+
+def test_a_wrong_model_answer_is_not_rescued_by_the_fallback(reg: Register) -> None:
+    asked: list[str] = []
+
+    def asker(model: str, msgs: Any) -> tuple[str, str, dict[str, Any]]:
+        asked.append(model)
+        served = "some/other" if model == sf.PRIMARY_MODEL else model
+        return '{"verdict": "supports", "reason": "x"}', served, {}
+
+    with pytest.raises(sf.SecondFamilyFailed, match="answered by some/other"):
+        sf.ask(asker, reg.run_dir, claim(), FakeEvidence())
+    assert asked == [sf.PRIMARY_MODEL]
+
+
+def test_every_attempts_spend_is_kept(reg: Register) -> None:
+    def asker(model: str, msgs: Any) -> tuple[str, str, dict[str, Any]]:
+        if model == sf.PRIMARY_MODEL:
+            return "thinking only", model, {"usage": {"total_tokens": 100}}
+        return '{"verdict": "supports", "reason": "x"}', model, {"usage": {"total_tokens": 7}}
+
+    ans = sf.ask(asker, reg.run_dir, claim(), FakeEvidence())
+    assert sum(a["receipt"]["usage"]["total_tokens"] for a in ans.attempts) == 107
+
+
+def test_eligibility_is_the_drivers(reg: Register) -> None:
+    cid = ready_run(reg)
+    assert not reg.second_family_eligible(cid)  # no verdict yet
+    req = next(r for r in checks_api.pending_checks(reg.run_dir) if r.prompt == "doc:r1")
+    checks_api.mark_launched(reg.run_dir, req.request_id, "s-u", "claude-opus-5-5", "high")
+    reg.record_claim_verdict(_caller("s-u"), cid, "holds", "ok")
+    assert not reg.second_family_eligible(cid)  # unverified session
+    checks_api.mark_verified(reg.run_dir, "s-u", "claude-opus-5-5", "high")
+    assert reg.second_family_eligible(cid)

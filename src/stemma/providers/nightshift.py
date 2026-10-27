@@ -268,13 +268,17 @@ class NightshiftClient:
                 raw = json.loads(ans.body.decode("utf-8"))
                 choice = raw["choices"][0]
                 message = choice["message"]
+                if not isinstance(raw, dict) or not isinstance(choice, dict) \
+                        or not isinstance(message, dict):
+                    raise TypeError("a choice or its message is not an object")
             except (ValueError, KeyError, IndexError, TypeError) as exc:
                 raise NightshiftError(f"not a chat completion ({digest(ans.body)})") from exc
         except NightshiftError as exc:
             self.log.write(**receipt, ok=False, error=str(exc))
             raise
         served = raw.get("model") if isinstance(raw.get("model"), str) else None
-        usage = raw.get("usage") if isinstance(raw.get("usage"), dict) else {}
+        raw_usage = raw.get("usage")
+        usage: dict[str, Any] = raw_usage if isinstance(raw_usage, dict) else {}
         receipt.update({"ok": True, "served_model": served, "response_id": raw.get("id"),
                         "finish_reason": choice.get("finish_reason"), "usage": usage,
                         "response_sha256": hashlib.sha256(ans.body).hexdigest()})
