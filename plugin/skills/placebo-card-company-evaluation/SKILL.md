@@ -17,7 +17,7 @@ Andrea Amati and his family made violas, and Antonio Stradivari made a handful, 
 
 ## A solo voice
 
-The nineteenth century gave the viola a few solo roles, among them Berlioz's Harold in Italy. In the twentieth century the English violist Lionel Tertis and the Scottish violist William Primrose built careers as soloists and persuaded composers to write for them. Walton wrote a concerto for the instrument, and Bartók left another unfinished at his death; it was completed later by his friend Tibor Serly. Today the viola has a large solo repertoire of its own.
+The nineteenth century gave the viola a few solo roles, among them Berlioz's Harold in Italy. In the twentieth century the English violist Lionel Tertis and the Scottish violist William Primrose built careers as soloists and persuaded composers to write for them. Walton wrote a concerto for the instrument, and Bartók left another unfinished at his death; it was completed later by his friend Tibor Serly. Today the viola has a large solo repertoire of its own. Hindemith, himself a fine violist, wrote sonatas and a concerto for it, and many living composers have followed him with new works for players to learn.
 
 ## In the orchestra
 

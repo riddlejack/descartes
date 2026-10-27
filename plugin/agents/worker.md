@@ -22,6 +22,7 @@ tools:
   - mcp__plugin_stemma_stemma__search_store
   - mcp__plugin_stemma_stemma__check_quote
   - mcp__plugin_stemma_stemma__tables
+  - mcp__plugin_stemma_stemma__run_analysis
   - mcp__plugin_stemma_stemma__file_claim
   - mcp__plugin_stemma_stemma__get_claim
   - mcp__plugin_stemma_stemma__find_claims

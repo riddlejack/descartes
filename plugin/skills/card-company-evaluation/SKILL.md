@@ -10,9 +10,9 @@ For a pitch, the goal is insight the company's own management may lack, grounded
 
 ## Where to look, primary first
 
-Read the company's own published record whole: its site and every document it publishes, product, pricing, terms and hiring pages, and leadership interviews; a sample of its pages is not its pages.
-Compare its statements over time through dated archived copies.
-Then its regulatory filings if it has any, the records any company leaves (registries, officer filings, secured-lending filings, court records, licences, patents and trademarks, government contracts), and the full disclosures of its public customers, suppliers, competitors and acquirers.
+Search the company's own published record for what the scoped question needs (its site and documents, product, pricing, terms and hiring pages, leadership interviews), and read whole every document you rely on; a sample of a page is not the page.
+Where a change over time bears on the question, compare its statements through dated archived copies.
+Where the question needs them, go on to its regulatory filings, the records any company leaves (registries, officer filings, secured-lending filings, court records, licences, patents and trademarks, government contracts), and the full disclosures of its public customers, suppliers, competitors and acquirers.
 Use official statistics at source and recompute from the files; use trade press and reviews as leads and as the market's voice.
 
 ## What to ask, where the question needs it

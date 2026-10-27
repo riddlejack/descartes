@@ -232,6 +232,24 @@ PATH_TOKEN = re.compile(
     r"\.(?:md|json|jsonl|py|txt)\b"
 )
 MCP_NAME = re.compile(r"mcp__[A-Za-z0-9_]+")
+# A frontmatter tool spec: a bare name, or a name with one parenthesised argument.
+TOOL_SPEC = re.compile(r"^(?P<base>[A-Za-z][A-Za-z0-9_]*)(?:\((?P<arg>[^()\s][^()]*)\))?$")
+# Logical invariant: the one harness tool a role lists with an argument, naming which
+# plugin role it may start (Agent(stemma:worker)); any other argument is refused, so a
+# parameterised spec cannot carry a tool past a check on its bare name.
+PARAMETERISED_TOOLS = frozenset({"Agent"})
+# Everything from the first parenthesis or space on, for naming a malformed spec's tool.
+TOOL_SPEC_FALLBACK = re.compile(r"[(\s].*$", re.DOTALL)
+
+
+def tool_base(spec: str) -> str | None:
+    """The tool a spec names, or None when its syntax is not one roles may use."""
+    match = TOOL_SPEC.match(spec)
+    if match is None:
+        return None
+    if match["arg"] is not None and match["base"] not in PARAMETERISED_TOOLS:
+        return None
+    return match["base"]
 
 
 class RoleFileError(Exception):
@@ -363,11 +381,17 @@ def all_lead_choices() -> list[dict[str, str]]:
     return choices
 
 
+def is_parked(choice: dict[str, str]) -> bool:
+    return any((switch, value) in PARKED for switch, value in choice.items())
+
+
 def max_lead_words(shape: str) -> int:
+    """The longest lead a run can get with this shape; a parked shape counts its own."""
+    shape_parked = ("s2_shape", shape) in PARKED
     return max(
         words(parse_commented(LEAD_DIR / "base.md", assemble_lead(choice)))
         for choice in all_lead_choices()
-        if choice["s2_shape"] == shape
+        if choice["s2_shape"] == shape and (shape_parked or not is_parked(choice))
     )
 
 
@@ -451,12 +475,15 @@ def check_role_meta(doc: Doc, expected_name: str, errors: list[str]) -> None:
     if len(set(tools)) != len(tools):
         errors.append(f"{where}: a tool is listed twice")
     for tool in tools:
-        if tool.startswith("mcp__"):
-            if not tool.startswith(TOOL_PREFIX):
+        base = tool_base(tool)
+        if base is None:
+            errors.append(f"{where}: {tool!r} is not a tool spec roles may use")
+        elif base.startswith("mcp__"):
+            if not base.startswith(TOOL_PREFIX):
                 errors.append(f"{where}: {tool} does not use the prefix {TOOL_PREFIX}")
-            elif tool[len(TOOL_PREFIX) :] not in CONTRACT_TOOLS:
+            elif base[len(TOOL_PREFIX) :] not in CONTRACT_TOOLS:
                 errors.append(f"{where}: {tool} is not a tool the contract defines")
-        elif tool.split("(")[0] not in HARNESS_TOOLS:
+        elif base not in HARNESS_TOOLS:
             errors.append(f"{where}: {tool} is not an allowed harness tool")
 
 
@@ -494,8 +521,11 @@ def check_lead(errors: list[str]) -> None:
         check_role_meta(base, "lead", errors)
         check_deferred(base, errors)
         tools = base.meta.get("tools", [])
-        for tool in sorted(set(tools if isinstance(tools, list) else []) & LEAD_FORBIDDEN_TOOLS):
-            errors.append(f"{rel(base.path)}: the lead holds {tool}, a source-reading tool")
+        for tool in tools if isinstance(tools, list) else []:
+            # Judged on the name the spec reduces to, so no argument form slips past.
+            name = tool_base(tool) or TOOL_SPEC_FALLBACK.sub("", tool)
+            if name in LEAD_FORBIDDEN_TOOLS:
+                errors.append(f"{rel(base.path)}: the lead holds {tool}, a source-reading tool")
     expected = {"base.md"} | {f"{s}.{v}.md" for s, vs in SWITCHES for v in vs}
     present = {p.name for p in LEAD_DIR.iterdir() if p.is_file()}
     for name in sorted(expected - present):
@@ -524,7 +554,9 @@ def check_lead(errors: list[str]) -> None:
         except RoleFileError as error:
             errors.append(f"assembled lead {choice}: {error}")
             continue
-        if words(doc) > lead_page_limit(choice):
+        # A parked arm cannot run (the driver refuses it), so it needs no page until it
+        # is un-parked; its text must still parse.
+        if not is_parked(choice) and words(doc) > lead_page_limit(choice):
             errors.append(
                 f"assembled lead {choice}: {words(doc)} words, over its limit "
                 f"({lead_page_limit(choice)})"

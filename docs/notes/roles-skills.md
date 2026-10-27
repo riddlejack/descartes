@@ -451,3 +451,38 @@ Not changed, with reasons:
   the approved "What would change the answer".
 - Shown: lint and map check pass; tests/roles 49 pass; whole suite 1,261 pass, 18
   skipped.
+
+### Codex review of 4d83095 (one fix round, 27 October)
+Nine findings; the orchestrator's instructions per item:
+1. Integration (host on old interfaces, map wording on effort and parked switches):
+   true once part B is merged; nothing changed here.
+2. Document-free estimates: the claim checker now takes `derivations:v<n>` (part B
+   is adding it; `checks/derivations-v<n>.json`) as well as `doc:` and `claim:`, and
+   judges for each estimate whether its script computes what the claim states from
+   the right input claims.
+3. Lint bypass: `WebSearch(*)` and `WebSearch(domain:...)` passed the lead check.
+   Tool specs are now parsed (`TOOL_SPEC`); only `Agent` may carry an argument, any
+   other syntax is refused, and the lead check judges the reduced name. Hostile
+   tests: five parameterised or malformed forbidden specs on the lead, five
+   unsupported specs on a worker.
+4. Company card: discovery limited to what the scoped question needs; every
+   document relied on is still read whole. Orientation fragments read only what
+   bears on the question.
+5. Framer: criteria are checked against the question and the user's answers in
+   task/ (user thresholds allowed); nodes are checked against the broader decision
+   when the scope is broader_decision.
+6. Lead: one line for decision D3 (both cheap readings), and options at framing only
+   as the user named them, after the research only with broader_decision scope or a
+   "what to do" question. To fit, parked arms are exempt from the page check (they
+   cannot run; a test shows the check returns once an arm is un-parked) and a few
+   lines were trimmed. The longest runnable lead is 850/850.
+7. Branch reviewer: before the closing review, the old accept-gap rule; at it, the
+   send-back limit decides, a point still open closes bounded or conditional with
+   its effect stated, never called evidence exhausted.
+8. Standing rule 1: roles that read sources capture before they cite; a role that
+   reads none (the lead) cites only filed claims.
+9. Mechanical reader: the shortest change that makes a segment correct or clear (a
+   unit, a year, a definition), and no growth beyond it.
+Also: the worker may call `run_analysis` (orchestrator); its Bash is unchanged.
+Shown: lint and map check pass; tests/roles 60 pass; whole suite 1,272 pass, 18
+skipped.

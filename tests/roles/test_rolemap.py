@@ -384,3 +384,36 @@ def test_unagreed_path_still_fails_beside_pending_ones(rm: ModuleType) -> None:
         rm, "worker", "Keep notes in checklist/notes.md always. <!-- prevents: x; evidence: y -->"
     )
     assert "the path 'checklist/notes.md', which the contract does not" in errors_of(rm)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    ["WebSearch(*)", "WebSearch(domain:example.org)", "Bash(ls:*)", "Bash()", "WebSearch (x)"],
+)
+def test_lead_with_a_parameterised_forbidden_tool_fails(rm: ModuleType, spec: str) -> None:
+    edit(rm.LEAD_DIR / "base.md", "  - Skill\n", f"  - Skill\n  - {spec}\n")
+    assert f"the lead holds {spec}, a source-reading tool" in errors_of(rm)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "Read(store/**)",
+        "mcp__plugin_stemma_stemma__read(x)",
+        "Agent()",
+        "Agent(a)(b)",
+        "Read extra",
+    ],
+)
+def test_unsupported_tool_spec_fails(rm: ModuleType, spec: str) -> None:
+    edit(rm.AGENTS_DIR / "worker.md", "  - Skill\n", f"  - Skill\n  - {spec}\n")
+    assert f"{spec!r} is not a tool spec roles may use" in errors_of(rm)
+
+
+def test_parked_arm_is_exempt_from_the_page_but_not_once_unparked(rm: ModuleType) -> None:
+    fragment = rm.LEAD_DIR / "s3_hypothesis_in_briefs.true.md"
+    filler = " ".join(["word"] * rm.PAGE_WORDS)
+    fragment.write_text(f"\n## Orders\n\n{filler}. <!-- prevents: x; evidence: y -->\n")
+    assert "assembled lead" not in errors_of(rm)
+    del rm.PARKED[("s3_hypothesis_in_briefs", "true")]
+    assert "assembled lead" in errors_of(rm)
