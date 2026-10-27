@@ -14,7 +14,7 @@
 ![Meterless](https://img.shields.io/badge/engine-Meterless%20World%20Model-555?style=flat-square)
 ![License](https://img.shields.io/badge/license-Apache--2.0-555?style=flat-square)
 
-**[Demo video](#demo)** · **[Quick start](#quick-start)** · **[How it works](#how-it-works)** · **[What you can ask](#what-you-can-ask)** · **[Verify it yourself](#verify-it-yourself)** · **[Sponsor technology](#sponsor-technology)** · **[Limits](#limits)**
+**[Demo video](https://youtu.be/vCqdOWOHbE0)** · **[Slide deck](docs/Descartes-deck.pdf)** · **[Quick start](#quick-start)** · **[How it works](#how-it-works)** · **[What you can ask](#what-you-can-ask)** · **[Verify it yourself](#verify-it-yourself)** · **[Sponsor technology](#sponsor-technology)** · **[Limits](#limits)**
 
 </div>
 
@@ -25,7 +25,9 @@ Descartes answers one hard business question the way a strong consulting team do
 
 ## Demo
 
-Demo video: *link added at submission.* Slide deck: *link added at submission.*
+[![Descartes demo video](https://img.youtube.com/vi/vCqdOWOHbE0/maxresdefault.jpg)](https://youtu.be/vCqdOWOHbE0)
+
+**[Watch the demo video (3:37)](https://youtu.be/vCqdOWOHbE0)** · **[Slide deck (PDF)](docs/Descartes-deck.pdf)**
 
 Entry for the Open Agent Hackathon 2026, Track 02, "The Agent That Can Explain Why", by Jack Riddle.
 
