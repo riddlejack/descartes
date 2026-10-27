@@ -324,6 +324,30 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   stored passages (248 claims with a Claude verdict and a passage; run 1 started 407
   checks) and asks only with `--live`.
 
+## 0c. Removing a tree node (tree-skill development runs, 27 Oct)
+- **Why.** `tree_upsert` could not remove a node, so a lead retired the nodes it had
+  merged by setting them aside. That left duplicates in `tree.json` and would list them
+  as set aside in the deliverable. Set-aside keeps its one meaning: the node cannot
+  change the headline.
+- **The call.** `tree_upsert({"id": <node>, "remove": <reason>})`, the lead only (not a
+  subagent of the lead), with nothing else in the object; the reason is text, at most
+  `SET_ASIDE_MAX_CHARS`.
+- **What holds a node** (exact facts; any one refuses the removal, and the refusal
+  names each): child nodes; a branch assigned to it; a status other than `open` or
+  `set_aside`; a branch verdict recorded on it; a review point (final review or branch
+  verdict) naming it; a branch order (`order.md`) or revision order (`revision-<n>.md`)
+  anywhere under `branches/` naming its id as a whole id. Claims name branches, not
+  nodes, so a node with no branch has no claims. A set-aside node nothing holds can be
+  removed.
+- **What is recorded.** The node's record gains `removed: {reason, at}` and leaves the
+  tree: `tree()`, `get_tree`, `tree.md`, the closure, the gate and `set_aside` no longer
+  see it. `tree.json` lists it under `removed` (`id`, `statement`, `reason`), and the
+  run's log holds a `node_removed` fact (`node`, `statement`, `reason`, `at`). A removed
+  id is never used again: `tree_upsert` refuses it, as a node, a parent or a removal.
+- **Races.** The check and the write happen under the register's lock, so a branch
+  assignment racing a removal either lands first (and the removal is refused, naming
+  the branch) or finds the node removed (and is refused).
+
 ## 1. Parts and owners
 - **A. Evidence service:** `src/stemma/evidence/`, `tests/evidence/`.
 - **B. Register, guards and driver:** `src/stemma/register/`, `src/stemma/hooks/`,

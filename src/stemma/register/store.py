@@ -57,7 +57,7 @@ RELEASABLE = frozenset({"holds", "holds_with_correction", "could_not_check"})
 NODE_KINDS = ("question", "open_lane")
 NODE_FIELDS = frozenset({"id", "parent", "kind", "statement", "doubt", "settles_by",
                          "flip_point", "crux", "branch_id", "status", "set_aside"})
-NODE_RECORD_FIELDS = NODE_FIELDS | {"reopened_from", "set_aside_from"}
+NODE_RECORD_FIELDS = NODE_FIELDS | {"reopened_from", "set_aside_from", "removed"}
 STATUSES = ("open", "in_progress", "proposed_done", "answered", "gap_accepted",
             "waiting_user", "stopped_by_limit", "set_aside")
 DONE = frozenset({"answered", "gap_accepted", "stopped_by_limit"})
@@ -1030,6 +1030,14 @@ class Register:
 
     # --------------------------------------------------------------------- tree
     def tree(self) -> list[dict[str, Any]]:
+        """The live nodes; a removed node is not in the tree (its record stays in the
+        log, and `removed_nodes` lists it)."""
+        return [n for n in self._all_nodes() if not n.get("removed")]
+
+    def removed_nodes(self) -> list[dict[str, Any]]:
+        return [n for n in self._all_nodes() if n.get("removed")]
+
+    def _all_nodes(self) -> list[dict[str, Any]]:
         self.wm.refresh()
         nodes = [dict(e["attrs"]) for e in self.wm.view("graph").query({"type": "node"})]
         return sorted(nodes, key=lambda n: str(n["id"]))
@@ -1053,7 +1061,9 @@ class Register:
 
     def _write_tree(self) -> None:
         nodes = self.tree_view()
-        data = {"nodes": nodes, "log_tx": len(self.wm.audit())}
+        data = {"nodes": nodes, "log_tx": len(self.wm.audit()),
+                "removed": [{"id": n["id"], "statement": n["statement"],
+                             "reason": n["removed"]["reason"]} for n in self.removed_nodes()]}
         self._write("tree.json", json.dumps(data, indent=2, ensure_ascii=False))
         lines = ["# Issue tree (rendered from tree.json)", ""]
         children: dict[str | None, list[dict[str, Any]]] = {}
@@ -1079,8 +1089,11 @@ class Register:
     def tree_upsert(self, caller: Caller, node: dict[str, Any]) -> dict[str, Any]:
         """Create or change one node. `set_aside` (D5, lead only) is the reason the node
         is set aside, or null to bring it back; a set-aside node and everything under it
-        counts as closed, and the reason is shown in the tree and the run's record."""
+        counts as closed, and the reason is shown in the tree and the run's record.
+        `{"id", "remove": <reason>}` (lead only) removes a node nothing holds."""
         self._require(caller, roles.AUTHORS, "change the tree")
+        if "remove" in node:
+            return self._remove_node(caller, node)
         bad = sorted(set(node) - NODE_FIELDS)
         if bad:
             raise Refused(f"Refused: unknown node field {bad[0]}.")
@@ -1102,6 +1115,10 @@ class Register:
         with self._exclusive():
             self.wm.refresh()
             self._sync_records()
+            gone = {n["id"]: n for n in self.removed_nodes()}
+            if nid in gone:
+                raise Refused(f"Refused: node {nid} was removed ({gone[nid]['removed']['reason']}); "
+                              f"a removed id is not used again.")
             existing = {n["id"]: n for n in self.tree()}
             merged: dict[str, Any] = dict(existing.get(nid) or {
                 "id": nid, "parent": None, "doubt": None, "settles_by": None,
@@ -1169,6 +1186,90 @@ class Register:
                     "node": nid, "reason": merged.get("set_aside"), "at": now()})
             self._write_tree()
         return merged
+
+    def _remove_node(self, caller: Caller, node: dict[str, Any]) -> dict[str, Any]:
+        """Lead only: remove a node nothing holds (a duplicate merged into another, say).
+        Under the lock, so a branch assignment racing it either lands first (and holds
+        the node) or finds it removed. Set-aside remains the way to keep a node that
+        cannot change the headline."""
+        if caller.agent_type != roles.LEAD or caller.agent_id:
+            raise Refused("Refused: only the lead removes nodes.")
+        if set(node) != {"id", "remove"}:
+            raise Refused("Refused: a removal carries nothing but the node's id and remove.")
+        nid, reason = node.get("id"), node.get("remove")
+        if not isinstance(nid, str) or not _SAFE_ID.fullmatch(nid):
+            raise Refused("Refused: a node needs a plain id.")
+        if not isinstance(reason, str) or not reason.strip():
+            raise Refused("Refused: remove is the reason the node is removed, as text.")
+        if len(reason) > SET_ASIDE_MAX_CHARS:
+            raise Refused(f"Refused: the removal reason is longer than "
+                          f"{SET_ASIDE_MAX_CHARS} characters.")
+        with self._exclusive():
+            self.wm.refresh()
+            self._sync_records()
+            gone = {n["id"]: n for n in self.removed_nodes()}
+            if nid in gone:
+                raise Refused(f"Refused: node {nid} was removed "
+                              f"({gone[nid]['removed']['reason']}).")
+            existing = {n["id"]: n for n in self.tree()}
+            if nid not in existing:
+                raise Refused(f"Refused: {nid} is not a node.")
+            holds = self._holders(existing[nid], existing)
+            if holds:
+                raise Refused(f"Refused: node {nid} is not removed: {'; '.join(holds)}.")
+            at = now()
+            rec = {**existing[nid], "removed": {"reason": reason.strip(), "at": at}}
+            # The node's own record first (authoritative); the run fact is its summary.
+            self._put_node(rec, self._src(caller))
+            self._run_fact(caller, "node_removed", {
+                "node": nid, "statement": rec["statement"], "reason": reason.strip(),
+                "at": at})
+            self._write_tree()
+        return rec
+
+    def _holders(self, n: dict[str, Any], existing: dict[str, dict[str, Any]]) -> list[str]:
+        """What holds a node in the tree (exact facts): its children, a branch or work on
+        it, a branch verdict recorded on it, a review point naming it, a branch order or
+        revision order naming its id. Claims name branches, not nodes, so a node with no
+        branch has no claims."""
+        nid = str(n["id"])
+        out = []
+        kids = sorted(str(c["id"]) for c in existing.values() if c.get("parent") == nid)
+        if kids:
+            out.append(f"child nodes {', '.join(kids)}")
+        if n.get("branch_id"):
+            out.append(f"branch {n['branch_id']} is assigned to it")
+        if n.get("status") not in ("open", "set_aside"):
+            out.append(f"its status is {n.get('status')}")
+        if self._live_facts(node_entity(nid), "branch_verdict"):
+            out.append("a branch verdict was recorded on it")
+        for pred in ("review_recorded", "branch_verdict_recorded"):
+            for rec in self._run_facts(pred):
+                out += [f"review point {pt.get('id')} names it"
+                        for pt in rec.get("points", []) if pt.get("node") == nid]
+        out += [f"{rel} names it" for rel in self._orders_naming(nid)]
+        return out
+
+    def _orders_naming(self, nid: str) -> list[str]:
+        """Branch orders (`order.md`) and revision orders (`revision-<n>.md`) anywhere
+        under branches/ whose text holds the id as a whole id (a trailing full stop is
+        punctuation, not part of it). Links are not followed."""
+        root = self.run_dir / "branches"
+        if not root.is_dir() or root.is_symlink():
+            return []
+        pat = re.compile(rf"(?<![A-Za-z0-9_.-]){re.escape(nid)}(?![A-Za-z0-9_-])"
+                         rf"(?!\.[A-Za-z0-9])")
+        hits = []
+        for dirpath, _dirs, files in os.walk(root, followlinks=False):
+            for name in sorted(files):
+                if name != "order.md" and not re.fullmatch(r"revision-\d+\.md", name):
+                    continue
+                path = Path(dirpath) / name
+                if path.is_symlink() or not path.is_file():
+                    continue
+                if pat.search(path.read_text(encoding="utf-8", errors="replace")):
+                    hits.append(path.relative_to(self.run_dir).as_posix())
+        return sorted(hits)
 
     def _branch_dir(self, branch_id: str) -> PurePosixPath:
         """The branch's folder, relative to the run folder, reached without symlinks."""

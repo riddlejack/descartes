@@ -213,7 +213,10 @@ def tree_upsert(ctx: Context[Any], node: dict[str, Any]) -> dict[str, Any]:
     Nodes are sub-questions of the question asked; options and rivals are never nodes.
     Lead only: set_aside is the reason a node is set aside (neither possible answer could
     change the headline), or null to bring it back; a set-aside node and everything under
-    it counts as closed and is listed by gate_status. Fields left out keep their values."""
+    it counts as closed and is listed by gate_status. Fields left out keep their values.
+    Lead only: {id, remove: reason} removes a node nothing holds (no children, no
+    branch or work on it, no review point or order naming it), for a duplicate merged
+    into another; the refusal names whatever holds it. A removed id is not used again."""
     return _call(ctx, "tree_upsert", lambda r, c: r.tree_upsert(c, node))
 
 
