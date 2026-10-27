@@ -72,10 +72,16 @@ def run_analysis(run_dir: Path, script: str, inputs: list[str] | None,
 
 def run_for(register: Register, caller: Caller, script: str, inputs: list[str] | None,
             documents: list[str] | None) -> dict[str, Any]:
-    """The host tool's body: authors only, inputs through the register's own lookup."""
+    """The host tool's body: authors only, inputs through the register's own lookup. A
+    lead's script gets no document files (stemma.analysis.document() fails loudly)."""
     if caller.agent_type not in roles.AUTHORS:
         raise Refused(f"Refused: {roles.short(caller.agent_type)} sessions do not run "
                       f"analysis scripts.")
+    if caller.agent_type == roles.LEAD and documents:
+        # The lead reads approved artifacts only; a script's stdout must not become a
+        # route to a source's text. Its scripts get claim inputs and no documents.
+        raise Refused("Refused: lead sessions run analysis on claim inputs only, not on "
+                      "documents.")
     evidence = register.evidence if documents else None
     return run_analysis(register.run_dir, script, inputs, documents, register._inputs(),
                         evidence)

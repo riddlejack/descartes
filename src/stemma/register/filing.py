@@ -62,12 +62,11 @@ def canonical(value: Any) -> str:
 
 
 def claim_id_of(claim: dict[str, Any]) -> str:
-    """Content-derived id over the fields the agent supplies (not the derivation's
-    `bundle_sha256`, which the register writes)."""
+    """Content-derived id over the fields the agent supplies and, for an estimate, the
+    hash of the code its re-run ran (`derivation.bundle_sha256`, which the register
+    writes at filing). The same fields re-filed after the script changed are a different
+    claim, with its own checks; the claim filed first keeps its code and checks."""
     body = {k: claim.get(k) for k in AGENT_FIELDS}
-    if isinstance(body["derivation"], dict):
-        body["derivation"] = {k: v for k, v in body["derivation"].items()
-                              if k not in CODE_DERIVATION_FIELDS}
     return hashlib.sha256(canonical(body).encode("utf-8")).hexdigest()
 
 

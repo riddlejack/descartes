@@ -131,8 +131,10 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   `store/derivations/<sha256>/` (`files/<path>`, `bundle.json`); its sha256 is the
   SHA-256 of canonical JSON `{format: "stemma-bundle/1", script, files: {path:
   sha256}}`, recorded as `derivation.bundle_sha256` and on the `derivation_reproduces`
-  check (with `bundle_files`). A filed claim re-runs only its stored bundle, so a script
-  edited after filing changes nothing filed (a revised calculation is a new claim). The
+  check (with `bundle_files`). A claim's id covers `derivation.bundle_sha256`, so a
+  re-filing after a script edit is a new claim with its own checks. A filed claim
+  re-runs only its stored bundle (each stored file read with its cap applied before
+  reading), so a script edited after filing changes nothing filed. The
   sandbox puts the bundle's folder on `sys.path` under `python -I`.
   `stemma.register.derivation.build_bundle(run_dir, script_rel)` is the one builder;
   `stemma.register.filing.rerun_filed(...)` re-runs a filed claim.
@@ -140,19 +142,25 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   `analysis/` exactly as a re-run does (its bundle, no network, no writes outside a
   temporary folder, a time limit) and returns the exact `result(...)` value, stdout
   (capped), the exit code and the bundle's hash; anything outside `analysis/` is
-  refused. It writes nothing to the run.
+  refused. It writes nothing to the run. For the lead's own thread it takes claim inputs
+  only: a `documents` argument is refused and no document reaches the sandbox, so
+  `document()` fails (D6); workers keep `document()`. A live test on the pinned machine
+  shows the sandbox refusing a network connection and a write outside its folder.
 - **Sealed release**: after the `finished` fact, `finish_run` writes
-  `release/manifest.json` (canonical JSON, format `stemma-release-manifest/1`: run id,
-  version, release time; every regular file's path, size and SHA-256 except the
-  operational files `stemma.register.manifest.EXCLUDED` names (events, status and usage
-  files, `.stemma/`, locks, SQLite indexes, identity stamps, temporary files,
-  `register/checks.jsonl`, `retro.md`, `release/`); the register log's sealed length,
-  SHA-256 and transaction count). Its own SHA-256 goes to `events.jsonl`
-  (`release_sealed`) and the result, never the sealed log. A link or special file in
-  the run refuses the release and blocks it. After the seal only the excluded files may
-  change; `manifest.check(run_dir, manifest_sha256)` names every other difference,
-  including log bytes appended after the seal. `manifest.read_log` and
-  `manifest.parse_log` read the log with no writer or lock.
+  `release/manifest.json` (canonical JSON, format `stemma-release-manifest/2`: run id,
+  version, release time; every regular file's path, size and SHA-256 except the exact
+  operational files `stemma.register.manifest.EXCLUDED` names, by full path, never by
+  folder or suffix, plus the driver-owned folders `.stemma/` and `.stemma-tmp/`, which
+  no agent writes; `"log"` and `"checks"`: `{path, bytes, sha256, records or
+  transactions}` for `register/log.jsonl` and `register/checks.jsonl`, each sealed as an
+  append-only prefix taken in the same step; `"growing": ["register/calls/"]`, where new
+  identity stamps may appear but sealed ones never change). Its own SHA-256 goes to
+  `events.jsonl` (`release_sealed`) and the result, never the sealed log. A link or
+  special file in the run refuses the release and blocks it. After the seal, only the
+  excluded files may change, new lines may follow the sealed prefixes (reported by
+  `manifest.after_seal`, never counted), and nothing else may exist under `release/`;
+  `manifest.check(run_dir, manifest_sha256)` names every other difference.
+  `manifest.read_log` and `manifest.parse_log` read the log with no writer or lock.
 - **Frame completion** (Codex review #9): a frame-only run is complete only if, after
   every session has ended and been verified, the critique is from the latest round's
   verified session; otherwise it ends `ended_without_release` with what is missing.

@@ -1,19 +1,22 @@
 """The sealed release manifest, `release/manifest.json`, and its check.
 
 At release (`finish_run`, after the `finished` fact) the run folder is sealed: every
-regular file not excluded is listed with its relative path, size and SHA-256, sorted by
-path; the register's log is recorded separately (length, digest, transactions). Any
-symlink or special file (FIFO, socket, device) found while sealing refuses the seal: a
-released run holds plain files only. The manifest is canonical JSON (sorted keys,
-separators `,` and `:`, UTF-8, no trailing newline); its own SHA-256 goes back to the
-caller and is never written into the log or the manifest.
+regular file is listed with its relative path, size and SHA-256, sorted by path, except
+the operational files named one by one in EXCLUDED and the two driver-owned folders in
+EXCLUDED_FOLDERS. No pattern, suffix or other folder is excluded, so nothing an agent can
+name escapes the seal. Two append-only records are also sealed as prefixes: the register's
+log (`log`, also listed in `files`) and the check records (`checks`, kept out of `files`:
+they grow after release, and `after_seal` names what came later), each with its length,
+the SHA-256 of those bytes and its number of records. New identity stamps may appear in
+`register/calls/`; sealed ones may not change. Any symlink or special file (FIFO, socket, device) found
+while sealing refuses the seal: a released run holds plain files only. Under `release/`
+only the manifest and earlier manifests kept by exact name may exist.
+
+The manifest is canonical JSON (sorted keys, separators `,` and `:`, UTF-8, no trailing
+newline); its own SHA-256 goes back to the caller and is never written into the log.
 
 `check` is pure reading: no lock is taken and nothing is written. Every read opens each
 path component without following a symlink, as `safeio` does.
-
-Patterns in EXCLUDED are globs on the path relative to the run folder: `*` and `?` stay
-within one path component, and `**` spans any number of components (`dir/**` matches the
-folder and everything in it; `**/x` matches `x` at any depth).
 """
 
 from __future__ import annotations
@@ -26,7 +29,6 @@ import stat
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from functools import cache
 from pathlib import Path
 from typing import Any, Final
 
@@ -36,40 +38,53 @@ from stemma.register.wm.log import decode_line
 
 MANIFEST: Final = "release/manifest.json"
 REGISTER_LOG: Final = "register/log.jsonl"
+CHECKS_LOG: Final = "register/checks.jsonl"
 # Invariant: the manifest's format name; a new name whenever a field's meaning or the
 # exclusion list changes.
-FORMAT: Final = "stemma-release-manifest/1"
+FORMAT: Final = "stemma-release-manifest/2"
 # Resource limit: bytes read per call while hashing (memory, not a judgment).
 _CHUNK: Final = 1 << 20
+# Invariant: the names an earlier manifest is kept under (`seal` numbers them 1, 2, ...).
+_KEPT: Final = re.compile(r"release/manifest\.([1-9][0-9]*)\.json")
 
-# Never listed, never checked. Invariant for each: it holds no research content, or it is
-# written by design after the release, so sealing it would fail every honest run.
+# Exact run-relative paths never listed and never checked. Invariant for each: it holds
+# no research content, or it is written by design after the release, so sealing it would
+# fail every honest run.
 EXCLUDED: Final[tuple[str, ...]] = (
+    "release/manifest.json",  # the manifest itself: it cannot hold its own digest
     "events.jsonl",  # driver and hook events go on after release (the retrospective)
+    "events.jsonl.lock",  # flock files: empty, made by any reader or writer at any time
+    "events.jsonl.torn",  # where the next append moves a crashed writer's partial line
     "status.json",  # the driver's live status, rewritten while any session runs
     "status.html",  # the same, rendered for people
     "usage.jsonl",  # token accounting of sessions that end after release
+    "usage.jsonl.lock",
+    "usage.jsonl.torn",
     "usage.md",  # rendered again from usage.jsonl on every update
-    ".stemma/**",  # driver state, session streams, settings and arrivals, written while
-    #   sessions run, the retrospective writer's after release
-    "**/*.lock",  # flock files: empty, made by any reader or writer at any time
-    "store/index.sqlite*",  # derived search index (WAL): SQLite rewrites it and its
-    #   -wal and -shm files on reads and checkpoints; store/text and receipts are sealed
-    "register/index.sqlite*",  # derived index, rebuilt from the register log
-    "register/calls/**",  # the guard's per-call identity stamps, one per tool call,
-    #   the retrospective writer's after release
-    "release/**",  # the manifest itself (it cannot hold its own digest) and earlier seals
     "retro.md",  # the retrospective writer, launched by finish_run, writes it after release
-    "register/checks.jsonl",  # the retrospective writer's request, launch and end marks
-    #   append after release
-    ".stemma-tmp/**",  # each session's harness temp folder (command output, not record),
-    #   the retrospective session's after release
-    "register/tmp/**",  # safeio's temporary files, present only until renamed into place
-    "**/*.tmp",  # atomic-write temporaries (tree.json.tmp and the like), renamed away
-    "**/*.torn",  # sidecars where the next append moves a crashed writer's partial line;
-    "**/*.torn-*",  #   that append may come after release
-    "**/.DS_Store",  # macOS Finder writes it whenever someone opens the folder
+    "tree.json.tmp",  # the tree's atomic-write temporary, renamed away at once
+    "register/register.lock",  # the register's writers' lock
+    "register/log.jsonl.lock",  # World Model's log lock
+    "register/checks.jsonl.lock",
+    "register/checks.jsonl.torn",  # checks.jsonl grows after release (see `checks`)
+    "register/index.sqlite",  # derived index, rebuilt from the register log
+    "register/index.sqlite.tmp",  # its rebuild's temporary and that temporary's journal
+    "register/index.sqlite.tmp-journal",
+    "store/index.sqlite",  # the evidence search index (WAL): SQLite rewrites these on
+    "store/index.sqlite-wal",  # reads and checkpoints; derived from the sealed
+    "store/index.sqlite-shm",  # store/text/ and store/receipts/
+    "store/index.sqlite-journal",
 )
+# Whole folders excluded. Invariant: each is owned by the driver, per session, and no
+# agent can write it (both are tool-only: the guards and the sandbox deny every agent
+# write under them): `.stemma/` holds the driver's state, the run plugin, each session's
+# settings and stream (the retrospective writer's after release) and its lock;
+# `.stemma-tmp/` holds each session's harness temp folder (CLAUDE_CODE_TMPDIR).
+EXCLUDED_FOLDERS: Final[tuple[str, ...]] = (".stemma", ".stemma-tmp")
+# A folder whose sealed files must stay, unchanged, while new files may appear in it.
+# Invariant: the guard writes one identity stamp per tool call (`<tool_use_id>.json`),
+# the retrospective writer's after release, and never changes or removes one.
+GROWING_FOLDERS: Final[tuple[str, ...]] = ("register/calls",)
 
 
 class ManifestError(Exception):
@@ -77,19 +92,19 @@ class ManifestError(Exception):
 
 
 class UnsealableEntry(ManifestError):
-    """A symlink or special file lies in the run folder: a release holds plain files."""
+    """A symlink, special file or stray release file lies in the run folder."""
 
 
 class LogError(Exception):
-    """The register log cannot be read as committed JSON-object lines."""
+    """An append-only record cannot be read as committed JSON-object lines."""
 
 
 class LogCorrupt(LogError):
-    """A newline-terminated line of the register log is not a JSON object."""
+    """A newline-terminated line of the record is not a JSON object."""
 
 
 class LogTorn(LogError):
-    """The log's bytes end without a newline (a writer mid-append, or one that died).
+    """The record's bytes end without a newline (a writer mid-append, or one that died).
     `records` holds the complete records before the tail."""
 
     def __init__(self, message: str, records: list[dict[str, Any]], tail: int) -> None:
@@ -99,23 +114,24 @@ class LogTorn(LogError):
 
 
 # ------------------------------------------------------------------ the register log
-def parse_log(data: bytes) -> list[dict[str, Any]]:
-    """The records of a register log's bytes. A line that is not a JSON object raises
-    LogCorrupt; bytes after the last newline raise LogTorn, never skipped silently."""
+def parse_log(data: bytes, where: str = REGISTER_LOG) -> list[dict[str, Any]]:
+    """The records of an append-only record's bytes (the register log by default). A
+    line that is not a JSON object raises LogCorrupt; bytes after the last newline raise
+    LogTorn, never skipped silently."""
     committed = data.rfind(b"\n") + 1
     records: list[dict[str, Any]] = []
     offset = 0
     for line in data[:committed].splitlines(keepends=True):
         try:
-            records.append(decode_line(line, f"{REGISTER_LOG} at byte {offset}"))
+            records.append(decode_line(line, f"{where} at byte {offset}"))
         except LogCorruptError as exc:
             raise LogCorrupt(str(exc)) from exc
         offset += len(line)
     if committed != len(data):
         tail = len(data) - committed
-        raise LogTorn(f"{REGISTER_LOG} ends in {tail} bytes with no newline (a writer "
-                      f"mid-append, or one that died); the {len(records)} complete "
-                      f"records before them are intact", records, tail)
+        raise LogTorn(f"{where} ends in {tail} bytes with no newline (a writer mid-append, "
+                      f"or one that died); the {len(records)} complete records before them "
+                      f"are intact", records, tail)
     return records
 
 
@@ -130,28 +146,29 @@ def read_log(run_dir: Path) -> list[dict[str, Any]]:
 
 
 # ------------------------------------------------------------------------- rules
-@cache
-def _pattern(glob: str) -> re.Pattern[str]:
-    out, i = "", 0
-    while i < len(glob):
-        if glob.startswith("**/", i):
-            out, i = out + "(?:.*/)?", i + 3
-        elif glob.startswith("/**", i) and i + 3 == len(glob):
-            out, i = out + "(?:/.*)?", i + 3
-        elif glob.startswith("**", i):
-            out, i = out + ".*", i + 2
-        elif glob[i] == "*":
-            out, i = out + "[^/]*", i + 1
-        elif glob[i] == "?":
-            out, i = out + "[^/]", i + 1
-        else:
-            out, i = out + re.escape(glob[i]), i + 1
-    return re.compile(out)
-
-
 def excluded(rel: str) -> bool:
     """Whether a path relative to the run folder is excluded from the seal."""
-    return any(_pattern(g).fullmatch(rel) for g in EXCLUDED)
+    return rel in EXCLUDED or any(rel == d or rel.startswith(d + "/")
+                                  for d in EXCLUDED_FOLDERS)
+
+
+def _growing(rel: str) -> bool:
+    return any(rel.startswith(d + "/") for d in GROWING_FOLDERS)
+
+
+def _stray_release(rel: str) -> bool:
+    """A path under release/ other than the manifest or an earlier manifest kept by name."""
+    return (rel == "release" or rel.startswith("release/")) and rel != MANIFEST \
+        and not _KEPT.fullmatch(rel)
+
+
+def _rules() -> list[str]:
+    """The `excluded` field: every exact path, then each excluded folder as `name/`."""
+    return [*EXCLUDED, *(f"{d}/" for d in EXCLUDED_FOLDERS)]
+
+
+def _growing_rules() -> list[str]:
+    return [f"{d}/" for d in GROWING_FOLDERS]
 
 
 # -------------------------------------------------------------------------- walk
@@ -159,6 +176,7 @@ _DIR_FLAGS: Final = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 _TYPES: Final = ((stat.S_ISREG, "file"), (stat.S_ISLNK, "symlink"), (stat.S_ISFIFO, "fifo"),
                  (stat.S_ISSOCK, "socket"), (stat.S_ISCHR, "character device"),
                  (stat.S_ISBLK, "block device"), (stat.S_ISDIR, "folder"))
+_PREFIXED: Final = (REGISTER_LOG, CHECKS_LOG)
 
 
 def _type(mode: int) -> str:
@@ -221,7 +239,7 @@ def _walk_fd(fd: int, prefix: str, errors: list[str]) -> Iterator[_Entry]:
 
 
 def _read(e: _Entry) -> bytes | tuple[int, str]:
-    """The bytes of the register log, or (size, SHA-256) of any other regular file;
+    """The bytes of an append-only record, or (size, SHA-256) of any other regular file;
     opened without following a link or blocking on a FIFO. OSError when the entry is no
     longer a regular file."""
     fd = os.open(e.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=e.dir_fd)
@@ -229,7 +247,7 @@ def _read(e: _Entry) -> bytes | tuple[int, str]:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise OSError(f"{e.rel} is no longer a regular file")
         os.set_blocking(fd, True)
-        if e.rel == REGISTER_LOG:
+        if e.rel in _PREFIXED:
             chunks = []
             while chunk := os.read(fd, _CHUNK):
                 chunks.append(chunk)
@@ -260,52 +278,67 @@ def canonical(manifest: dict[str, Any]) -> bytes:
 def seal(run_dir: Path, version: int, run_id: str | None = None) -> dict[str, Any]:
     """Write `release/manifest.json` for the run folder as it is now, for released draft
     `version` (run_id read from run.json when not given), and return what to record
-    beside the release: the manifest's path and own SHA-256, the file count, the log
-    record. An earlier manifest is kept as `release/manifest.<n>.json`. Raises
-    UnsealableEntry for a symlink or special file, LogError for a torn or corrupt
-    register log, and ManifestError for anything else that stops the seal."""
+    beside the release: the manifest's path and own SHA-256, the file count, and the
+    `log` and `checks` records. An earlier manifest is kept as
+    `release/manifest.<n>.json` and sealed. Raises UnsealableEntry for a symlink, special
+    file or stray file under release/, LogError for a torn or corrupt register log or
+    check record, and ManifestError for anything else that stops the seal; nothing is
+    moved or written then."""
     if isinstance(version, bool) or not isinstance(version, int) or version < 1:
         raise ManifestError(f"cannot seal {run_dir}: version {version!r} is not a positive "
                             f"whole number")
     run_id = run_id if run_id is not None else _run_id(run_dir)
     errors: list[str] = []
     files: list[dict[str, Any]] = []
-    log: dict[str, Any] | None = None
+    prefixes: dict[str, dict[str, Any]] = {}
     try:
         for e in _walk(run_dir, errors):
             if e.kind != "file":
                 raise UnsealableEntry(f"cannot seal {run_dir}: {e.rel} is {e.what()}; a "
                                       f"released run holds plain files only")
+            if _stray_release(e.rel):
+                raise UnsealableEntry(f"cannot seal {run_dir}: {e.rel} is in release/, "
+                                      f"which holds only the manifests")
             size, sha, data = _digest(e)
-            files.append({"path": e.rel, "size": size, "sha256": sha})
+            if e.rel != CHECKS_LOG:  # sealed as a prefix only: it grows after release
+                files.append({"path": e.rel, "size": size, "sha256": sha})
             if data is not None:
-                log = {"path": REGISTER_LOG, "bytes": size, "sha256": sha,
-                       "transactions": len(parse_log(data))}
+                prefixes[e.rel] = {"path": e.rel, "bytes": size, "sha256": sha,
+                                   "records": len(parse_log(data, e.rel))}
+        previous = _previous(run_dir)
     except OSError as exc:
         raise ManifestError(f"cannot seal {run_dir}: {exc}") from exc
     if errors:
         raise ManifestError(f"cannot seal {run_dir}: " + "; ".join(errors))
-    if log is None:
-        raise ManifestError(f"cannot seal {run_dir}: {REGISTER_LOG} is missing")
+    for rel in _PREFIXED:
+        if rel not in prefixes:
+            raise ManifestError(f"cannot seal {run_dir}: {rel} is missing")
+    if previous is not None:
+        files.append(previous[1])
     files.sort(key=lambda f: str(f["path"]))
+    log, checks = prefixes[REGISTER_LOG], prefixes[CHECKS_LOG]
     manifest = {
         "format": FORMAT,
         "run_id": run_id,
         "version": version,
         "released_at": datetime.now(UTC).isoformat(timespec="milliseconds").replace(
             "+00:00", "Z"),
-        "excluded": list(EXCLUDED),
-        "log": log,
+        "excluded": _rules(),
+        "growing": _growing_rules(),
+        "log": {"path": REGISTER_LOG, "bytes": log["bytes"], "sha256": log["sha256"],
+                "transactions": log["records"]},
+        "checks": checks,
         "files": files,
     }
     data = canonical(manifest)
     try:
-        _keep_previous(run_dir)
+        if previous is not None:
+            safeio.move(run_dir, MANIFEST, previous[0])
         safeio.write_bytes(run_dir, MANIFEST, data)
     except (OSError, safeio.UnsafePath) as exc:
         raise ManifestError(f"cannot write {MANIFEST}: {exc}") from exc
     return {"manifest": MANIFEST, "manifest_sha256": hashlib.sha256(data).hexdigest(),
-            "files": len(files), "log": log}
+            "files": len(files), "log": manifest["log"], "checks": checks}
 
 
 def _run_id(run_dir: Path) -> str:
@@ -319,15 +352,19 @@ def _run_id(run_dir: Path) -> str:
     return run_id
 
 
-def _keep_previous(run_dir: Path) -> None:
+def _previous(run_dir: Path) -> tuple[str, dict[str, Any]] | None:
+    """Where an existing manifest will be kept, and its entry; None when there is none."""
     try:
-        safeio.read_bytes(run_dir, MANIFEST)
+        old = safeio.read_bytes(run_dir, MANIFEST)
     except FileNotFoundError:
-        return
+        return None
+    except (safeio.UnsafePath, NotADirectoryError) as exc:
+        raise OSError(f"{MANIFEST} is not a plain file: {exc}") from exc
     n = 1
     while safeio.is_file(run_dir, f"release/manifest.{n}.json"):
         n += 1
-    safeio.move(run_dir, MANIFEST, f"release/manifest.{n}.json")
+    keep = f"release/manifest.{n}.json"
+    return keep, {"path": keep, "size": len(old), "sha256": hashlib.sha256(old).hexdigest()}
 
 
 # ------------------------------------------------------------------------- check
@@ -348,11 +385,15 @@ def check(run_dir: Path, manifest_sha256: str | None = None) -> list[str]:
     try:
         manifest = json.loads(data)
         sealed = {str(f["path"]): f for f in manifest["files"]}
-        log = manifest["log"]
-        sealed_log = (int(log["bytes"]), str(log["sha256"]), int(log["transactions"]))
+        log, checks = manifest["log"], manifest["checks"]
+        prefixes = {REGISTER_LOG: (int(log["bytes"]), str(log["sha256"]),
+                                   int(log["transactions"])),
+                    CHECKS_LOG: (int(checks["bytes"]), str(checks["sha256"]),
+                                 int(checks["records"]))}
     except (ValueError, KeyError, TypeError) as exc:
         return [*out, f"{MANIFEST} is not a readable manifest ({type(exc).__name__}: {exc})"]
-    if manifest.get("format") != FORMAT or manifest.get("excluded") != list(EXCLUDED):
+    if manifest.get("format") != FORMAT or manifest.get("excluded") != _rules() \
+            or manifest.get("growing") != _growing_rules():
         out.append(f"{MANIFEST} was sealed under other rules ({manifest.get('format')}) than "
                    f"this build checks ({FORMAT})")
     errors: list[str] = []
@@ -361,7 +402,8 @@ def check(run_dir: Path, manifest_sha256: str | None = None) -> list[str]:
         for e in _walk(run_dir, errors):
             seen.add(e.rel)
             try:
-                line = _compare(e, sealed.get(e.rel), sealed_log)
+                line = (_compare_prefix(e, prefixes[e.rel]) if e.rel in prefixes
+                        else _compare(e, sealed.get(e.rel)))
             except OSError as exc:  # gone or replaced while being read
                 line = f"unreadable: {e.rel} ({exc})"
             if line:
@@ -369,41 +411,72 @@ def check(run_dir: Path, manifest_sha256: str | None = None) -> list[str]:
     except OSError as exc:
         return [*out, f"cannot read the run folder {run_dir}: {exc}"]
     out.extend(errors)
-    for rel, f in sorted(sealed.items()):
+    for rel in sorted(set(sealed) | set(prefixes)):
         if rel not in seen and not excluded(rel):
-            out.append(f"register log: {rel} is missing (sealed at {sealed_log[0]} bytes)"
-                       if rel == REGISTER_LOG else
-                       f"removed: {rel} (sealed with {f.get('size')} bytes, missing now)")
+            out.append(f"{_who(rel)}{rel} is missing (sealed at {prefixes[rel][0]} bytes)"
+                       if rel in prefixes else
+                       f"removed: {rel} (sealed with {sealed[rel].get('size')} bytes, "
+                       f"missing now)")
     return out
 
 
-def _compare(e: _Entry, f: dict[str, Any] | None,
-             sealed_log: tuple[int, str, int]) -> str | None:
+def after_seal(run_dir: Path) -> list[str]:
+    """What `register/checks.jsonl` gained after the seal, one plain line per record
+    (the retrospective writer's request, launch and end, a later revocation): reported,
+    never a difference. Empty when nothing was added, or the run is not sealed or its
+    check records are unreadable (then `check` names the problem). Pure reading."""
+    try:
+        sealed = json.loads(safeio.read_bytes(run_dir, MANIFEST))["checks"]
+        want = int(sealed["bytes"])
+        data = safeio.read_bytes(run_dir, CHECKS_LOG)
+        later = parse_log(data[want:], CHECKS_LOG) if len(data) > want else []
+    except (OSError, ValueError, KeyError, TypeError, safeio.UnsafePath, LogError):
+        return []
+    return [f"{CHECKS_LOG}: after the seal: {json.dumps(r, sort_keys=True)}" for r in later]
+
+
+def _who(rel: str) -> str:
+    return "register log: " if rel == REGISTER_LOG else "check records: "
+
+
+def _compare(e: _Entry, f: dict[str, Any] | None) -> str | None:
     if e.kind != "file":
         return f"not a plain file: {e.rel} is {e.what()}" + (
             "" if f is None else ", sealed as a plain file")
     if f is None:
+        if _stray_release(e.rel):
+            return f"added: {e.rel} (release/ holds only the manifests)"
+        if _growing(e.rel) and "/" not in e.rel.split("/", 2)[-1]:
+            return None  # a new identity stamp, from a tool call after the seal
         return f"added: {e.rel} (not in the seal)"
-    size, sha, data = _digest(e)
-    if data is not None:
-        return _compare_log(data, sealed_log)
+    size, sha, _data = _digest(e)
     if size == f.get("size") and sha == f.get("sha256"):
         return None
     return f"changed: {e.rel} ({f.get('size')} bytes sealed, {size} now; contents differ)"
 
 
-def _compare_log(data: bytes, sealed_log: tuple[int, str, int]) -> str | None:
-    want, sha, txs = sealed_log
+def _compare_prefix(e: _Entry, sealed: tuple[int, str, int]) -> str | None:
+    """The register log must be exactly as sealed; the check records may only have grown
+    past their sealed bytes, by whole records (`after_seal` names them)."""
+    rel = e.rel
+    if e.kind != "file":
+        return f"not a plain file: {rel} is {e.what()}, sealed as a plain file"
+    _size, _sha, raw = _digest(e)
+    data = raw if raw is not None else b""
+    want, sha, records = sealed
+    who = _who(rel)
     if len(data) == want and hashlib.sha256(data).hexdigest() == sha:
         return None
     if len(data) < want:
-        return (f"register log: {REGISTER_LOG} is shorter than when sealed ({len(data)} "
-                f"bytes now, {want} sealed)")
+        return (f"{who}{rel} is shorter than when sealed ({len(data)} bytes now, {want} "
+                f"sealed)")
     if hashlib.sha256(data[:want]).hexdigest() != sha:
-        return f"register log: the {want} bytes of {REGISTER_LOG} sealed at release changed"
+        return f"{who}the {want} bytes of {rel} sealed at release changed"
     try:
-        later = f"{len(parse_log(data)) - txs} transactions"
+        n = len(parse_log(data, rel)) - records
     except LogError as exc:
-        later = f"bytes that are not whole records ({exc})"
-    return (f"register log: {len(data) - want} bytes appended to {REGISTER_LOG} after the "
-            f"seal ({later}), outside the sealed log")
+        return f"{who}{rel} has bytes after the seal that are not whole records ({exc})"
+    if rel == CHECKS_LOG:
+        return None  # check records go on after release: the retrospective, revocations
+    return (f"{who}{len(data) - want} bytes appended to {rel} after the seal ({n} "
+            f"transactions), outside the sealed log")
