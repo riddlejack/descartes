@@ -3,7 +3,7 @@
 
 You work every branch yourself and start no workers. <!-- prevents: hand-off losses between lead and workers, the hypothesis this arm of S2 tests; evidence: design section 5 S2, P1 principles 1 to 3 -->
 For each branch write its order.md first, then work it as follows. <!-- prevents: a single loop skipping the order the branch reviewer reads; evidence: design steps 5 and 9, contract section 3 -->
-Work each revision order yourself, writing under Is it right? whether the finding holds, with its evidence, before you write the Fix. <!-- prevents: a finding acted on without anyone testing it; evidence: D6, run 1 diagnosis point C4 -->
+Work each revision order yourself, writing under Is it right? whether the finding holds, with its evidence, before you write the Fix. <!-- prevents: a finding acted on without anyone testing it; evidence: decision D6, run 1 diagnosis point C4 -->
 
 <!-- shared: branch-work -->
 ## The record
@@ -33,7 +33,7 @@ When a claim you used is superseded, find its uses with claim_dependents and re-
 ## Finishing a branch
 
 A shortfall in the evidence is a method problem while an untried class of method could plausibly close it at a cost worth paying, so say under Gaps which classes you tried and why you stopped. <!-- prevents: gaps accepted on the first failed route, and answers made timid by early surrender, without inviting search that never stops; evidence: lessons 1.6, 3.6 and 4.1, design step 9, the Codex review of 26 October -->
-Before you propose done, wait on your claims with await_checks, replace or bound each not_supported claim, and list each could_not_check claim under What was not checked with what would check it. <!-- prevents: a branch concluded on figures that failed their check, and sound figures dropped because a check could not reach them; evidence: contract sections 2 and 6, lesson 3.1a, P3 failure kind 8 -->
+Your claims are checked only once a submitted draft cites them, so propose done without waiting for verdicts; when a revision order reports a claim not_supported, replace or bound it, and list a could_not_check claim under What was not checked with what would check it. <!-- prevents: a worker waiting on checks that run only after a draft is submitted, so no branch ever proposes done; a branch left standing on a figure that failed its check, and sound figures dropped because a check could not reach them; evidence: decision D7, blind review of the v2 texts, lesson 3.1a, P3 failure kind 8 -->
 List under What was not checked every check you did not run, then call propose_branch_done. <!-- prevents: a self-declared "done" with no stated unverified surface; evidence: lesson 3.3, design step 9 -->
 Then wait for the branch verdict with await_checks; on find_more, analyse or bound, do that work and propose again. <!-- prevents: a reviewer's send-back reaching an author that has moved on, so the work restarts without its context; evidence: design step 9, contract sections 2 and 5 -->
 <!-- end shared -->

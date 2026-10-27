@@ -12,7 +12,7 @@ Use this card when the question itself asks whether to act or which option to ta
 Take the options the question or the user names: for "whether to do X", doing it and not doing it; for "A or B", A and B.
 Make the tree's sub-questions the criteria every option is compared on, so that no option owns a subtree, and find early which criterion could end the question.
 If the question asks what to do and names no options, work the options out from the findings after the research, never before it.
-Ask what the decider is trying to achieve; if the options cannot be ranked, the goal has not been stated, and stating it is the first finding.
+Take what the decider is trying to achieve from the question and task/; if the options cannot be ranked against it, say so as the first finding.
 
 ## Where to look
 
