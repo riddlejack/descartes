@@ -37,6 +37,17 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$STEMMA_PYTHON\" -I -m stemma.hooks stop",
+            "timeout": 300
+          }
+        ]
+      }
     ]
   }
 }

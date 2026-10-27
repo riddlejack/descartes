@@ -218,6 +218,30 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   written first; a crash between its writes is repaired, idempotently, by the next
   writer under the lock, so no send-back is ever lost.
 
+## 0b. The lead stays until the release (run 3, 27 Oct)
+- **Stop hook.** The plugin's `Stop` hook (`stemma.hooks stop`, timeout 300 s) answers
+  for the lead's own session only (the session id in the driver's state). Until
+  `finish_run` is accepted, the run is frame-only, or the lead's time limit has passed,
+  it refuses the stop (exit 2) with a reason naming what is in flight: branches ordered
+  with no record, branches in progress, branches awaiting their verdict, checks the host
+  is running or will start; it says to wait with `await_checks` and that background
+  workers report back. Before refusing it waits inside the hook, up to 240 s and never
+  past the lead's time limit (resource limits), for any of that to move, so a waiting
+  lead costs a turn per change. After 30 refusals in a row with nothing changing (a
+  resource limit) it lets the lead stop. Every other session stops; a failure in the
+  hook lets the session stop (and is logged), since the driver resumes the lead.
+  Events: `lead_stop_refused`, `stop_allowed`, `stop_hook_failed`.
+- **Driver resume.** A lead whose session ends (completed or failed) without an accepted
+  `finish_run`, outside a frame-only run, a usage stop or a blocked release, with lead
+  time left, is resumed with `--resume`, at most `max_lead_resumes` times (a resource
+  limit, default 3), with a notice on its first call naming the work in flight and the
+  background workers the harness killed when it ended (from its stream's
+  `task_updated` killed records), so it re-dispatches them. Events:
+  `lead_resumed_after_end`, `lead_not_resumed`.
+- **Live** (`tests/e2e/stop_hook_probe.py`, pinned 2.1.308, headless): the hook refused
+  the lead's stops, the background worker ran to completion (none killed) and its
+  completion reached the lead.
+
 ## 1. Parts and owners
 - **A. Evidence service:** `src/stemma/evidence/`, `tests/evidence/`.
 - **B. Register, guards and driver:** `src/stemma/register/`, `src/stemma/hooks/`,

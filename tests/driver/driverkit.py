@@ -113,8 +113,10 @@ def cfg(tmp: Path, fake: Fake, plugin_src: Path) -> DriverConfig:
 
 
 # Resource limits shrunk so tests finish quickly.
+# No automatic lead resume here: these tests watch a lead that ends; the resume after an
+# early end has its own tests.
 FAST = Limits(max_concurrent_checks=2, poll_interval_s=0.05, init_timeout_s=5.0,
-              check_max_s=60.0, lead_max_s=60.0, stop_grace_s=2.0)
+              check_max_s=60.0, lead_max_s=60.0, stop_grace_s=2.0, max_lead_resumes=0)
 
 
 @pytest.fixture
