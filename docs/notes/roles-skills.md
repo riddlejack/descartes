@@ -1,7 +1,8 @@
 # Part C notes: the role texts and skills
 
 Builder C, against `docs/CONTRACTS.md` v0.2.7. Detail behind the report; the owner's
-page is `<a private page>`.
+reading page ("What each role is told", 26 October) is a private file, not in this
+repository.
 
 ## What is in the branch
 
@@ -236,7 +237,8 @@ Recorded at first, then decided by the orchestrator in contract v0.2.4 and appli
   prose against the contract, refuses a tool the role does not hold, a path outside
   the run folder or unknown to the contract, and two sentences sharing one comment;
   `/tmp` no longer appears in any text. 44 tests.
-- **Autopsy of the first live run** (`build-2026-10/autopsy/walking-skeleton.md`). The
+- **Autopsy of the first live run** (a private design record; the run itself is in
+  `docs/notes/walking-skeleton.md`). The
   lead's context grew to 400,000 to 980,000 tokens and re-reading it cost about $109:
   the lead now works from its files and the register and does not re-open what a claim
   or branch record holds, and (with workers) sends new research and long reading,

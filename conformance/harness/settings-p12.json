@@ -2,4 +2,4 @@
  "permissions": {"allow": ["Bash"]},
  "sandbox": {"enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false, "autoAllowBashIfSandboxed": true,
    "network": {"allowedDomains": []},
-   "filesystem": {"denyRead": ["<SCRATCH>"], "allowRead": ["<SCRATCH>", "<SCRATCH>", "<SCRATCH>"]}}}
+   "filesystem": {"denyRead": ["<PROBE_RUNS>/p12/cwd"], "allowRead": ["<PROBE_RUNS>/p12/cwd/task", "<PROBE_RUNS>/p12/cwd/intake.md", "<PROBE_RUNS>/p12/cwd/draft/answer.v2.md"]}}}

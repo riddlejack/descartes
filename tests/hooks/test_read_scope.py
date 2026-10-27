@@ -14,7 +14,7 @@ REPO = Path(__file__).resolve().parents[2]
 HOME = Path.home()
 TARGETS = {
     "checker answer keys": REPO / "tests/checkers/answer_keys.json",
-    "design record": HOME / ".private/stemma-design/design-2026-10/DESIGN-v1.md",
+    "private record": HOME / ".private-notes/design-record.md",
     "home file": HOME / "notes.txt",
 }
 
@@ -39,7 +39,7 @@ def test_read_outside_the_run_is_refused(runs: Path, role: str, what: str) -> No
     run = runs / "this"
     path = {"another run's store": str(runs / "other/store/s.txt"),
             "relative escape": "../other/store/s.txt",
-            "tilde": "~/.private/stemma-design/design-2026-10/DESIGN-v1.md"}.get(what) \
+            "tilde": "~/.private-notes/design-record.md"}.get(what) \
         or str(TARGETS[what])
     d = guards.guard_read(read_hook(path, run, role), run, None)
     assert not d.allow and "outside the run folder" in d.refusal

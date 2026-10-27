@@ -2,8 +2,8 @@
  "as_of": null,
  "created_at": "2026-10-26T06:56:36Z",
  "harness": {
-  "binary": "<HOME>/.private/runs/tools/claude-code-2.1.308/node_modules/.bin/claude",
-  "config_dir": "<HOME>/.private/runs/tools/claude-clean-config",
+  "binary": "<TOOLS>/claude-code-2.1.308/node_modules/.bin/claude",
+  "config_dir": "<TOOLS>/claude-clean-config",
   "version": "2.1.308 (Claude Code)"
  },
  "limits": {
@@ -95,7 +95,7 @@
    "hooks/hooks.json": "bdca615837cbeba21b4e749f2960c7598adfd4f1b7cd78a7374a637cd5e1d642",
    "skills/method/SKILL.md": "243a0063fccd1d1766dcdb41ff59d4ade30c851ddf2f89987d8d4203ed13d8fd"
   },
-  "path": "<SCRATCH>",
+  "path": "$STEMMA_RUNS/20261026-065636-1ab23f/.stemma/plugin",
   "skill_sources": {
    "method": "decomposition-method"
   },

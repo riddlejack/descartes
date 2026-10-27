@@ -61,7 +61,8 @@ Dockerfile, logs) waits for the orchestrator.
 - **Zetaris itself is not installed yet.** The owner downloaded the bundle on 26 Oct;
   it is unzipped, configured and passes `preflight.sh` except the registry sign-in,
   which only the owner may run. After it, one command finishes the install
-  (`bash ~/.private/zetaris/finish-install.sh`; see `hackathon/zetaris/README.md`),
+  (`STEMMA_ZETARIS_HOME=<folder> bash hackathon/zetaris/finish-install.sh`; see
+  `hackathon/zetaris/README.md`),
   then the owner creates the REST API key in Zetaris's interface. So Zetaris's own checks (`verify.sh`, the Pikachu query, the REST smoke
   test), the semantic-layer setup, and the live test that registers an invented run
   and reads it back through Zetaris have not run. The equality test so far runs the

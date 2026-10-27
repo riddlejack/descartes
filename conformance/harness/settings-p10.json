@@ -2,4 +2,4 @@
  "permissions": {"allow": ["Bash"]},
  "sandbox": {"enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false, "autoAllowBashIfSandboxed": true,
    "network": {"allowedDomains": []},
-   "filesystem": {"denyWrite": ["<SCRATCH>", "<SCRATCH>", "<SCRATCH>"], "denyRead": ["<SCRATCH>"]}}}
+   "filesystem": {"denyWrite": ["<PROBE_RUNS>/p10/cwd/tree.json", "<PROBE_RUNS>/p10/cwd/branches/**/verdicts", "<PROBE_RUNS>/p10/cwd/notyet"], "denyRead": ["<PROBE_RUNS>/p10/cwd/branches/**/record.md"]}}}

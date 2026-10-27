@@ -7,6 +7,7 @@ name = "stemma"
 version = "0.0.1"
 description = "A research system that works like a strong consulting team (working name Stemma 2)."
 requires-python = ">=3.12"
+license = "Apache-2.0"  # SPDX; the vendored conformance runner is Apache-2.0 too
 dependencies = []
 
 # Each part pins its own dependencies in its own group, and edits no other group.

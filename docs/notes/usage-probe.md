@@ -1,6 +1,6 @@
 # Token accounting: live probe result
 
-26 October 2026, Claude Code 2.1.308, the clean config (the new account),
+26 October 2026, Claude Code 2.1.308, the clean config (a signed-in Claude Code configuration),
 `tests/e2e/usage_probe.py`.
 
 A placeholder lead (the real plugin, hooks and tools) started one worker subagent with

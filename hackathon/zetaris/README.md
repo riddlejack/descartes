@@ -1,7 +1,12 @@
 # Zetaris for Stemma: install and setup
 
-This is how Zetaris becomes the data layer on one Mac. Every secret lives in
-`~/.private/zetaris/` (folder mode 700, files 600), never in this repository.
+This is how Zetaris becomes the data layer on one machine. Every secret lives in one
+folder outside this repository (folder mode 700, files 600), named by
+`STEMMA_ZETARIS_HOME`; the commands below fail if it is not set:
+
+```bash
+export STEMMA_ZETARIS_HOME=<a folder outside the repository>
+```
 
 ## What runs
 
@@ -13,32 +18,33 @@ This is how Zetaris becomes the data layer on one Mac. Every secret lives in
   registers this database as a JDBC datasource and serves its tables as one Unified
   Semantic Layer.
 
-## Steps only the owner can take
+## Steps only the account holder can take
 
-1. Done 26 Oct: registered, downloaded `zetaris-platform.zip` into `~/.private/zetaris/`.
+1. Register with Zetaris and download `zetaris-platform.zip` into `$STEMMA_ZETARIS_HOME`
+   (done 26 October 2026 for this build).
 2. Sign in to Zetaris's image registry: paste the `docker login zetarishackathon.azurecr.io`
    command from the download page into Terminal. No agent runs a command carrying the
-   owner's password.
+   account holder's password.
 3. Then, in the same Terminal, one command that finishes the install (preflight, a 4 GB
    pull, the first start, Zetaris's `verify.sh`, and the network link to the evidence
-   database; 20 to 45 minutes, logged to `~/.private/zetaris/install.log`):
+   database; 20 to 45 minutes, logged to `$STEMMA_ZETARIS_HOME/install.log`):
 
 ```bash
-bash ~/.private/zetaris/finish-install.sh
+bash hackathon/zetaris/finish-install.sh
 ```
 
 4. When it ends it says what is left: sign in at http://localhost:3300 with the email and
-   password in `~/.private/zetaris/admin.txt`, create an API key under Management → API
-   Tokens, and add `ZETARIS_API_KEY=<key>` to `~/.private/zetaris/stemma.env`. Zetaris's
+   password in `$STEMMA_ZETARIS_HOME/admin.txt`, create an API key under Management → API
+   Tokens, and add `ZETARIS_API_KEY=<key>` to `$STEMMA_ZETARIS_HOME/stemma.env`. Zetaris's
    guide says an agent must never create or fetch this key.
 
-The interface is on port 3300, not Zetaris's default 3000: on this Mac another app
-already listens on 127.0.0.1:3000. `.env` sets `UI_PORT=127.0.0.1:3300` (loopback only)
-and `ALLOWED_ORIGINS` and `GUI_URL` to match.
+The interface is on port 3300, not Zetaris's default 3000, because another app held
+127.0.0.1:3000 on the machine this was set up on. The bundle's `.env` sets
+`UI_PORT=127.0.0.1:3300` (loopback only) and `ALLOWED_ORIGINS` and `GUI_URL` to match.
 
-## What the builder prepared
+## What was prepared for this build (26 October 2026)
 
-- The bundle unzipped into `~/.private/zetaris/zetaris-platform/` (zip sha256
+- The bundle unzipped into `$STEMMA_ZETARIS_HOME/zetaris-platform/` (zip sha256
   `14c6a811…13d3`, images 2.4.3-v2.4.3.1-hackathon, JDBC driver 2.4.3.1). Its `.env` ships
   filled in; two changes, the original kept as `.env.as-shipped` (both mode 600): our own
   admin password in place of the published default, and `TELEMETRY_ENABLED=false`
@@ -47,7 +53,8 @@ and `ALLOWED_ORIGINS` and `GUI_URL` to match.
   Rosetta on (Colima `vz`), 4 CPUs, 7 GB (8 recommended, 6 required), 80 GB free.
 - `postgres:16-alpine`, the stack's one public image, pulled in advance.
 - `stemma-evidence-pg` running (`compose.yaml` here, restarts with Docker).
-- `finish-install.sh` (a copy of the one in this folder) in `~/.private/zetaris/`.
+- A copy of `finish-install.sh` in that folder (the script now runs from this repository
+  and reads `STEMMA_ZETARIS_HOME`).
 
 The evidence database joins Zetaris's network (`zetaris_default`) so the query engine
 reaches it by name (`stemma-evidence-pg:5432`):
@@ -92,7 +99,7 @@ receipt in the capture manifest.
 ## Tear down
 
 ```bash
-cd ~/.private/zetaris/zetaris-platform && docker compose down
+cd "$STEMMA_ZETARIS_HOME/zetaris-platform" && docker compose down
 ```
 
 ```bash
