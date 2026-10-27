@@ -36,8 +36,8 @@ round it. The full suite (`pytest tests hackathon/tests`), ruff and `mypy --stri
   and `task/arrivals/`, including case variants, absolute paths and symlinks; a worker
   under the lead keeps them all.
 - **Claim checks per document** (D7): filing starts nothing; `submit_draft` lists cited
-  claims by home document in `checks/doc-<receipt_id>.json`; a document's checker judges
-  only its own round's list. A barrier-synchronised race test runs a submission against
+  claims by document, or in one derivations list per draft (see the second round
+  below); a checker judges only its own round's list. A barrier-synchronised race test runs a submission against
   two document checkers recording verdicts at the same moment.
 - **Reviewer memory** (D8): a branch's re-review resumes its previous reviewer session
   (shown in the argv: `--resume=<id>`); a resumed session counts as unverified until the
@@ -71,6 +71,39 @@ round it. The full suite (`pytest tests hackathon/tests`), ruff and `mypy --stri
   send-back rule would have changed nothing there.
 - **Final reviews.** Run 1's reviews carried no structured points (recorded before
   v0.3.1), so the stopping rule cannot be replayed on them.
+
+## Second round: the orchestrator's checklist and Codex review 1
+
+After the first report the orchestrator sent a checklist, and Codex reviewed
+84d68f7..5992bf8 (ten defects, eight serious). All are fixed on this branch, each with
+tests, most with a hostile or crash test:
+
+- **Derivation integrity.** A re-run copies only the script and the modules it imports
+  (found by parsing), so run 1's 223 scripts no longer refuse every estimate; the bundle
+  is stored under its hash at filing, and every later re-run uses that copy, so a
+  script edited after filing changes nothing filed.
+- **run_analysis**, for the lead's synthesis arithmetic now that it has no shell.
+- **Claim-check routes.** A claim goes to its document's checker, or (an estimate on no
+  document, an assumption) to one derivations checker per draft, which is given the
+  sentences that cite it. Each assignment is written once per round, and a checker
+  asks for its own with `check_assignment`.
+- **Criteria** freeze when the first review is asked for; reviews record the digest
+  they judged; only the lead's `revise_criteria` changes them afterwards, and that
+  voids the reviews made before.
+- **Tree authority.** Only the lead moves nodes or reassigns branches; send-back
+  obligations follow the node.
+- **Verdict writes** survive a crash between them; the next writer repairs the nodes.
+- **Previous-round memory** waits for the previous round to finish and needs a response
+  to every point.
+- **The lead's reads** are an allowlist of approved artifacts.
+- **The automatic resume** keeps the run locked through its waits, rechecks the run
+  before relaunching, and never restarts a lead stopped by its time limit.
+- **The sealed release**: `release/manifest.json`, checked by `manifest.check`.
+- Parked switch values (single_loop, hypothesis in briefs) are refused.
+
+Changed names W1 depends on: per-round assignment files, `check_assignment`,
+`revise_criteria`, `run_analysis`, a response to every previous point, and lead-only
+structural tree edits.
 
 ## What is not shown
 
