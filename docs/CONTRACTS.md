@@ -373,8 +373,17 @@ D1 to D10); where an older line below disagrees, section 0 wins.
 - **The broker.** Every other path to the network runs in the MCP server: `capture`
   takes an archived copy dated before `as_of` (section 4), and the `sec_*` tools keep
   only filings dated before it. A refusal says nothing dated on or after `as_of`: a
-  `sec_capture` of a later filing returns only the accession it was given, never the
-  filing's form, company, document or date.
+  `sec_capture` of a later filing and one of an accession that does not exist get the
+  same refusal (`no_filing_before_as_of`, the accession given and nothing else), and a
+  later filing is never remembered in the store. Every SEC redirect hop stays in the
+  approved filing's own folder on `www.sec.gov` (or the requested path on
+  `data.sec.gov`), or the fetch is refused. No error page's body is stored in an
+  `as_of` run, and no response holding later content is stored where a session can
+  read it. `archived_links` reads only a successful capture shown to predate `as_of`
+  (an archive copy with a full capture timestamp before it, or a filing dated before
+  it). The broker reads `as_of` from `run.json` on every call; a `run.json` that is
+  missing, unreadable or not an object, or whose `as_of` is set but not a real date
+  (an empty one included), refuses the call (`bad_run_json`), never falls back to live.
 - **Discovery.** No keyword web search: a worker browses archived pages (`capture` a
   front, press or investor page, then `archived_links`, each link captured in turn) and
   searches filings with `sec_search`, whose end date the host sets (section 4); rates

@@ -69,6 +69,9 @@ class CaptureStatus(StrEnum):
     ARCHIVE_UNAVAILABLE = "archive_unavailable"
     # `as_of` mode: a SEC filing dated on or after the run's `as_of` date.
     FILED_AFTER_AS_OF = "filed_after_as_of"
+    # `as_of` mode: no filing with that accession filed before the run's `as_of` date,
+    # whether a later one exists or none does (one answer, so neither is revealed).
+    NO_FILING_BEFORE_AS_OF = "no_filing_before_as_of"
     # `as_of` mode: a market series came back with a row dated on or after the run's
     # `as_of` date although the host asked it to end before; nothing was kept.
     SERIES_PAST_AS_OF = "series_past_as_of"

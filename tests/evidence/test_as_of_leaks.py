@@ -29,12 +29,14 @@ def test_a_refused_later_filing_says_nothing_about_it(make_service: Factory,
     t = FakeTransport({})
     svc = make_service(t, sec_backend=FakeSec([EARLIER, LATER]))
     r = svc.sec_capture(LATER.accession)
-    assert r["status"] == "filed_after_as_of" and r["sha256"] is None
+    assert r["status"] == "no_filing_before_as_of" and r["sha256"] is None
     shown = json.dumps(r) + json.dumps(svc.store.get_receipt(r["receipt_id"]))
     for secret in ("2026-10-26", "S-1", "inv-s1.htm", "Invented Co"):
         assert secret not in shown, secret
     assert r["sec"] == {"accession": LATER.accession}
     assert t.calls == []
+    assert not (run_dir / "store/derived/sec-filings").exists() or not list(
+        (run_dir / "store/derived/sec-filings").iterdir())
 
 
 def test_a_refused_later_filing_in_a_live_run_is_not_withheld(make_service: Factory,

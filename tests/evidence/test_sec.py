@@ -97,7 +97,7 @@ def test_sec_capture_refuses_filed_after_as_of(sec_svc: tuple[EvidenceService, F
     svc, t = sec_svc
     set_as_of(run_dir, "2024-02-21")  # filed on the as_of date is not before it
     r = svc.sec_capture("0000999999-24-000010")
-    assert r["status"] == "filed_after_as_of" and r["sha256"] is None
+    assert r["status"] == "no_filing_before_as_of" and r["sha256"] is None
     assert t.calls == []
 
 

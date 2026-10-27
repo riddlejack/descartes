@@ -11,6 +11,7 @@ import errno
 import hashlib
 import json
 import os
+import re
 import stat
 import time
 from datetime import date
@@ -18,7 +19,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from stemma.evidence import charset, limits, sec_outline
-from stemma.evidence.archive import Archive
+from stemma.evidence.archive import Archive, _timestamp_time, as_of_cutoff
 from stemma.evidence.cache import RequestCache, request_key
 from stemma.evidence.discovery import (
     SERIES_HOSTS,
@@ -155,18 +156,29 @@ class EvidenceService:
 
     @property
     def as_of(self) -> str | None:
-        path = self.run_dir / "run.json"
-        if not path.exists():
-            return None
+        """run.json's `as_of` (driver-written, tool-only): a date, or null in a live run.
+        A run.json that is missing, unreadable or not an object, or whose `as_of` is set
+        but not a real YYYY-MM-DD date (an empty one included), refuses every call that
+        reads it; no `as_of` key, or null, is a live run. So
+        a broker that cannot tell the date never falls back to the live web
+        (CONTRACTS 0d; Codex review of the as-of branch #5)."""
         try:
-            value = json.loads(path.read_text("utf-8")).get("as_of")
+            data = json.loads((self.run_dir / "run.json").read_text("utf-8"))
         except (OSError, ValueError) as exc:
-            raise EvidenceError("bad_run_json", f"run.json unreadable: {exc}") from exc
-        if value in (None, ""):
+            raise EvidenceError("bad_run_json", f"run.json cannot be read: "
+                                                f"{type(exc).__name__}") from exc
+        if not isinstance(data, dict):
+            raise EvidenceError("bad_run_json", "run.json is not an object")
+        value = data.get("as_of")
+        if value is None:
             return None
-        checked = _check_date(str(value), "run.json as_of")
-        assert checked is not None
-        return checked
+        if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise EvidenceError("bad_run_json", "run.json as_of is not a YYYY-MM-DD date")
+        try:
+            date.fromisoformat(value)
+        except ValueError as exc:
+            raise EvidenceError("bad_run_json", "run.json as_of is not a real date") from exc
+        return value
 
     def _require_sec_identity(self) -> None:
         """SEC tools never run without the configured identity; there is no default."""
@@ -407,8 +419,10 @@ class EvidenceService:
             else:
                 receipt["status"] = _http_failure(status)
                 receipt["detail"] = f"HTTP {status}"
-            if fetched.body:
+            if fetched.body and receipt["as_of"] is None:
                 # The error page's bytes are kept (a wall says what it is), never indexed.
+                # Not in an as_of run: today's error page may say what happened after
+                # as_of, and a session may Read store/bytes (Codex review #1).
                 sha = self.store.put_bytes(fetched.body)
                 receipt["sha256"] = sha
                 receipt["bytes_len"] = len(fetched.body)
@@ -580,7 +594,10 @@ class EvidenceService:
         if path.exists():
             return FilingRef(**json.loads(path.read_text("utf-8")))
         ref = self._sec().lookup(accession)
-        self._remember(ref)
+        as_of = self.as_of
+        if as_of is None or ref.filing_date < as_of:
+            # A later filing is never remembered: its record would say it exists.
+            self._remember(ref)
         return ref
 
     def _resolve_company(self, backend: SecBackend, company: str,
@@ -624,7 +641,25 @@ class EvidenceService:
         if document is not None:
             check_document(document)
         self._require_sec_identity()
-        ref = self._filing_ref(accession)
+        as_of = self.as_of
+        if as_of is None:
+            ref = self._filing_ref(accession)
+        else:
+            # One refusal for a filing that is later and one that does not exist, so a
+            # guessed accession never says whether a later filing exists (Codex #2).
+            try:
+                found: FilingRef | None = self._filing_ref(accession)
+            except EvidenceError as exc:
+                if exc.code != "sec_filing_not_found":
+                    raise
+                found = None
+            if found is None or not found.filing_date < as_of:
+                receipt = self._base_receipt("sec", reason)
+                receipt["sec"] = {"accession": accession}
+                receipt["status"] = CaptureStatus.NO_FILING_BEFORE_AS_OF
+                receipt["detail"] = f"no filing with that accession filed before as_of {as_of}"
+                return self._finish(receipt, None, None)
+            ref = found
         return self._receipted("sec", reason, {"requested_accession": accession},
                                lambda: self._sec_capture(ref, document, reason))
 
@@ -635,15 +670,23 @@ class EvidenceService:
             # Nothing about the filing but the accession the agent gave: its form,
             # company and date are information from on or after as_of (CONTRACTS 0d).
             receipt["sec"] = {"accession": ref.accession}
-            receipt["status"] = CaptureStatus.FILED_AFTER_AS_OF
-            receipt["detail"] = f"not filed before as_of {as_of}"
+            receipt["status"] = CaptureStatus.NO_FILING_BEFORE_AS_OF
+            receipt["detail"] = f"no filing with that accession filed before as_of {as_of}"
             return self._finish(receipt, None, None)
         receipt["sec"] = dict(ref.as_dict(), document=document or ref.primary_document)
         url = ref.document_url(document)
         receipt["requested_url"] = url
 
+        folder = f"/Archives/edgar/data/{ref.cik}/{ref.accession.replace('-', '')}/"
+
+        def hop_check(hop: Url) -> str | None:
+            # Every hop stays in the approved filing's own folder (Codex review #3).
+            if hop.host != "www.sec.gov" or not hop.path_and_query.startswith(folder):
+                return f"SEC redirected out of filing {ref.accession}: {hop.url}"
+            return None
+
         def do_fetch() -> tuple[FetchResult | None, None, None, None]:
-            return self.fetcher.fetch(url), None, None, None
+            return self.fetcher.fetch(url, hop_check=hop_check), None, None, None
 
         body, content_type = self._fetch_cached("sec", url, receipt, do_fetch)
         return self._finish(receipt, body, content_type, name_hint=url.rsplit("/", 1)[-1])
@@ -663,8 +706,15 @@ class EvidenceService:
         receipt["requested_url"] = url
         receipt["sec"] = {"cik": ref.cik, "company": ref.name, "concept": f"{taxonomy}:{tag}"}
 
+        path = url.split("data.sec.gov", 1)[1]
+
+        def hop_check(hop: Url) -> str | None:
+            if hop.host != "data.sec.gov" or hop.path_and_query != path:
+                return f"SEC redirected away from {path}: {hop.url}"
+            return None
+
         def do_fetch() -> tuple[FetchResult | None, None, None, None]:
-            return self.fetcher.fetch(url), None, None, None
+            return self.fetcher.fetch(url, hop_check=hop_check), None, None, None
 
         body, content_type = self._fetch_cached("sec", url, receipt, do_fetch)
         if as_of is not None and body is not None:
@@ -750,9 +800,7 @@ class EvidenceService:
         if media not in HTML_TYPES:
             raise EvidenceError("not_html", f"{sha256[:12]} is {media or 'of no stated type'}, "
                                             f"not an HTML page")
-        if self.as_of is not None and receipt.get("kind") == "web":
-            raise EvidenceError("captured_live", f"{sha256[:12]} was captured from the live "
-                                                 f"web, not from an archive dated before as_of")
+        self._dated_capture(receipt, sha256)
         base = receipt.get("final_url") or receipt.get("requested_url")
         if not isinstance(base, str) or not base:
             raise EvidenceError("no_page_url", f"{sha256[:12]} has no page URL to resolve links")
@@ -760,6 +808,31 @@ class EvidenceService:
         return {"sha256": sha256, "receipt_id": rid, "kind": receipt.get("kind"),
                 "snapshot_timestamp": (receipt.get("archive") or {}).get("snapshot_timestamp"),
                 **found}
+
+    def _dated_capture(self, receipt: dict[str, Any], sha256: str) -> None:
+        """Refuse unless the receipt is a successful capture, and in an `as_of` run one
+        shown to predate it: an archive copy with a full capture timestamp before
+        `as_of`, or a filing dated before it (Codex review #4)."""
+        bad = EvidenceError("not_a_dated_capture",
+                            f"{sha256[:12]} is not a successful capture dated before as_of")
+        if receipt.get("status") not in ("ok", "short_text", "empty_text"):
+            raise bad
+        as_of = self.as_of
+        if as_of is None:
+            return
+        kind = receipt.get("kind")
+        if kind == "archive":
+            stamp = str((receipt.get("archive") or {}).get("snapshot_timestamp") or "")
+            when = _timestamp_time(stamp)
+            if when is None or not when < as_of_cutoff(as_of):
+                raise bad
+        elif kind == "sec":
+            filed = (receipt.get("sec") or {}).get("filing_date")
+            if not isinstance(filed, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", filed) \
+                    or not filed < as_of:
+                raise bad
+        else:
+            raise bad
 
     def sec_search(self, query: str, forms: list[str] | None = None, cik: str | None = None,
                    page: int = 1) -> dict[str, Any]:

@@ -145,7 +145,7 @@ def test_a_page_captured_live_is_refused_once_the_run_is_as_of(make_service: Fac
     set_as_of(run_dir, AS_OF)
     with pytest.raises(EvidenceError) as e:
         svc.archived_links(sha)
-    assert e.value.code == "captured_live"
+    assert e.value.code == "not_a_dated_capture"
 
 
 # --- sec_search ---------------------------------------------------------------------

@@ -10,6 +10,8 @@ from stemma.evidence.service import EvidenceService
 def capture_invented(run_dir: Path, name: str, text: str) -> str:
     """Write an invented attachment under the run's task/ and capture it; the receipt id."""
     (run_dir / "task").mkdir(parents=True, exist_ok=True)
+    if not (run_dir / "run.json").exists():  # the driver writes it before any session
+        (run_dir / "run.json").write_text('{"run_id": "invented", "as_of": null}')
     (run_dir / "task" / name).write_text(text, encoding="utf-8")
     receipt = EvidenceService(run_dir).capture_file(f"task/{name}", "test fixture")
     if receipt.get("status") != "ok" or not receipt.get("receipt_id"):
