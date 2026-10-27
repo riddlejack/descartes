@@ -518,6 +518,15 @@ def _rerun_checked(run: Run, c: dict[str, Any], fn: Rerunner
     return None, None, note
 
 
+def rerun_claim(run: Run, claim: dict[str, Any]) -> tuple[str | None, str | None]:
+    """(failure, not-run reason) of re-running one estimated claim as verify does; both
+    None when it reproduced. For other readers of a run (the head-to-head scorer)."""
+    from stemma.register.derivation import rerun
+
+    failure, not_run, _note = _rerun_one(run, claim, rerun)
+    return failure, not_run
+
+
 def check_calculations(run: Run, rerun_fn: Rerunner | None = None,
                        workers: int = RERUN_WORKERS, memo: Memo | None = None) -> Section:
     from stemma.register.derivation import rerun

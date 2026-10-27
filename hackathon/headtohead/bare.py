@@ -1,0 +1,504 @@
+"""The bare arm of run 3's head-to-head (pre-registration, hypothesis H5).
+
+Claude Code with web search and fetch, no Stemma plugin, Opus 5.5 at high effort, one
+headless session, through the driver's own `clean_launch` (the pinned binary, the clean
+configuration, nothing synced, no memory, no MCP server, no slash commands), its init
+message checked by the canary before anything it says is used. It is given exactly run
+3's question, named options, onboarding answers and as-of date, read from the run's own
+launcher, `tests/e2e/run3_demo.py` (with `--question-file` replacing the question the
+same way that launcher does).
+
+    python -m hackathon.headtohead.bare [--question-file Q.json] [--dry-run] [--out ROOT]
+
+It writes one new folder under ROOT (default `~/.private/runs/stemma2-run3/bare/`):
+`prompt.txt` (the exact prompt), `launch.json` (model, effort, tools, settings, harness
+version; no environment), `stream.jsonl` (the session's stream-json, as it came),
+`answer.md` (the session's final answer), `usage.json` (the harness's own usage and cost
+figures from its result) and `outcome.json`. `--dry-run` prints the prompt and the launch
+and creates nothing.
+
+Its tools are WebSearch and WebFetch, and Bash, Read and Write confined to its own
+folder: Bash runs in the same sandbox as Stemma's workers (no network; reads denied from
+the filesystem root and re-opened only for its folder and what the shell and interpreter
+need; writes only in its folder), and the Read and Write tools are allowed only inside
+its folder, with run 3's own folder, the Claude and Codex configurations and SSH keys
+denied by name besides. Before the real session, a **scope canary** session in the same
+folder, with the same settings, is told to read a marker file outside the folder with the
+Read tool and with Bash, to reach the network from Bash, and, as controls, to read a
+control file inside the folder with both tools and to fetch the same page with WebFetch.
+Code requires that the canary session ended cleanly; that each of the six calls has its
+result; that the three reaches outside were refused and the three controls succeeded (so
+a refusal is the confinement's, not a broken tool or a network down); and that neither
+the marker's random token nor the page appears where Bash could have put it. Otherwise
+the bare arm is refused and the real session never starts. Whether this harness marks a
+refused Bash command as an error result has not been watched live: if it does not, the
+canary refuses the arm and says which step, never a silent pass.
+
+Confinement is of the session's tools, enforced by the harness and proven at launch by
+the scope canary; the harness process itself runs as the owner, as every Stemma session
+does. An operating-system boundary around the whole harness process is not added: the
+harness applies its own sandbox to Bash, and a second sandbox around it would stop that
+one from starting. This is a stated limit of the comparison.
+
+Stated deviation from a plain user: the prompt asks the bare arm to cite a source for
+every figure (a plain user may not ask); without it the citation counts would measure
+nothing.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+from types import ModuleType
+from typing import Any, Final
+
+REPO: Final = Path(__file__).resolve().parents[2]
+RUN3_LAUNCHER: Final = REPO / "tests" / "e2e" / "run3_demo.py"
+DEFAULT_ROOT: Final = Path.home() / ".private" / "runs" / "stemma2-run3" / "bare"
+MODEL: Final = "claude-opus-5-5"  # the pre-registration: Opus 5.5 at high effort
+EFFORT: Final = "high"
+TOOLS: Final = ("WebSearch", "WebFetch", "Bash", "Read", "Write")  # see the module's note
+# Resource limits: seconds between checks of a session's deadlines, and seconds a
+# stopped or ending session is given to exit before it is killed.
+POLL_S: Final = 1.0
+STOP_GRACE_S: Final = 10.0
+# The scope canary's own resource limit: seconds it may run.
+CANARY_MAX_S: Final = 600
+CANARY_PAGE: Final = "https://example.com"
+CANARY_PAGE_TEXT: Final = "Example Domain"  # what that page says, were it reached
+CANARY_PROMPT: Final = """\
+This is a safety check of your tools, not a task. Do exactly these six things, in
+order, one tool call each, and report what each one returned:
+1. Use the Read tool to read the file {marker}
+2. Use the Bash tool to run: cat {marker}
+3. Use the Bash tool to run: curl -sS --max-time 10 {page}
+4. Use the Read tool to read the control file {control}
+5. Use the Bash tool to run: cat {control}
+6. Use the WebFetch tool to fetch {page}
+Then reply with the word DONE.
+"""
+# Resource limits: seconds the session may run, and seconds to wait for its init message.
+SESSION_MAX_S: Final = 4 * 3600
+# The interpreter whose folders Bash may read (its standard library, nothing of this
+# repository); the repository's own venv would re-open the repository to the bare arm.
+SCOPE_PYTHON: Final = Path("/opt/homebrew/bin/python3.12")
+INIT_TIMEOUT_S: Final = 180
+
+PROMPT: Final = """\
+You are preparing an answer for {who}.
+
+The question, exactly as asked:
+{question}
+
+{options}What you were told:
+{intake}
+
+Scope: answer only this question. Research nothing outside it; say briefly, at the end,
+what you did not research that a reader might want.
+
+Use only information published on or before {as_of}; treat {as_of} as today.
+
+Write your answer as a markdown memo. Cite the source of every figure you state, with a
+link to the page it comes from.
+"""
+
+
+class BareError(Exception):
+    """The bare arm cannot be planned or launched; the message says why."""
+
+
+def run3_launcher() -> ModuleType:
+    """Run 3's own launcher module, read from its file (not collected by pytest)."""
+    spec = importlib.util.spec_from_file_location("stemma_run3_demo", RUN3_LAUNCHER)
+    if spec is None or spec.loader is None:
+        raise BareError(f"cannot read run 3's launcher at {RUN3_LAUNCHER}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def task(question_file: Path | None = None) -> dict[str, Any]:
+    """Run 3's task exactly as its launcher builds it."""
+    t = run3_launcher().task_with(question_file)
+    if not isinstance(t, dict) or not isinstance(t.get("question"), str):
+        raise BareError("run 3's launcher gave no task with a question")
+    return t
+
+
+def prompt_for(t: dict[str, Any]) -> str:
+    intake = t.get("intake") or {}
+    who = str(intake.get("Who asked for it, and who will use it?") or "the person who asked")
+    options = t.get("options") or []
+    opts = ("The options they named, to compare:\n"
+            + "".join(f"- {o}\n" for o in options) + "\n") if options else ""
+    lines = "".join(f"- {k} {v}\n" for k, v in intake.items())
+    return PROMPT.format(who=who, question=t["question"], options=opts,
+                         intake=lines.rstrip("\n") or "- nothing else",
+                         as_of=t.get("as_of") or datetime.now(UTC).date().isoformat())
+
+
+def denied_reads(folder: Path, config: Path) -> list[str]:
+    """Read-tool denials besides the allow-only-inside rule (a backstop): run 3's own
+    folder, the Claude and Codex configurations and SSH keys."""
+    home = Path.home()
+    paths = [folder.parent.parent / "20*", config, home / ".claude", home / ".codex",
+             home / ".ssh"]
+    return [f"Read(/{p}/**)" for p in paths]
+
+
+def settings_extra(folder: Path, config: Path, python: Path) -> dict[str, Any]:
+    """The bare arm's permissions and sandbox (see the module's note)."""
+    from stemma.driver.settings import _links_on, read_scope
+
+    scope = read_scope(python)
+    allow_read = [str(folder), *scope.allow] + _links_on([str(folder)])
+    return {
+        "permissions": {
+            "allow": ["WebSearch", "WebFetch", "Bash", f"Read(/{folder}/**)",
+                      f"Write(/{folder}/**)"],
+            "deny": denied_reads(folder, config),
+        },
+        "sandbox": {
+            "enabled": True,
+            "failIfUnavailable": True,
+            "allowUnsandboxedCommands": False,
+            "autoAllowBashIfSandboxed": True,
+            "network": {"allowedDomains": []},
+            "filesystem": {"denyRead": list(scope.deny),
+                           "allowRead": list(dict.fromkeys(allow_read))},
+        },
+    }
+
+
+def _pinned() -> tuple[Path, Path]:
+    env = {k: os.environ.get(k, "") for k in ("STEMMA_CLAUDE_BIN", "STEMMA_CLAUDE_CONFIG")}
+    missing = [k for k, v in env.items() if not v]
+    if missing:
+        raise BareError(f"{' and '.join(missing)} must name the pinned harness and its clean "
+                        f"configuration")
+    return Path(env["STEMMA_CLAUDE_BIN"]).expanduser(), Path(env["STEMMA_CLAUDE_CONFIG"]).expanduser()
+
+
+def _write(path: Path, data: str) -> None:
+    path.write_text(data, encoding="utf-8")
+
+
+def _stop(proc: Any) -> int | None:
+    """Terminate, then kill, reaping with bounded waits (resource limit: STOP_GRACE_S)."""
+    for signal_it in (proc.terminate, proc.kill):
+        try:
+            signal_it()
+        except (OSError, AttributeError):
+            pass
+        try:
+            return int(proc.wait(timeout=STOP_GRACE_S))
+        except (subprocess.TimeoutExpired, TypeError):
+            continue
+    return None
+
+
+def _session(folder: Path, prompt: str, stream_name: str, binary: Path, config: Path,
+             version: str, settings: dict[str, Any], popen: Any,
+             max_s: float) -> tuple[dict[str, Any], dict[str, Any] | None, str]:
+    """One headless session in `folder`: (outcome, result message, the whole stream).
+    The init message's canary is checked first; a failed canary stops the session. A
+    reader thread hands lines over, so the start-up deadline (INIT_TIMEOUT_S) and the
+    session deadline (`max_s`) stop a silent or stuck child too."""
+    import queue
+    import threading
+
+    from stemma.driver.clean import bare_expectation, check_canary, clean_launch
+
+    cl = clean_launch(binary, config, prompt, cwd=folder, model=MODEL, effort=EFFORT,
+                      tools=list(TOOLS), settings_path=folder / ".settings.json",
+                      settings_extra=settings,
+                      env_extra={"CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS": "1",
+                                 "CLAUDE_CODE_TMPDIR": str(folder / ".tmp")},
+                      strict_mcp_config=True, disable_slash_commands=True)
+    (folder / ".tmp").mkdir(exist_ok=True)
+    started = time.monotonic()
+    outcome: dict[str, Any] = {"canary": None, "exit_code": None}
+    result: dict[str, Any] | None = None
+    seen: list[str] = []
+    lines: queue.Queue[str | None] = queue.Queue()
+    with open(folder / stream_name, "w", encoding="utf-8") as stream:
+        proc = popen(cl.argv, env=cl.env, cwd=folder, stdin=subprocess.DEVNULL,
+                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+
+        def pump() -> None:
+            try:
+                for ln in proc.stdout:
+                    lines.put(ln)
+            finally:
+                lines.put(None)
+
+        threading.Thread(target=pump, daemon=True).start()
+        ended = False
+        while not ended:
+            now = time.monotonic() - started
+            if outcome["canary"] is None and now > INIT_TIMEOUT_S:
+                outcome["stopped"] = f"no init message within {INIT_TIMEOUT_S} s"
+                break
+            if now > max_s:
+                outcome["stopped"] = f"ran past {max_s:.0f} s (a resource limit)"
+                break
+            try:
+                line = lines.get(timeout=POLL_S)
+            except queue.Empty:
+                continue
+            if line is None:
+                ended = True
+                break
+            stream.write(line)
+            stream.flush()
+            seen.append(line)
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("type") == "system" and msg.get("subtype") == "init" \
+                    and outcome["canary"] is None:
+                problems = check_canary(msg, bare_expectation(
+                    cwd=folder, tools=list(TOOLS), harness_version=version,
+                    session_id=msg.get("session_id") if isinstance(
+                        msg.get("session_id"), str) else None))
+                outcome["canary"] = problems or "passed"
+                if problems:
+                    break
+            elif msg.get("type") == "result":
+                result = msg
+        if ended:
+            try:
+                outcome["exit_code"] = int(proc.wait(timeout=STOP_GRACE_S))
+            except subprocess.TimeoutExpired:
+                outcome["exit_code"] = _stop(proc)
+                outcome["stopped"] = (f"the process did not exit within {STOP_GRACE_S:.0f} s "
+                                      f"of its output ending, and was stopped")
+        else:
+            outcome["exit_code"] = _stop(proc)
+            outcome.setdefault("stopped", "stopped by the launcher")
+    outcome["wall_s"] = round(time.monotonic() - started, 1)
+    return outcome, result, "".join(seen)
+
+
+def eligible(outcome: dict[str, Any], result: dict[str, Any] | None) -> list[str]:
+    """Why a session's answer may not be scored (empty: it may): a clean start, a
+    natural exit 0, no stop, a successful result that is not an error, and an answer
+    with text."""
+    why = []
+    if outcome.get("canary") != "passed":
+        why.append(f"the init canary did not pass ({outcome.get('canary')})")
+    if outcome.get("stopped"):
+        why.append(f"the session was stopped: {outcome['stopped']}")
+    if outcome.get("exit_code") != 0:
+        why.append(f"the session exited {outcome.get('exit_code')}")
+    if result is None:
+        why.append("the session gave no result")
+    else:
+        if result.get("subtype") != "success":
+            why.append(f"its result is {result.get('subtype')!r}, not 'success'")
+        if result.get("is_error") is not False:
+            why.append("its result is marked as an error")
+        if not isinstance(result.get("result"), str) or not result["result"].strip():
+            why.append("its answer is empty")
+    return why
+
+
+def _messages(stream: str) -> list[dict[str, Any]]:
+    out = []
+    for line in stream.splitlines():
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(msg, dict):
+            out.append(msg)
+    return out
+
+
+def _blocks(stream: str, kind: str) -> list[dict[str, Any]]:
+    out = []
+    for msg in _messages(stream):
+        content = (msg.get("message") or {}).get("content")
+        for block in content if isinstance(content, list) else []:
+            if isinstance(block, dict) and block.get("type") == kind:
+                out.append(block)
+    return out
+
+
+def _text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(_text(c.get("text") if isinstance(c, dict) else c) for c in content)
+    return "" if content is None else str(content)
+
+
+def scope_problems(stream: str, marker: Path, token: str, control: Path,
+                   control_token: str) -> list[str]:
+    """What the scope canary's stream shows went wrong (empty: the scope held). Exact
+    facts only: each of the six calls was made and has its result; the three reaches
+    outside (the marker by Read and by Bash, the network by Bash) came back refused, and
+    nothing from outside appears; the three controls succeeded (the control file inside
+    the folder read by Read and by Bash, the page reached by WebFetch), so a refusal is
+    the confinement's and not a broken tool or a network down."""
+    results = {b.get("tool_use_id"): b for b in _blocks(stream, "tool_result")}
+    uses = _blocks(stream, "tool_use")
+
+    def find(name: str, want: str) -> dict[str, Any] | None:
+        for u in uses:
+            if u.get("name") == name and want in json.dumps(u.get("input"), sort_keys=True):
+                return u
+        return None
+
+    steps = [("Read", str(marker), "the Read tool on the marker", "refused"),
+             ("Bash", f"cat {marker}", "cat on the marker in Bash", "refused"),
+             ("Bash", "curl", "the network from Bash", "refused"),
+             ("Read", str(control), "the Read tool on the control file", control_token),
+             ("Bash", f"cat {control}", "cat on the control file in Bash", control_token),
+             ("WebFetch", CANARY_PAGE, "WebFetch on the page", "reached")]
+    problems = []
+    for name, want, what, expect in steps:
+        use = find(name, want)
+        if use is None:
+            problems.append(f"the canary did not try {what}")
+            continue
+        res = results.get(use.get("id"))
+        if res is None:
+            problems.append(f"{what} has no result in the stream")
+            continue
+        error, text = res.get("is_error") is True, _text(res.get("content"))
+        if expect == "refused" and not error:
+            problems.append(f"{what} was not refused")
+        elif expect == "reached" and error:
+            problems.append(f"{what} failed, so a refused curl proves nothing")
+        elif expect not in ("refused", "reached") and (error or expect not in text):
+            problems.append(f"{what} did not return the control's token: the tool or the "
+                            "folder is broken, so a refusal proves nothing")
+        if name == "Bash" and want == "curl" and CANARY_PAGE_TEXT in text:
+            problems.append("the page reached from Bash appears in its result: Bash has "
+                            "network")
+    if token in stream:
+        problems.append("the marker's token appears in the stream: a read outside the "
+                        "folder succeeded")
+    return problems
+
+
+def canary_finished(outcome: dict[str, Any], result: dict[str, Any] | None) -> list[str]:
+    """The canary session must itself have ended cleanly, or its stream proves nothing."""
+    why = []
+    if outcome.get("canary") != "passed":
+        why.append(f"init canary: {outcome.get('canary')}")
+    if outcome.get("stopped"):
+        why.append(f"the canary session was stopped: {outcome['stopped']}")
+    if outcome.get("exit_code") != 0:
+        why.append(f"the canary session exited {outcome.get('exit_code')}")
+    if result is None or result.get("subtype") != "success" or result.get("is_error"):
+        why.append("the canary session gave no successful result")
+    return why
+
+
+def launch(root: Path, t: dict[str, Any], popen: Any = subprocess.Popen,
+           version: str | None = None) -> Path:
+    """The scope canary, then one bare session, in a new folder under `root`; returns
+    the folder. Either canary failing refuses the arm, and nothing it wrote is used."""
+    import secrets
+
+    from stemma.driver.config import DriverConfig, default_plugin_src
+    from stemma.driver.launch import harness_version
+
+    binary, config = _pinned()
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    folder = Path(root).expanduser() / stamp
+    folder.mkdir(parents=True, exist_ok=False)
+    folder = folder.resolve()
+    prompt = prompt_for(t)
+    _write(folder / "prompt.txt", prompt)
+    python = SCOPE_PYTHON if SCOPE_PYTHON.exists() else Path(sys.executable)
+    if version is None:
+        version = harness_version(DriverConfig(folder, binary, config, python,
+                                               default_plugin_src()))
+    settings = settings_extra(folder, config, python)
+    _write(folder / "launch.json", json.dumps({
+        "model": MODEL, "effort": EFFORT, "tools": list(TOOLS), "harness": version,
+        "settings_extra": settings, "task": t, "started_at": stamp}, indent=1))
+
+    token, control_token = secrets.token_hex(16), secrets.token_hex(16)
+    marker = folder.parent / f".scope-canary-{stamp}-{secrets.token_hex(4)}.txt"
+    marker.write_text(f"{token}\n", encoding="utf-8")
+    control = folder / ".scope-control.txt"
+    control.write_text(f"{control_token}\n", encoding="utf-8")
+    try:
+        c_out, c_res, c_stream = _session(
+            folder, CANARY_PROMPT.format(marker=marker, control=control, page=CANARY_PAGE),
+            "scope-canary.jsonl", binary, config, version, settings, popen, CANARY_MAX_S)
+    finally:
+        marker.unlink(missing_ok=True)
+        control.unlink(missing_ok=True)
+    problems = (canary_finished(c_out, c_res)
+                + scope_problems(c_stream, marker, token, control, control_token))
+    _write(folder / "scope-canary.json", json.dumps({**c_out, "problems": problems},
+                                                    indent=1))
+    if problems:
+        raise BareError("the scope canary failed, so the bare session was not started: "
+                        + "; ".join(problems))
+
+    outcome, result, _stream = _session(folder, prompt, "stream.jsonl", binary, config,
+                                        version, settings, popen, SESSION_MAX_S)
+    why = eligible(outcome, result)
+    outcome["eligible"] = not why
+    outcome["not_eligible_because"] = why
+    if why or result is None:
+        _write(folder / "outcome.json", json.dumps(outcome, indent=1))
+        raise BareError("the bare answer is not eligible for scoring, and no answer.md "
+                        "was written: " + "; ".join(why))
+    _write(folder / "answer.md", result["result"])
+    _write(folder / "usage.json", json.dumps({
+        k: result.get(k) for k in ("usage", "modelUsage", "total_cost_usd", "duration_ms",
+                                   "num_turns", "is_error", "subtype")}, indent=1))
+    outcome["result"] = {"subtype": result.get("subtype"), "is_error": result.get("is_error")}
+    _write(folder / "outcome.json", json.dumps(outcome, indent=1))
+    return folder
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="python -m hackathon.headtohead.bare",
+                                 description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--question-file", type=Path, default=None)
+    ap.add_argument("--out", type=Path, default=DEFAULT_ROOT)
+    ap.add_argument("--dry-run", action="store_true",
+                    help="print the prompt and the launch; create nothing")
+    args = ap.parse_args(argv)
+    try:
+        t = task(args.question_file)
+        if args.dry_run:
+            print(prompt_for(t))
+            folder = Path(args.out).expanduser() / "<new run folder>"
+            config = Path(os.environ.get("STEMMA_CLAUDE_CONFIG") or "<STEMMA_CLAUDE_CONFIG>")
+            print(json.dumps({"model": MODEL, "effort": EFFORT, "tools": list(TOOLS),
+                              "settings_extra": settings_extra(
+                                  folder, config,
+                                  SCOPE_PYTHON if SCOPE_PYTHON.exists() else
+                                  Path(sys.executable)),
+                              "out": str(args.out)}, indent=1))
+            return 0
+        folder = launch(args.out, t)
+    except BareError as exc:
+        print(f"bare arm: {exc}", file=sys.stderr)
+        return 2
+    print(f"bare arm: answer and usage in {folder}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

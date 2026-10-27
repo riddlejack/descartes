@@ -252,3 +252,161 @@ refuses every write. No private register attribute is touched any more.
 
 A manifest that does not seal `checks.jsonl` is now a failure: format
 `stemma-release-manifest/2` always seals it.
+
+## The head-to-head harness for run 3 (hypothesis H5)
+
+Two modules, in `hackathon/headtohead/`:
+
+- **`bare.py`, the bare arm's launcher.** Not launched yet; the orchestrator launches it
+  after Stemma's run ends, so the two never share a usage window.
+  - It takes run 3's question, named options, onboarding answers and as-of date from
+    `tests/e2e/run3_demo.py` itself, and `--question-file` replaces the question the
+    same way that launcher does.
+  - It launches one session through `clean_launch`, with the canary checked: Opus 5.5 at
+    high effort, no plugin, no MCP server, no slash commands.
+  - Its tools are WebSearch and WebFetch, and Bash, Read and Write confined to its own
+    folder, so that it can calculate. Bash runs in the workers' sandbox: no network,
+    reads denied from the filesystem root and re-opened only for its folder and what
+    the shell and the system Python need (nothing of this repository), and writes only
+    in its folder. The Read and Write tools are allowed only inside the folder. Run 3's
+    Stemma folder, the Claude and Codex configurations and SSH keys are denied by name
+    besides.
+  - A scope canary runs before the real session, in the same folder with the same
+    settings. It is told to read a marker file outside the folder with the Read tool
+    and with `cat`, and to reach the network with `curl`. Code requires that it tried
+    all three, and that neither the marker's random token nor the reached page's text
+    appears in its stream. Otherwise the arm is refused and the real session never
+    starts.
+  - The scope canary is the only proof that headless Read is denied outside the folder;
+    it is checked at launch, never in a unit test.
+  - **Stated deviation from a plain user:** the prompt asks the bare arm to cite a
+    source for every figure, which a plain user may not ask. Without it, the citation
+    counts would measure nothing. The exact prompt is saved with its answer.
+  - It writes prompt.txt, launch.json, stream.jsonl, answer.md, usage.json and
+    outcome.json into a new folder under `~/.private/runs/stemma2-run3/bare/`.
+  - `--dry-run` creates nothing.
+
+- **`score.py`, the scorer.** It counts both answers by the same rules, which are also
+  written into `score.json`:
+  - A figure is a number token, found by the register's own tokenizer.
+  - A figure's sources are the ones cited in its own sentence.
+  - Every cited page is fetched now through the evidence service, with the cache off,
+    and kept as a capture.
+  - Code decides whether a source resolves and whether it contains the figure.
+  - A cross-family judge (Codex `gpt-6-astra`, read-only) decides two things: which
+    figures a source contradicts, and which gaps and limits an answer admits. Each of
+    its answers counts only when code finds its quotation. Every prompt and reply is
+    recorded.
+  - It writes `summary.txt`, which gives the counts in sentences, because the owner
+    reads no tables.
+
+**Live trial: run 1's v11 draft against an invented bare answer.**
+- It took 22 minutes: 81 captures and 72 judge calls.
+- Stemma: 386 figures, 150 contained in a cited source, 80 of 80 cited sources resolve,
+  67 gaps and limits admitted.
+- The invented bare answer: 6 figures, 1 contained, 2 of 3 sources resolve.
+
+**Two rules came out of the trial.**
+- *Drift is not a contradiction.* Both "contradictions" the judge found on Stemma's side
+  were the AFDC station count, which has moved since the run (268,116 then, 268,137
+  now). The judge is now told that a quantity that changes over time and differs only
+  because the page is newer is not a contradiction.
+- *Calculated figures are counted apart.* No page can contain an estimate, so figures
+  whose cited claim is a recorded calculation are counted separately. That count is
+  Stemma's only, outside the shared comparison.
+
+## Codex review of the head-to-head harness: twelve fixes
+
+Each fix below has a test named after it, built from the review's probe.
+
+**The five high-severity findings.**
+1. *An unrelated number counted as support.* Containment is now only a diagnostic.
+   Every figure taken from a source is judged against every resolved source it cites,
+   whether code found its number there or not.
+2. *A missing judgment counted as no contradiction.* Each figure the judge is asked
+   about needs exactly one valid verdict. A missing, duplicated or invalid verdict, an
+   empty reply, or an unfindable quotation leaves the figure unjudged. Unjudged figures
+   are counted and reported, never taken as zero.
+3. *Text could steer the judge.* The answer's and the source's text now sit between
+   random markers, and the prompt says to ignore any instruction inside them. Arm names
+   never reach the judge, and each call has its own folder holding only its own
+   document. Quotations are still checked by code.
+4. *A failed bare run was accepted as an answer.* Now an answer counts only when the
+   canary passed, the session exited 0 without being stopped, its result is a success
+   and not an error, and the answer has text.
+5. *Computed figures counted against sources.* The judge now asks one question of both
+   answers: was this figure taken from a source or computed? Computed figures are left
+   out of the source counts. Stemma's computed figures are re-run as verify does; the
+   bare answer has no recorded calculations to re-run.
+
+**The seven medium-severity findings.**
+
+6. *Formatting changed the figures.* Numbers are parsed into value, sign, unit, scale
+   and stated precision. Years are recognised by their context, and reference lists are
+   left out.
+7. *Citations were lost in sentences and tables.* Citations are now resolved per block,
+   before sentences are split, and each figure takes the markers that follow it.
+8. *Some of Stemma's citation routes were dropped.* A claim's provenance now also
+   follows its derivation's documents, and unresolved routes are reported.
+9. *An empty page counted as resolved.* A source resolves only with an eligible status
+   and some text, and the extractor's flagged ranges are used in every quotation check.
+10. *One gap could count several times.* Each admitted gap is an answer item, counted
+    once.
+11. *A silent session could run on forever.* A reader thread enforces the start-up and
+    session deadlines, then terminates and kills the process with bounded waits.
+12. *Tools were limited but the filesystem was not.* The bare arm's tools are confined
+    and proven at launch by the scope canary. That the harness process itself runs as
+    the owner is a stated limit.
+
+## Codex re-check of the head-to-head harness: the eight remaining findings
+
+Review: `~/.private/stemma-design/build-2026-10/reviews/W3-headtohead-recheck.md`. One
+test per finding (`test_recheck_<n>_...` in `hackathon/tests/test_headtohead.py`); all
+twelve new tests failed on 9628aa3 before the fixes (the canary and stuck-child tests
+partly because their fake now speaks the new six-step canary prompt).
+
+1. **Calculation credit.** A computed Stemma figure counts as reproduced only when a
+   claim it cites re-runs and its recorded value is the number shown (sign, unit, scale,
+   at the shown precision). "We compute 999" over a claim recorded as 30 gets none, and
+   says why.
+2. **Partial source failures.** A figure unjudged against any resolved cited source is
+   counted (`taken_figures_with_a_cited_source_unjudged`), even when another source
+   supported it, beside `taken_figures_judged_against_every_resolved_cited_source`; the
+   summary says how many.
+3. **The judge.** It sees no citation markup (claim tags, links, URLs, reference
+   markers removed: `blind`). It runs inside a macOS sandbox profile (`judge_profile`):
+   no read or write of the home folder, /Volumes or the temporary folders except its own
+   empty call folder and Codex's folder, in which the owner's `AGENTS.md`, sessions and
+   history stay shut. Tested by the operating system with a planted file, and live: one
+   scoring with a source telling the judge to `cat` an outside file; the judge judged
+   the figure and the file's token appeared in no reply.
+   - macOS refuses a sandbox inside a sandbox with any deny rule, so Codex's own command
+     sandbox cannot start in this one. The judge therefore gets the source text in its
+     prompt (on stdin) and needs no command. A source over 400,000 characters is given as
+     excerpts around the figures' numbers and long words, and such figures are counted.
+   - Running Codex with its own sandbox switched off was refused by this session's
+     permission checks; not pursued.
+   - Found on the way: every earlier judge call (the 87 in the live re-trial) ran with
+     the owner's `~/.codex/AGENTS.md` loaded. Now it is shut. Codex's skills and plugins
+     from `~/.codex` still load unless `STEMMA_CODEX_HOME` names a clean, signed-in Codex
+     folder (made like the clean Claude configuration); the summary says which ran.
+4. **Parser.** "of 2000 benches", "(2000) benches" and ".5%" are figures; "[1] reports 42
+   benches." is a sentence, not a reference definition (that needs a colon, a URL or a
+   sources heading). A year after "of", "to", "from" or in brackets is a date unless a
+   counted word follows it; "Smith (2021)" and "the 2021 American Jobs Plan" are dates.
+5. **Citations.** A figure takes markers in its own sentence, or right after it with
+   only spaces and punctuation between, or earlier in its sentence; never across another
+   sentence's words. Only a table row gives every marker in the row to its figures.
+6. **Scope canary.** Six calls, each needing its result: the marker read by Read and by
+   Bash and curl must be refused; a control file inside the folder read by both tools
+   and the page fetched by WebFetch must succeed (so a refusal is the confinement's).
+   The canary session itself must exit 0 with a successful result. Not watched live:
+   whether this harness marks a refused Bash command `is_error`; if not, the canary
+   refuses the arm and names the step.
+7. **Forced stop.** A child that closes its output but does not exit is stopped and
+   recorded as stopped, so it is never eligible.
+8. **Gaps.** Any invalid entry in the judge's gap reply marks the count not fully
+   judged, and the summary says so.
+
+Checks: 46 head-to-head tests pass; full suite 1685 passed, 19 skipped; ruff and
+mypy --strict clean on `src` and `hackathon/headtohead`.
