@@ -46,6 +46,9 @@ def build(run_dir: Path) -> dict[str, str]:
         "task": task, "models": {"lead": {"model": "claude-opus-5-5", "effort": "high"}}}))
     (run_dir / "task").mkdir()
     (run_dir / "task" / "task.json").write_text(json.dumps(task))
+    # criteria.md as the driver writes it from task.json (v0.4: `- C1: <text>`).
+    (run_dir / "criteria.md").write_text("".join(f"- C{i}: {c}\n" for i, c in
+                                                 enumerate(task["criteria"], start=1)))
     r1 = capture(run_dir, "parks.txt", SOURCE)
     r2 = capture(run_dir, "minutes.txt", SECOND)
     reg = Register(run_dir)

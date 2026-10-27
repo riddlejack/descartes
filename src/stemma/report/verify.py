@@ -473,8 +473,9 @@ def code_bundle(run_dir: Path, script: str) -> Any:
     `Code`. Every file is read confined and bounded (no link followed, regular files
     only). A script that imports a sibling dynamically fails loudly on re-run (no
     result), never passes silently."""
-    from stemma.register.derivation import Code
-
+    code_cls = w2("stemma.register.derivation", "Code")  # absent once W2 is merged
+    if code_cls is None:
+        raise DerivationError("the register has no Code class; use bundle_for")
     try:
         segs = safefs.parts(script)
     except RunReadError as exc:
@@ -507,7 +508,7 @@ def code_bundle(run_dir: Path, script: str) -> Any:
         # that is not a sibling is the interpreter's own.
         todo.extend(f"{m}.py" for m in sorted(imported)
                     if f"{m}.py" in siblings and f"{m}.py" not in files)
-    return Code(segs[-1], files)
+    return code_cls(segs[-1], files)
 
 
 def experiment_key(code: Any, values: dict[str, float], documents: dict[str, str]) -> str:

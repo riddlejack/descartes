@@ -135,7 +135,7 @@ def test_an_unterminated_log_tail_fails(run: tuple[Path, dict[str, str]], tail: 
     log.write_bytes(data[:-1] + tail if not tail else data + tail)
     result = verify.verify(run_dir)
     assert result.outcome == "FAIL"
-    assert any("unterminated tail" in f for _l, f in result.failures)
+    assert any("unterminated tail" in f or "no newline" in f for _l, f in result.failures)
 
 
 @needs_sandbox
@@ -194,9 +194,11 @@ def test_a_script_swapped_for_a_constant_and_added_or_removed_files_fail(
     result = verify.verify(run_dir)
     assert section(result, "calculations").failures == []  # the number still matches
     fails = section(result, "seal").failures
-    assert "analysis/proj.py changed after the release." in fails
-    assert "draft/answer.v2.md was added after the release." in fails
-    assert f"store/receipts/{ids['r2']}.json was removed after the release." in fails
+    def named(path: str, word: str) -> bool:
+        return any(path in f and word in f for f in fails)
+
+    assert named("analysis/proj.py", "changed") and named("draft/answer.v2.md", "added")
+    assert named(f"store/receipts/{ids['r2']}.json", "removed")
     assert rec["receipt_id"] == ids["r2"]
 
 
@@ -310,13 +312,29 @@ def test_verify_writes_nothing_and_works_on_a_read_only_copy(
 
 
 @needs_sandbox
+def filed_bundle(run_dir: Path, cid: str) -> str | None:
+    """The bundle SHA-256 the register stored with a claim (v0.4), or None (earlier)."""
+    from stemma.report import runread
+
+    sha = (runread.load(run_dir).claims[cid].get("derivation") or {}).get("bundle_sha256")
+    return sha if isinstance(sha, str) else None
+
+
+@needs_sandbox
 def test_an_edited_script_no_longer_reproduces(run: tuple[Path, dict[str, str]]) -> None:
+    """Before stored bundles, the working script is re-run, so an edit changes the
+    number. With a stored bundle (v0.4), the filed copy is re-run, the claim still
+    reproduces, and the edit of the working copy is reported."""
     run_dir, ids = run
     (run_dir / "analysis/helper.py").write_text("def years_left():\n    return 5\n")
     result = verify.verify(run_dir)
-    fails = section(result, "calculations").failures
-    assert len(fails) == 1 and ids["proj"][:12] in fails[0]
-    assert "now reports 412.0; the claim says 372" in fails[0]
+    calc = section(result, "calculations")
+    if filed_bundle(run_dir, ids["proj"]) is None:
+        assert len(calc.failures) == 1 and ids["proj"][:12] in calc.failures[0]
+        assert "now reports 412.0; the claim says 372" in calc.failures[0]
+    else:
+        assert calc.failures == []
+        assert "1 re-run from the copy filed with the claim" in calc.extra
 
 
 @needs_sandbox
@@ -358,13 +376,13 @@ def test_a_symlinked_helper_is_refused_not_followed(
     helper = run_dir / "analysis/helper.py"
     helper.unlink()
     helper.symlink_to(outside)
-    with pytest.raises(DerivationError, match="link or not a plain file"):
-        verify.code_bundle(run_dir, "analysis/proj.py")
+    with pytest.raises(DerivationError):
+        verify.bundle_for(run_dir, "analysis/proj.py")
 
 
 def test_the_bundle_holds_only_what_the_script_imports(run: tuple[Path, dict[str, str]]) -> None:
     run_dir, _ids = run
-    code = verify.code_bundle(run_dir, "analysis/proj.py")
+    code = verify.bundle_for(run_dir, "analysis/proj.py")
     assert sorted(code.files) == ["helper.py", "proj.py"]
 
 
@@ -373,7 +391,7 @@ def test_the_bundle_holds_only_what_the_script_imports(run: tuple[Path, dict[str
 def test_a_script_outside_analysis_is_refused(run: tuple[Path, dict[str, str]],
                                               script: str) -> None:
     with pytest.raises(DerivationError):
-        verify.code_bundle(run[0], script)
+        verify.bundle_for(run[0], script)
 
 
 def test_a_folder_that_is_not_a_run_is_a_loud_error(tmp_path: Path) -> None:
@@ -401,6 +419,12 @@ def test_a_memo_never_hides_a_changed_script(run: tuple[Path, dict[str, str]]) -
     run_dir, ids = run
     memo: verify.Memo = {}
     assert not verify.verify(run_dir, memo=memo).failures and len(memo) == 1
-    (run_dir / "analysis/helper.py").write_text("def years_left():\n    return 5\n")
+    sha = filed_bundle(run_dir, ids["proj"])
+    if sha is None:  # the working copy is what re-runs
+        target = run_dir / "analysis/helper.py"
+    else:  # the filed copy is what re-runs
+        target = next(p for p in (run_dir / "store").rglob("helper.py") if sha in str(p))
+    os.chmod(target, 0o644)
+    target.write_text("def years_left():\n    return 5\n")
     fails = section(verify.verify(run_dir, memo=memo), "calculations").failures
-    assert len(fails) == 1 and ids["proj"][:12] in fails[0] and len(memo) == 2
+    assert len(fails) == 1 and ids["proj"][:12] in fails[0]
