@@ -375,6 +375,35 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   only filings dated before it. A refusal says nothing dated on or after `as_of`: a
   `sec_capture` of a later filing returns only the accession it was given, never the
   filing's form, company, document or date.
+- **Discovery.** No keyword web search: a worker browses archived pages (`capture` a
+  front, press or investor page, then `archived_links`, each link captured in turn) and
+  searches filings with `sec_search`, whose end date the host sets (section 4). The
+  worker and the claim checker hold both tools and are told so in one line each.
+- **Every path an as_of run has to the network** (the list the leakage audit scans; any
+  other is a defect). Agents' own tools reach none: no `WebSearch` or `WebFetch`, and
+  Bash, `run_analysis` and the derivation sandbox have no network. The host reaches:
+  1. the model provider, by the harness: model calls only, which carry no source;
+  2. `web.archive.org`, by the broker's `capture`: the CDX index (`/cdx/search/cdx`,
+     `to=` the day before `as_of`) and replays (`/web/<timestamp>id_/<url>`), every hop
+     on that host and dated before `as_of`, the replay's `Memento-Datetime` too;
+  3. SEC EDGAR, by the broker: `efts.sec.gov` full-text search (`sec_search`, end date
+     set by the host, later hits withheld); `www.sec.gov/Archives/` documents
+     (`sec_capture`, only filings dated before `as_of`, refused before any fetch
+     otherwise); `data.sec.gov` XBRL company concepts (`sec_facts`, facts filed before
+     `as_of` kept, the raw answer's text withheld); and the edgartools library's own
+     calls for company lookup, filing lists and accession lookup (`sec_filings`,
+     `sec_capture`), whose answers are filtered by filing date before anything
+     returns. The company name and ticker mapping is today's (a warning says so);
+  4. the run's own data-layer store, when configured (Postgres and Zetaris, one
+     database per run, holding only this run's evidence);
+  5. the second-family provider, by the register: claim text and source passages go
+     out, verdicts come back; whether that model's training reaches past `as_of` is a
+     model choice for the owner, not a path this contract can close.
+  The driver itself makes no network call: it starts sessions and reads their streams
+  (usage and limits come from those streams).
+- **The bare arm.** A head-to-head bare arm given an as-of date gets the same: no live
+  web tool, the guard as a hook, Bash without network, and the broker serving its
+  folder with exactly the evidence tools the worker holds (`hackathon/headtohead/bare.py`).
 
 ## 1. Parts and owners
 - **A. Evidence service:** `src/stemma/evidence/`, `tests/evidence/`.
