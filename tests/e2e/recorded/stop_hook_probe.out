@@ -1,4 +1,4 @@
-run folder: <SCRATCH>
+run folder: $STEMMA_RUNS/20261027-035901-e19353
 {
  "driver_exit": 3,
  "stop_refusals": 2,

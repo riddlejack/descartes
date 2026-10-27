@@ -326,6 +326,12 @@ def test_the_dry_run_creates_nothing(tmp_path: Path, capsys: pytest.CaptureFixtu
     assert '"WebSearch"' in capsys.readouterr().out
 
 
+def test_the_bare_arm_has_no_default_folder(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        bare.main(["--dry-run"])
+    assert exc.value.code == 2 and "--out" in capsys.readouterr().err
+
+
 class _Proc:
     """A fake child. `hang`: writes nothing until stopped. `stuck`: writes its lines,
     closes its output, then does not exit until stopped, and exits 0 when it is."""
@@ -619,8 +625,8 @@ def test_recheck_3_the_judge_cannot_read_outside_its_own_folder(tmp_path: Path) 
     import subprocess
 
     home = tmp_path / "home"
-    (home / ".private").mkdir(parents=True)
-    secret = home / ".private" / "other-answer.md"
+    (home / ".private-notes").mkdir(parents=True)
+    secret = home / ".private-notes" / "other-answer.md"
     secret.write_text("SECRET-ANSWER-TEXT\n")
     jail = tmp_path / "jail"
     (jail / "work").mkdir(parents=True)

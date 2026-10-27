@@ -8,9 +8,9 @@ message checked by the canary before anything it says is used. It is given exact
 launcher, `tests/e2e/run3_demo.py` (with `--question-file` replacing the question the
 same way that launcher does).
 
-    python -m hackathon.headtohead.bare [--question-file Q.json] [--dry-run] [--out ROOT]
+    python -m hackathon.headtohead.bare --out ROOT [--question-file Q.json] [--dry-run]
 
-It writes one new folder under ROOT (default `~/.private/runs/stemma2-run3/bare/`):
+It writes one new folder under ROOT (required; a folder outside the repository):
 `prompt.txt` (the exact prompt), `launch.json` (model, effort, tools, settings, harness
 version; no environment), `stream.jsonl` (the session's stream-json, as it came),
 `answer.md` (the session's final answer), `usage.json` (the harness's own usage and cost
@@ -61,7 +61,6 @@ from typing import Any, Final
 
 REPO: Final = Path(__file__).resolve().parents[2]
 RUN3_LAUNCHER: Final = REPO / "tests" / "e2e" / "run3_demo.py"
-DEFAULT_ROOT: Final = Path.home() / ".private" / "runs" / "stemma2-run3" / "bare"
 MODEL: Final = "claude-opus-5-5"  # the pre-registration: Opus 5.5 at high effort
 EFFORT: Final = "high"
 TOOLS: Final = ("WebSearch", "WebFetch", "Bash", "Read", "Write")  # see the module's note
@@ -475,7 +474,8 @@ def main(argv: list[str] | None = None) -> int:
                                  description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--question-file", type=Path, default=None)
-    ap.add_argument("--out", type=Path, default=DEFAULT_ROOT)
+    ap.add_argument("--out", type=Path, required=True,
+                    help="folder the new run folder is created in (outside the repository)")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the prompt and the launch; create nothing")
     args = ap.parse_args(argv)

@@ -13,8 +13,8 @@ from report_fixture import fresh_copy
 
 from stemma.report import md, site
 
-RUN1 = Path(os.environ.get("STEMMA_RUN1_DIR") or Path.home() / ".private/runs/"
-            "stemma2-walking-skeleton/20261026-070412-2b3c98")
+# Run 1's recorded folder, kept outside the repository; these tests skip without it.
+RUN1 = Path(os.environ.get("STEMMA_RUN1_DIR") or "/nonexistent-stemma-run1")
 
 
 @pytest.fixture
@@ -124,7 +124,8 @@ def test_markdown_escapes_first_and_links_only_http() -> None:
     assert "<td>&lt;i&gt;1&lt;/i&gt;</td>" in out and "href='#c-0123456789ab'" in out
 
 
-@pytest.mark.skipif(not (RUN1 / "run.json").exists(), reason="run 1's folder is not here")
+@pytest.mark.skipif(not (RUN1 / "run.json").exists(),
+                    reason="set STEMMA_RUN1_DIR to run 1's folder")
 def test_run_one_renders_every_cited_figure(tmp_path: Path) -> None:
     page = site.write(RUN1, tmp_path / "out").read_text()
     answer = page[page.index('id="answer"'):page.index('id="criteria"')]

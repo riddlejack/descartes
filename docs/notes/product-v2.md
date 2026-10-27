@@ -283,7 +283,8 @@ Two modules, in `hackathon/headtohead/`:
     source for every figure, which a plain user may not ask. Without it, the citation
     counts would measure nothing. The exact prompt is saved with its answer.
   - It writes prompt.txt, launch.json, stream.jsonl, answer.md, usage.json and
-    outcome.json into a new folder under `~/.private/runs/stemma2-run3/bare/`.
+    outcome.json into a new folder under the `--out` folder (required since the
+    pre-public pass; it was a private runs folder before).
   - `--dry-run` creates nothing.
 
 - **`score.py`, the scorer.** It counts both answers by the same rules, which are also
@@ -360,7 +361,7 @@ Each fix below has a test named after it, built from the review's probe.
 
 ## Codex re-check of the head-to-head harness: the eight remaining findings
 
-Review: `~/.private/stemma-design/build-2026-10/reviews/W3-headtohead-recheck.md`. One
+Review: a private review record (W3-headtohead-recheck), not in this repository. One
 test per finding (`test_recheck_<n>_...` in `hackathon/tests/test_headtohead.py`); all
 twelve new tests failed on 9628aa3 before the fixes (the canary and stuck-child tests
 partly because their fake now speaks the new six-step canary prompt).

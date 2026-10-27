@@ -1,4 +1,4 @@
-run folder: <SCRATCH>
+run folder: $STEMMA_RUNS/20261027-051241-f45c7b
 {
  "wall_s": 113,
  "sessions": 9,
