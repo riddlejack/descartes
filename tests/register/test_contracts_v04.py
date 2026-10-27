@@ -709,3 +709,47 @@ def test_a_run_holding_a_link_is_not_released(reg: Register) -> None:
     with pytest.raises(Refused, match="could not be sealed"):
         reg.finish_run(LEAD, 1)
     assert reg.release_state() == "withdrawn"
+
+
+# --- Codex review #6: a crash between a verdict's writes loses nothing ----------------
+
+class _Crash(Exception):
+    pass
+
+
+@pytest.mark.parametrize("cut", ["node_fact", "node_status"])
+def test_a_crash_inside_a_send_back_keeps_the_send_back(reg: Register, cut: str,
+                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    _proposed(reg)
+    rev = reviewer_for(reg, "b1", "s-r1")
+    real_fact, real_put = reg.wm.assertFact, reg._put_node
+
+    def fact(inp: Any) -> Any:
+        if cut == "node_fact" and inp.get("predicate") == "branch_verdict":
+            raise _Crash
+        return real_fact(inp)
+
+    def put(node: dict[str, Any], source: dict[str, Any]) -> None:
+        if cut == "node_status" and node.get("status") == "in_progress":
+            raise _Crash
+        real_put(node, source)
+
+    monkeypatch.setattr(reg.wm, "assertFact", fact)
+    monkeypatch.setattr(reg, "_put_node", put)
+    with pytest.raises(_Crash):
+        reg.record_branch_verdict(rev, "b1", "bound", "unbounded", points=[mat(node="n1")])
+    monkeypatch.undo()
+    # The next writer repairs the node from the authoritative record.
+    fresh = Register(reg.run_dir, evidence=FakeEvidence())
+    fresh.gate_status(LEAD, 1) if fresh.submitted_versions() else fresh.tree_upsert(
+        LEAD, {"id": "n1", "doubt": None})
+    assert [n["status"] for n in fresh.tree()] == ["in_progress"]
+    assert [p["id"] for p in fresh.sent_back("b1")] == ["b1.r1.1"]
+    write_record(fresh, "b1")
+    with pytest.raises(Refused, match="were sent back"):
+        fresh.propose_branch_done(WORKER, "b1")
+    revision(fresh, "b1", 1, "b1.r1.1")
+    fresh.propose_branch_done(WORKER, "b1")
+    with pytest.raises(Refused, match="a branch is sent back once"):
+        fresh.record_branch_verdict(reviewer_for(fresh, "b1", "s-r2"), "b1", "bound", "again",
+                                    points=[mat(node="n1")])

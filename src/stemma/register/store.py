@@ -978,11 +978,38 @@ class Register:
         return {int(r["round"]): r for r in self._run_facts("record_frozen")
                 if r["branch_id"] == branch_id}
 
+    def _apply_verdicts(self) -> bool:
+        """Repair what a crash between writes left: each branch verdict recorded for the
+        latest proposed round of its branch is applied to every node it covers that
+        still awaits it (its node fact and status). Idempotent. Call under the lock;
+        returns True when it changed a node."""
+        by_id = {str(n["id"]): n for n in self.tree()}
+        changed = False
+        for v in self._run_facts("branch_verdict_recorded"):
+            frozen = self._frozen_records(str(v["branch_id"]))
+            if not frozen or int(v["round"]) != max(frozen):
+                continue
+            source = {"kind": "register", "at": now(), "by": "stemma:register"}
+            for nid in v.get("nodes") or []:
+                n = by_id.get(str(nid))
+                if (n is None or n["status"] != "proposed_done"
+                        or n.get("branch_id") != v["branch_id"]):
+                    continue  # moved on: a newer proposal, or another branch's now
+                facts = self._live_facts(node_entity(str(nid)), "branch_verdict")
+                if not any(f["value"].get("round") == v["round"]
+                           and f["value"].get("session") == v["session"] for f in facts):
+                    self.wm.assertFact({"about": node_entity(str(nid)),
+                                        "predicate": "branch_verdict", "value": v,
+                                        "source": {**source, "runId": v["session"]}})
+                self._put_node({**n, "status": BRANCH_VERDICTS[str(v["verdict"])]}, source)
+                changed = True
+        return changed
+
     def _sync_records(self) -> None:
         """A reviewed branch whose live record.md is no longer the reviewed snapshot
         reopens: the review no longer covers what the record says. Call under the lock."""
+        changed = self._apply_verdicts()
         source = {"kind": "register", "at": now(), "by": "stemma:register"}
-        changed = False
         for n in self.tree():
             branch = n.get("branch_id")
             if n["status"] not in REVIEWED or not branch:
@@ -1036,6 +1063,8 @@ class Register:
             self.wm.refresh()
             # Authorization and write under one lock: no new round can start in between.
             self._session_prompt_is(caller, "branch-reviewer", f"branch:{branch_id}")
+            if self._apply_verdicts():
+                self._write_tree()
             state = checks_api.state_for_session(self.run_dir, caller.session_id)
             rnd = state.request.round if state else 0
             nodes = self._branch_nodes(branch_id)
@@ -1071,11 +1100,14 @@ class Register:
                     "record_snapshot": frozen["snapshot"], "by": caller.agent_type,
                     "session": caller.session_id, "at": now()}
             source = self._src(caller, kind="branch-reviewer")
+            # The authoritative record first (Codex review #6): the send-back history and
+            # the node states derive from it, and _apply_verdicts repairs any node write
+            # a crash cut off, idempotently, under the lock.
+            self._run_fact(caller, "branch_verdict_recorded", body)
             for n in nodes:
                 self.wm.assertFact({"about": node_entity(n["id"]), "predicate": "branch_verdict",
                                     "value": body, "source": source})
                 self._put_node({**n, "status": BRANCH_VERDICTS[verdict]}, source)
-            self._run_fact(caller, "branch_verdict_recorded", body)
             vdir = branch_dir / "verdicts"
             number = len(self._verdict_files(branch_dir)) + 1
             self._write(vdir / f"{number}.json", json.dumps(body, indent=2))

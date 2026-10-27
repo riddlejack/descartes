@@ -160,7 +160,16 @@ D1 to D10); where an older line below disagrees, section 0 wins.
   run (`usage_limited`), the driver waits until the limit resets (the reset time the
   harness reported, plus a margin) and resumes, at most `max_usage_resumes` times (a
   resource limit in `run.json`, default 6), logging each wait as a `usage_wait` event
-  and each resume as `run_resumed`.
+  and each resume as `run_resumed`. The automatic resume holds the run lock throughout,
+  waits included (another start or resume gets `DriverBusy`). Before each wait and
+  resume it rereads the recorded outcome, the release state and the lead's remaining
+  time (`lead_max_s` less the time run, from events.jsonl); it resumes only a
+  usage-stopped run with time left, capped at that time, and otherwise records
+  `usage_resume_refused`. A lead stopped by its time limit is terminal and never
+  resumed automatically.
+- **Verdict writes** (Codex review #6): a branch verdict's authoritative record is
+  written first; a crash between its writes is repaired, idempotently, by the next
+  writer under the lock, so no send-back is ever lost.
 
 ## 1. Parts and owners
 - **A. Evidence service:** `src/stemma/evidence/`, `tests/evidence/`.

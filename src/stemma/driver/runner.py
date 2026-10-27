@@ -227,6 +227,9 @@ class Driver:
         self.stop_after: str = str(self.run.get("stop_after") or "full")
         self._frame_sig: tuple[Any, ...] | None = None
         self._frame_sig_at = 0.0
+        # The lead's remaining permitted wall time on an automatic resume (run_to_end):
+        # lead_max_s less what its sessions have already run. None: a session's own limit.
+        self.lead_budget_s: float | None = None
 
     # ----- state -------------------------------------------------------------------
     def _load_state(self) -> dict[str, Any]:
@@ -708,7 +711,9 @@ class Driver:
             age = now - s.started
             if s.init is None and s.canary_problems is None and age > self.limits.init_timeout_s:
                 s.stop("init_timeout", self.limits.stop_grace_s)
-            limit = self.limits.check_max_s if s.spec.request_id else self.limits.lead_max_s
+            limit = (self.limits.check_max_s if s.spec.request_id else
+                     self.lead_budget_s if self.lead_budget_s is not None else
+                     self.limits.lead_max_s)
             if age > limit and s.killed_reason is None:
                 events.emit(self.run_dir, "session_stopped_by_limit", session=s.spec.name,
                             limit_s=limit)
@@ -898,6 +903,10 @@ class Driver:
             return "canary_failed"
         if self.stop_after == "frame" and self.state.get("frame_complete"):
             return "frame_complete"
+        # A lead stopped by its time limit is a terminal resource stop: it takes precedence
+        # over a usage stop, which run_to_end would otherwise resume (Codex review #2).
+        if lead_outcome == "stopped_by_limit" and not self.released(self.run_dir):
+            return "stopped_by_limit"
         if self.state.get("usage_limited") and not self.released(self.run_dir):
             return "usage_limited"
         if self.state.get("release_blocked"):
@@ -937,25 +946,45 @@ def start(cfg: DriverConfig, run_dir: Path, api: ChecksApi | None = None,
           limits: Limits | None = None, watch: bool = True, *,
           released: Released | None = None, revoke: Revoke | None = None) -> int:
     with run_lock(run_dir):
-        d = Driver(cfg, run_dir, api, limits, released=released, revoke=revoke)
-        events.emit(d.run_dir, "run_started", run_id=d.run_id,
-                    plugin_digest=d.run["plugin"]["digest"], harness=d.version)
-        d.api.request_check(d.run_dir, "blind-framer", "frame:own", "run_start")
-        d.start_lead(resume=False)
-        return d.watch() if watch else 0
+        return _start_locked(cfg, run_dir, api, limits, watch, released=released,
+                             revoke=revoke)
+
+
+def _start_locked(cfg: DriverConfig, run_dir: Path, api: ChecksApi | None,
+                  limits: Limits | None, watch: bool = True, *,
+                  released: Released | None = None, revoke: Revoke | None = None) -> int:
+    """`start` for a caller already holding the run lock."""
+    d = Driver(cfg, run_dir, api, limits, released=released, revoke=revoke)
+    events.emit(d.run_dir, "run_started", run_id=d.run_id,
+                plugin_digest=d.run["plugin"]["digest"], harness=d.version)
+    d.api.request_check(d.run_dir, "blind-framer", "frame:own", "run_start")
+    d.start_lead(resume=False)
+    return d.watch() if watch else 0
 
 
 def resume(cfg: DriverConfig, run_dir: Path, api: ChecksApi | None = None,
            limits: Limits | None = None, *, released: Released | None = None,
            revoke: Revoke | None = None) -> int:
     with run_lock(run_dir):
-        d = Driver(cfg, run_dir, api, limits, released=released, revoke=revoke)
-        events.emit(d.run_dir, "run_resumed", run_id=d.run_id,
-                    lead_session_id=d.state["lead"].get("session_id"))
-        d.recover_usage()
-        d.start_lead(resume=True)
-        d.relaunch_unended_checks()
-        return d.watch()
+        return _resume_locked(cfg, run_dir, api, limits, released=released, revoke=revoke)
+
+
+def _resume_locked(cfg: DriverConfig, run_dir: Path, api: ChecksApi | None,
+                   limits: Limits | None, *, released: Released | None = None,
+                   revoke: Revoke | None = None, lead_budget_s: float | None = None) -> int:
+    """`resume` for a caller already holding the run lock. `lead_budget_s` (an automatic
+    resume) caps the resumed lead at the wall time it has left."""
+    d = Driver(cfg, run_dir, api, limits, released=released, revoke=revoke)
+    d.lead_budget_s = lead_budget_s
+    events.emit(d.run_dir, "run_resumed", run_id=d.run_id,
+                lead_session_id=d.state["lead"].get("session_id"),
+                automatic=lead_budget_s is not None,
+                **({"lead_budget_s": round(lead_budget_s, 3)}
+                   if lead_budget_s is not None else {}))
+    d.recover_usage()
+    d.start_lead(resume=True)
+    d.relaunch_unended_checks()
+    return d.watch()
 
 
 def show_status(cfg: DriverConfig, run_dir: Path, api: ChecksApi | None = None) -> dict[str, Any]:
@@ -989,45 +1018,119 @@ def usage_reset_at(run_dir: Path, since: str | None) -> float | None:
     return best
 
 
+def lead_time_used(run_dir: Path) -> float:
+    """Seconds the lead's sessions have run, from the `session_launched` and
+    `session_ended` events of role lead. A launch with no recorded end (a driver that
+    died) counts up to the last event in the log, the most it can have run unseen."""
+    started: dict[str, float] = {}
+    total, last = 0.0, 0.0
+    for e in events.read(run_dir):
+        t = usage._ts(e.get("at"))
+        if t is None:
+            continue
+        last = max(last, t)
+        if e.get("role") != "lead":
+            continue
+        if e.get("event") == "session_launched":
+            started[str(e.get("session"))] = t
+        elif e.get("event") == "session_ended":
+            began = started.pop(str(e.get("session")), None)
+            if began is not None:
+                total += max(0.0, t - began)
+    return total + sum(max(0.0, last - began) for began in started.values())
+
+
+def _resume_refusal(run_dir: Path, lim: Limits) -> tuple[str, str, dict[str, Any]] | None:
+    """Why an automatic resume must not happen, read from what is persisted: the outcome
+    to report, the reason, and the lead time figures used. None when it may happen.
+    The caller holds the run lock."""
+    try:
+        state = json.loads(safeio.read_text(run_dir, STATE_FILE))
+    except (OSError, ValueError, safeio.UnsafePath) as exc:
+        raise RunStateError(f"driver state unreadable before an automatic resume: {exc}") \
+            from exc
+    outcome = state.get("outcome") if isinstance(state, dict) else None
+    used = lead_time_used(run_dir)
+    figures = {"lead_run_s": round(used, 3), "lead_max_s": lim.lead_max_s,
+               "lead_remaining_s": round(lim.lead_max_s - used, 3),
+               "lead_time_from": "events.jsonl: the lead's session_launched/session_ended"}
+    if outcome != "usage_limited":
+        return (outcome if outcome in OUTCOME_CODES else "ended_without_release",
+                f"the run's recorded outcome is now {outcome}", figures)
+    release = register_release_state(run_dir)
+    if release == "released":
+        return "released", "the run was released", figures
+    if release == "withdrawn":
+        return "release_withdrawn", "the run's release was withdrawn", figures
+    if (state.get("lead") or {}).get("outcome") == "stopped_by_limit":
+        return "stopped_by_limit", "the lead was stopped by its time limit", figures
+    if used >= lim.lead_max_s:
+        return ("stopped_by_limit", (f"the lead has run {used:.0f} s of its "
+                f"{lim.lead_max_s:.0f} s: no time remains"), figures)
+    return None
+
+
 def run_to_end(cfg: DriverConfig, run_dir: Path, *, resume_first: bool,
                api: ChecksApi | None = None, limits: Limits | None = None,
                sleep: Sleep = time.sleep, clock: Callable[[], float] = time.time) -> int:
     """Start (or resume) a run, and when the account's usage limit stops it, wait until
     the limit resets and resume it, at most `max_usage_resumes` times (resource limits in
     run.json). Each wait is a `usage_wait` event; the count of those events is the count
-    of automatic resumes, so a restarted driver keeps to the same limit."""
+    of automatic resumes, so a restarted driver keeps to the same limit.
+
+    This supervisor holds the run lock from start to end, waits included: no other driver
+    can run or resume the run meanwhile (it gets DriverBusy), so counting the waits and
+    recording the next one is one step. Before each wait and again before each resume it
+    rereads the persisted outcome, the register's release state and the lead's remaining
+    wall time (lead_max_s less what its sessions have run), and resumes only a run still
+    stopped by the usage limit with lead time left; the resumed lead gets only that time."""
     rd = Path(os.path.realpath(run_dir))
-    lim = limits or Limits.from_json(load_run(rd)["limits"])
-    code = resume(cfg, rd, api, limits) if resume_first else start(cfg, rd, api, limits)
-    while code == OUTCOME_CODES["usage_limited"]:
-        waits = [e for e in events.read(rd) if e.get("event") == "usage_wait"]
-        if len(waits) >= lim.max_usage_resumes:
-            events.emit(rd, "usage_resumes_used_up", resumes=len(waits),
-                        limit=lim.max_usage_resumes)
-            return code
-        since = str(waits[-1]["at"]) if waits else None
-        reset = usage_reset_at(rd, since)
-        now = clock()
-        wait = (lim.usage_wait_unknown_s if reset is None
-                else max(0.0, reset - now) + lim.usage_resume_margin_s)
-        if wait > lim.usage_wait_max_s:
-            events.emit(rd, "usage_wait_too_long", resets_at=reset, wait_s=round(wait),
-                        limit_s=lim.usage_wait_max_s)
-            return code
-        until = datetime.fromtimestamp(now + wait, UTC).isoformat(timespec="seconds")
-        events.emit(rd, "usage_wait", resume=len(waits) + 1, limit=lim.max_usage_resumes,
-                    resets_at=reset, wait_s=round(wait, 1), until=until)
-        last = _status_or_empty(rd)
-        if last:  # the status page says the run waits, and until when
-            status.write(rd, {**last, "state": "waiting_for_usage_reset",
-                              "resume_at": until})
-        try:
-            sleep(wait)
-        except KeyboardInterrupt:
-            events.emit(rd, "driver_stopped", during="usage_wait")
-            return OUTCOME_CODES["driver_stopped"]
-        code = resume(cfg, rd, api, limits)
-    return code
+    with run_lock(rd):
+        lim = limits or Limits.from_json(load_run(rd)["limits"])
+        code = (_resume_locked(cfg, rd, api, limits) if resume_first
+                else _start_locked(cfg, rd, api, limits))
+        while code == OUTCOME_CODES["usage_limited"]:
+            waits = [e for e in events.read(rd) if e.get("event") == "usage_wait"]
+            if len(waits) >= lim.max_usage_resumes:
+                events.emit(rd, "usage_resumes_used_up", resumes=len(waits),
+                            limit=lim.max_usage_resumes)
+                return code
+            refusal = _resume_refusal(rd, lim)
+            if refusal is not None:
+                return _refuse_resume(rd, *refusal)
+            since = str(waits[-1]["at"]) if waits else None
+            reset = usage_reset_at(rd, since)
+            now = clock()
+            wait = (lim.usage_wait_unknown_s if reset is None
+                    else max(0.0, reset - now) + lim.usage_resume_margin_s)
+            if wait > lim.usage_wait_max_s:
+                events.emit(rd, "usage_wait_too_long", resets_at=reset, wait_s=round(wait),
+                            limit_s=lim.usage_wait_max_s)
+                return code
+            until = datetime.fromtimestamp(now + wait, UTC).isoformat(timespec="seconds")
+            events.emit(rd, "usage_wait", resume=len(waits) + 1, limit=lim.max_usage_resumes,
+                        resets_at=reset, wait_s=round(wait, 1), until=until,
+                        lead_run_s=round(lead_time_used(rd), 3), lead_max_s=lim.lead_max_s)
+            last = _status_or_empty(rd)
+            if last:  # the status page says the run waits, and until when
+                status.write(rd, {**last, "state": "waiting_for_usage_reset",
+                                  "resume_at": until})
+            try:
+                sleep(wait)
+            except KeyboardInterrupt:
+                events.emit(rd, "driver_stopped", during="usage_wait")
+                return OUTCOME_CODES["driver_stopped"]
+            refusal = _resume_refusal(rd, lim)
+            if refusal is not None:
+                return _refuse_resume(rd, *refusal)
+            budget = lim.lead_max_s - lead_time_used(rd)
+            code = _resume_locked(cfg, rd, api, limits, lead_budget_s=budget)
+        return code
+
+
+def _refuse_resume(run_dir: Path, outcome: str, reason: str, figures: dict[str, Any]) -> int:
+    events.emit(run_dir, "usage_resume_refused", outcome=outcome, reason=reason, **figures)
+    return OUTCOME_CODES[outcome]
 
 
 def _status_or_empty(run_dir: Path) -> dict[str, Any]:
