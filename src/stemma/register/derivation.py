@@ -335,24 +335,6 @@ def bundle_dir(sha256: str) -> str:
     return f"{BUNDLES_DIR}/{sha256}"
 
 
-def _ensure_folders(run_dir: Path, rels: list[list[str]]) -> None:
-    """Make each run_dir/rel folder, following no link, where another writer making the
-    same folder at the same moment is not an error (`safeio`'s writes then find them)."""
-    for parts in rels:
-        fd = os.open(os.path.realpath(run_dir), _DIR_FLAGS)
-        try:
-            for name in parts:
-                try:
-                    os.mkdir(name, 0o755, dir_fd=fd)
-                except FileExistsError:
-                    pass
-                nxt = os.open(name, _DIR_FLAGS, dir_fd=fd)  # a link here: ELOOP, refused
-                os.close(fd)
-                fd = nxt
-        finally:
-            os.close(fd)
-
-
 def store_bundle(run_dir: Path, bundle: Bundle) -> str:
     """Write the bundle once to store/derivations/<sha256>/ (files/<path> for each file,
     then bundle.json, its manifest), following no link (`safeio`). Returns the hash. A
@@ -365,15 +347,41 @@ def store_bundle(run_dir: Path, bundle: Bundle) -> str:
         if safeio.is_file(run_dir, f"{folder}/bundle.json"):
             load_bundle(run_dir, sha)
             return sha
-        paths = {path: _plain_rel(path) for path in bundle.files}
-        _ensure_folders(run_dir, [["register", "tmp"]] + [
-            [*folder.split("/"), "files", *parts[:-1]] for parts in paths.values()])
         for path, data in bundle.files.items():
+            _plain_rel(path)
             safeio.write_bytes(run_dir, f"{folder}/files/{path}", data)
         safeio.write_bytes(run_dir, f"{folder}/bundle.json", _canonical(bundle.manifest()))
     except (safeio.UnsafePath, NotADirectoryError, OSError) as exc:
         raise DerivationError(f"bundle {sha} could not be stored: {exc}") from exc
     return sha
+
+
+def _read_bounded(dfd: int, name: str, cap: int, what: str) -> bytes:
+    """A regular file's bytes, opened without following a link or blocking; its size
+    checked against `cap` before anything is read, and never more than `cap` + 1 read."""
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise DerivationError(f"{what} is not a plain file") from exc
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise DerivationError(f"{what} is not a plain file")
+        if st.st_size > cap:
+            raise DerivationError(f"{what} is larger than {cap} bytes")
+        chunks: list[bytes] = []
+        left = cap + 1
+        while left > 0 and (chunk := os.read(fd, min(left, 1 << 20))):
+            chunks.append(chunk)
+            left -= len(chunk)
+    finally:
+        os.close(fd)
+    data = b"".join(chunks)
+    if len(data) > cap:  # it grew after the size check
+        raise DerivationError(f"{what} is larger than {cap} bytes")
+    return data
 
 
 def load_bundle(run_dir: Path, sha256: str) -> Bundle:
@@ -384,16 +392,15 @@ def load_bundle(run_dir: Path, sha256: str) -> Bundle:
     folder = bundle_dir(sha256)
 
     def read(rel: str, cap: int) -> bytes:
+        parts = rel.split("/")
         try:
-            data = safeio.read_bytes(run_dir, rel)
+            with safeio.folder_fd(run_dir, "/".join(parts[:-1])) as dfd:
+                return _read_bounded(dfd, parts[-1], cap, f"stored bundle {sha256}: {rel}")
         except FileNotFoundError as exc:
             raise DerivationError(f"stored bundle {sha256} lacks {rel}") from exc
-        except (safeio.UnsafePath, NotADirectoryError, OSError) as exc:
+        except (safeio.UnsafePath, NotADirectoryError) as exc:
             raise DerivationError(f"stored bundle {sha256}: {rel} is not a plain "
                                   f"file") from exc
-        if len(data) > cap:
-            raise DerivationError(f"stored bundle {sha256}: {rel} is larger than {cap} bytes")
-        return data
 
     try:
         manifest = json.loads(read(f"{folder}/bundle.json", CODE_MAX_BYTES))

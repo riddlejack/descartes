@@ -165,3 +165,74 @@ def test_the_mcp_tool_runs_for_a_worker_and_refuses_others(tmp_path: Path) -> No
     assert results[1][0] and "do not run analysis scripts" in results[1][1]
     assert results[2][0] and "no harness identity" in results[2][1]
     assert results[3][0] and "not a plain path in analysis/" in results[3][1]
+
+
+# --- The lead reads claim inputs only (Codex recheck P1) --------------------------------
+
+PROBE = "from stemma.analysis import document\nprint(document('r1'))\n"
+
+
+def test_the_lead_cannot_read_a_document_through_a_script(tmp_path: Path) -> None:
+    from test_store import TEXT
+
+    run = tmp_path / "run"
+    run.mkdir()
+    reg = Register(run, evidence=FakeEvidence())
+    write(run, {"analysis/peek.py": PROBE})
+    assert LEAD.agent_type == "stemma:lead" and LEAD.agent_id is None
+    with pytest.raises(Refused, match="lead sessions run analysis on claim inputs only"):
+        run_for(reg, LEAD, "analysis/peek.py", None, ["r1"])
+    out = run_for(reg, LEAD, "analysis/peek.py", None, None)
+    assert out["exit_code"] != 0 and out["result"] is None
+    assert "AnalysisError: receipt r1 is not among this script's documents" in out["stderr_tail"]
+    assert TEXT not in out["stdout"] and TEXT not in out["stderr_tail"]
+    # The same script works for a worker who names the document.
+    worker = run_for(reg, WORKER, "analysis/peek.py", None, ["r1"])
+    assert worker["exit_code"] == 0 and worker["stdout"] == TEXT + "\n"
+
+
+# --- LIVE: the real sandbox on this machine ----------------------------------------------
+
+def _sandbox_applies() -> bool:
+    import subprocess
+
+    if not Path(derivation.SANDBOX_EXEC).exists():
+        return False
+    p = subprocess.run([derivation.SANDBOX_EXEC, "-p", "(version 1)(allow default)",
+                        "/usr/bin/true"], capture_output=True, check=False,
+                       timeout=30)  # resource limit: seconds to probe
+    return p.returncode == 0
+
+
+@pytest.mark.skipif(not _sandbox_applies(), reason="sandbox-exec cannot apply a profile here")
+def test_live_network_and_outside_writes_fail_and_the_run_says_so(tmp_path: Path) -> None:
+    import socket
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    listener.settimeout(0.5)
+    port = listener.getsockname()[1]
+    victim = tmp_path / "victim.txt"
+    write(tmp_path, {"analysis/escape.py": (
+        "import socket, pathlib\nfrom stemma.analysis import result\nwon = 0\n"
+        "try:\n"
+        f"    socket.create_connection(('127.0.0.1', {port}), timeout=3)\n"
+        "    won += 1\n    print('network: connected')\n"
+        "except OSError as e:\n    print('network: blocked', type(e).__name__)\n"
+        "try:\n"
+        f"    pathlib.Path({str(victim)!r}).write_text('x')\n"
+        "    won += 10\n    print('write: done')\n"
+        "except OSError as e:\n    print('write: blocked', type(e).__name__)\n"
+        "pathlib.Path('scratch.txt').write_text('inside is fine')\n"
+        "print('scratch: written')\nresult(won)\n")})
+    try:
+        out = run_analysis(tmp_path, "analysis/escape.py", None, None, no_lookup, None)
+        with pytest.raises(TimeoutError):
+            listener.accept()  # nothing ever reached the listener
+    finally:
+        listener.close()
+    assert out["exit_code"] == 0 and out["result"] == 0
+    assert "network: blocked" in out["stdout"] and "write: blocked" in out["stdout"]
+    assert "scratch: written" in out["stdout"]
+    assert not victim.exists()

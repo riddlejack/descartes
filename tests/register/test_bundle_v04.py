@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -203,6 +204,32 @@ def test_a_tampered_stored_bundle_is_refused(tmp_path: Path) -> None:
             load_bundle(tmp_path, bad)
 
 
+def test_a_stored_file_over_the_cap_is_refused_before_it_is_read(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    body = "x = 1\n" * 200
+    write(tmp_path, {"analysis/calc.py": "import big\n" + RATIO, "analysis/big.py": body})
+    sha = store_bundle(tmp_path, build_bundle(tmp_path, "analysis/calc.py"))
+    # big.py is read first (files are read in path order): it is one byte over the cap.
+    monkeypatch.setattr(derivation, "CODE_MAX_BYTES", len(body) - 1)
+    asked: list[int] = []
+    got: list[int] = []
+    real_read = os.read
+
+    def counting(fd: int, n: int) -> bytes:
+        asked.append(n)
+        data = real_read(fd, n)
+        got.append(len(data))
+        return data
+
+    monkeypatch.setattr(os, "read", counting)
+    with pytest.raises(DerivationError, match=f"big.py is larger than {len(body) - 1} bytes"):
+        load_bundle(tmp_path, sha)
+    cap = derivation.CODE_MAX_BYTES
+    assert asked and max(asked) <= cap + 1  # never the whole file first
+    manifest = (tmp_path / "store" / "derivations" / sha / "bundle.json").stat().st_size
+    assert sum(got) == manifest  # only bundle.json was read; big.py never was
+
+
 def test_a_linked_store_folder_is_refused(tmp_path: Path) -> None:
     write(tmp_path, {"analysis/calc.py": RATIO})
     elsewhere = tmp_path / "elsewhere"
@@ -275,9 +302,18 @@ def test_refiling_after_an_edit_keeps_the_filed_record(tmp_path: Path) -> None:
     (run / "analysis" / "growth.py").write_text(
         "from stemma.analysis import inputs, result\n# a comment\n"
         f"v = inputs()\nresult(v['{a}'] / v['{b}'])\n")
-    second = reg.file_claim(WORKER, _growth(a, b, 1.2))  # reproduces, new bundle
-    assert second["claim_id"] == first["claim_id"] and second["already_filed"] is True
+    # Identical fields, new code: a different claim, whose checks name its own bundle;
+    # never the new bundle's checks reported under the first claim (Codex recheck P2).
+    second = reg.file_claim(WORKER, _growth(a, b, 1.2))
+    assert second["claim_id"] != first["claim_id"] and second["already_filed"] is False
+    new_sha = reg.get_claim(second["claim_id"])["derivation"]["bundle_sha256"]
+    assert new_sha != before["derivation"]["bundle_sha256"]
+    assert second["checks"] == reg.get_claim(second["claim_id"])["checks"]
+    assert [c.get("bundle_sha256") for c in second["checks"]] == [None, new_sha]
     assert reg.get_claim(first["claim_id"]) == before  # still the first bundle's hash
+    third = reg.file_claim(WORKER, _growth(a, b, 1.2))  # same fields, same code
+    assert third["claim_id"] == second["claim_id"] and third["already_filed"] is True
+    assert third["checks"] == reg.get_claim(second["claim_id"])["checks"]
     (run / "analysis" / "growth.py").write_text(
         "from stemma.analysis import result\nresult(9)\n")
     with pytest.raises(Refused, match="does not reproduce"):
@@ -292,10 +328,12 @@ def test_the_agent_cannot_supply_the_bundle_hash(tmp_path: Path) -> None:
         run_checks(raw, tmp_path, EV, no_run, lookup_ab)
 
 
-def test_the_hash_is_not_part_of_the_claim_id() -> None:
+def test_the_code_is_part_of_the_claim_id() -> None:
     raw = filing.normalise_shape(estimated("analysis/calc.py", 0.75))
-    with_hash = {**raw, "derivation": {**raw["derivation"], "bundle_sha256": "f" * 64}}
-    assert filing.claim_id_of(raw) == filing.claim_id_of(with_hash)
+    one = {**raw, "derivation": {**raw["derivation"], "bundle_sha256": "e" * 64}}
+    two = {**raw, "derivation": {**raw["derivation"], "bundle_sha256": "f" * 64}}
+    assert filing.claim_id_of(one) != filing.claim_id_of(two)
+    assert filing.claim_id_of(one) == filing.claim_id_of(dict(one))
 
 
 def test_a_claim_filed_without_a_stored_bundle_fails_loudly(tmp_path: Path) -> None:

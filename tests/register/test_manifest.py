@@ -89,10 +89,11 @@ def test_seal_writes_the_canonical_manifest_and_check_matches(run: Path) -> None
     assert data == json.dumps(m, sort_keys=True, separators=(",", ":"),
                               ensure_ascii=False).encode()
     assert not data.endswith(b"\n")
-    assert m["format"] == "stemma-release-manifest/1"
+    assert m["format"] == "stemma-release-manifest/2"
     assert (m["run_id"], m["version"]) == (RUN_ID, 1)
     assert m["released_at"].endswith("Z")
-    assert m["excluded"] == list(manifest.EXCLUDED)
+    assert m["excluded"] == [*manifest.EXCLUDED, ".stemma/", ".stemma-tmp/"]
+    assert m["growing"] == ["register/calls/"]
     paths = [f["path"] for f in m["files"]]
     assert paths == sorted(paths)
     # Excluded operational and post-release files are not listed; everything else is.
@@ -100,7 +101,7 @@ def test_seal_writes_the_canonical_manifest_and_check_matches(run: Path) -> None
         "run.json", "CLAUDE.md", "task/task.json", "frame.md", "tree.json",
         "branches/b1/order.md", "branches/b1/record.md", "branches/b1/verdicts/1.json",
         "store/bytes/" + "a" * 64, "store/receipts/r1.json", "register/log.jsonl",
-        "register/drafts/answer.v1.md", "deliverable/answer.md"}
+        "register/drafts/answer.v1.md", "register/calls/tu1.json", "deliverable/answer.md"}
     body = (run / "branches/b1/record.md").read_bytes()
     entry = {"path": "branches/b1/record.md", "size": len(body), "sha256": _sha(body)}
     assert entry in m["files"]
@@ -108,7 +109,11 @@ def test_seal_writes_the_canonical_manifest_and_check_matches(run: Path) -> None
     assert m["log"] == {"path": "register/log.jsonl", "bytes": len(log), "sha256": _sha(log),
                         "transactions": 2}
     assert rec == {"manifest": "release/manifest.json", "manifest_sha256": _sha(data),
-                   "files": 13, "log": m["log"]}
+                   "files": 14, "log": m["log"],
+                   "checks": m["checks"]}
+    checks = (run / "register/checks.jsonl").read_bytes()
+    assert m["checks"] == {"path": "register/checks.jsonl", "bytes": len(checks),
+                           "sha256": _sha(checks), "records": 1}
     assert manifest.check(run) == []
     assert manifest.check(run, rec["manifest_sha256"]) == []
 
@@ -178,7 +183,7 @@ def test_register_log_append_truncation_and_removal_are_named(run: Path) -> None
     with log.open("ab") as f:
         f.write(b'{"tx": 4')
     out = manifest.check(run)
-    assert len(out) == 1 and "bytes that are not whole records" in out[0]
+    assert len(out) == 1 and "not whole records" in out[0]
     log.write_bytes(_tx(1))
     assert manifest.check(run) == [
         (f"register log: register/log.jsonl is shorter than when sealed ({len(_tx(1))} bytes "
@@ -210,25 +215,83 @@ def test_post_release_changes_do_not_fail(run: Path) -> None:
     (run / "store/index.sqlite").write_bytes(b"derived index v2")
     (run / "store/index.sqlite-shm").write_bytes(b"shm")
     (run / "register/index.sqlite").write_bytes(b"rebuilt")
-    (run / "register/tmp").mkdir(exist_ok=True)
-    (run / "register/tmp/x.tmp").write_bytes(b"in flight")
     (run / ".stemma-tmp/s2").mkdir()
     (run / ".stemma-tmp/s2/out.txt").write_bytes(b"command output")
     (run / "events.jsonl.lock").write_bytes(b"")
-    (run / "branches/b1/.DS_Store").write_bytes(b"finder")
     (run / "events.jsonl.torn").write_bytes(b"partial")
     (run / ".stemma/link").symlink_to("/etc")  # inside an excluded folder: not looked at
     assert manifest.check(run) == []
 
 
-def test_exclusion_globs() -> None:
+def test_exclusions_are_exact_names() -> None:
     ex = manifest.excluded
-    assert ex(".stemma") and ex(".stemma/sessions/a.jsonl") and ex("register/calls/x.json")
-    assert ex("a/b/c.lock") and ex("x.lock") and ex("store/index.sqlite-wal")
-    assert ex("release") and ex("release/manifest.json")
-    assert not ex("branches/b1/events.jsonl")  # top-level names are anchored
-    assert not ex("store/index.sqlite.bak/x") and not ex("register/callsx/y")
+    assert ex(".stemma") and ex(".stemma/sessions/a.jsonl") and ex(".stemma-tmp/s1/x")
+    assert ex("events.jsonl.lock") and ex("store/index.sqlite-wal") and ex(manifest.MANIFEST)
+    assert not ex("branches/b1/events.jsonl") and not ex("a/b/c.lock")
+    assert not ex("register/calls/x.json") and not ex("release/extra.md")
     assert not ex("deliverable/answer.md") and not ex(".stemmax/a")
+
+
+@pytest.mark.parametrize("rel", ["analysis/proof.tmp/result.py",
+                                 "branches/b1/data.lock/source.txt",
+                                 "branches/b1/events.jsonl", "notes.lock",
+                                 "branches/b1/.DS_Store", "register/tmp/x.tmp"])
+def test_added_files_under_operational_looking_names_fail(run: Path, rel: str) -> None:
+    manifest.seal(run, 1)
+    (run / rel).parent.mkdir(parents=True, exist_ok=True)
+    (run / rel).write_text("research added after the seal")
+    assert manifest.check(run) == [f"added: {rel} (not in the seal)"]
+
+
+def test_release_holds_only_the_manifests(run: Path) -> None:
+    rec = manifest.seal(run, 1)
+    (run / "release/extra.md").write_text("added after the seal")
+    (run / "release/sub").mkdir()
+    (run / "release/sub/manifest.json").write_text("{}")
+    assert sorted(manifest.check(run, rec["manifest_sha256"])) == [
+        "added: release/extra.md (release/ holds only the manifests)",
+        "added: release/sub/manifest.json (release/ holds only the manifests)"]
+    with pytest.raises(UnsealableEntry, match="release/extra.md is in release/"):
+        manifest.seal(run, 2)
+    assert manifest.check(run, rec["manifest_sha256"])  # the refused seal moved nothing
+    assert not (run / "release/manifest.1.json").exists()
+
+
+def test_check_records_are_a_sealed_prefix(run: Path) -> None:
+    rec = manifest.seal(run, 1)
+    log = run / "register/checks.jsonl"
+    sealed = log.read_bytes()
+    assert "register/checks.jsonl" not in {f["path"] for f in _manifest(run)["files"]}
+    later = b'{"kind": "request", "role": "retrospective-writer"}\n'
+    log.write_bytes(sealed + later)  # the retrospective writer's request, after release
+    assert manifest.check(run, rec["manifest_sha256"]) == []
+    assert manifest.after_seal(run) == [
+        ('register/checks.jsonl: after the seal: {"kind": "request", "role": '
+        '"retrospective-writer"}')]
+    log.write_bytes(sealed.replace(b"request", b"revoked") + later)  # a line edited
+    assert manifest.check(run) == [
+        (f"check records: the {len(sealed)} bytes of register/checks.jsonl sealed at "
+        f"release changed")]
+    log.write_bytes(b'{"kind": "verified", "session_id": "s-x"}\n')  # a line replaced
+    assert len(manifest.check(run)) == 1
+    log.write_bytes(sealed + b'{"kind": "ve')  # a torn append
+    assert "not whole records" in manifest.check(run)[0]
+    log.unlink()
+    assert manifest.check(run) == [
+        f"check records: register/checks.jsonl is missing (sealed at {len(sealed)} bytes)"]
+
+
+def test_identity_stamps_may_be_added_but_not_changed(run: Path) -> None:
+    manifest.seal(run, 1)
+    (run / "register/calls/tu2.json").write_text('{"role": "retrospective-writer"}')
+    assert manifest.check(run) == []
+    (run / "register/calls/deep").mkdir()
+    (run / "register/calls/deep/x.json").write_text("{}")
+    _flip(run / "register/calls/tu1.json")
+    assert sorted(manifest.check(run)) == [
+        "added: register/calls/deep/x.json (not in the seal)",
+        (f"changed: register/calls/tu1.json ({len(b'{"role": "lead"}' + bytes([10]))} bytes "
+        f"sealed, {len(b'{"role": "lead"}' + bytes([10]))} now; contents differ)")]
 
 
 def test_pinned_digest(run: Path) -> None:
@@ -288,7 +351,7 @@ def test_seal_refuses_a_symlinked_release_folder(run: Path, tmp_path: Path) -> N
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     (run / "release").symlink_to(elsewhere)
-    with pytest.raises(ManifestError, match="cannot write release/manifest.json"):
+    with pytest.raises(UnsealableEntry, match="release is a symlink to"):
         manifest.seal(run, 1)
     assert list(elsewhere.iterdir()) == []
 

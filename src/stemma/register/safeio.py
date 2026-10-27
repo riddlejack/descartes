@@ -43,12 +43,20 @@ def _dir_fd(run_dir: Path, parts: list[str], create: bool) -> Iterator[int]:
     try:
         for name in parts:
             try:
-                nxt = os.open(name, _DIR_FLAGS, dir_fd=fd)
+                try:
+                    nxt = os.open(name, _DIR_FLAGS, dir_fd=fd)
+                except FileNotFoundError:
+                    if not create:
+                        raise
+                    try:
+                        os.mkdir(name, 0o755, dir_fd=fd)
+                    except FileExistsError:
+                        pass  # another writer made it first: open what is there, below
+                    # Whoever made it, it is opened without following a link: a link or a
+                    # file swapped in at the name is ELOOP / ENOTDIR, refused below.
+                    nxt = os.open(name, _DIR_FLAGS, dir_fd=fd)
             except FileNotFoundError:
-                if not create:
-                    raise
-                os.mkdir(name, 0o755, dir_fd=fd)
-                nxt = os.open(name, _DIR_FLAGS, dir_fd=fd)
+                raise
             except OSError as exc:  # ELOOP / ENOTDIR: a symlink or a file in the way
                 raise UnsafePath(f"{'/'.join(parts)}: {name} is not a plain folder") from exc
             os.close(fd)
