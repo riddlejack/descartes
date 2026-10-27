@@ -56,6 +56,24 @@ WebFetch.
 Stated deviation from a plain user: the prompt asks the bare arm to cite a source for
 every figure (a plain user may not ask); without it the citation counts would measure
 nothing.
+
+**Run 4** (`--task`): the task is read from the same `task.json` the Stemma arm is
+given, through the driver's own loader, so both arms get the same question, onboarding
+answers, information cutoff, options and criteria. `--max-s` is the real session's
+wall-time limit (run 4: 9000 s, the Stemma lead's limit); like the Stemma lead, the
+session is not told it, and a session stopped by it gives no scorable answer.
+`--canary-only` starts everything and runs the scope canary, then stops: the task is
+never sent to a model.
+
+**For the leakage audit** (`python -I -m stemma.audit.leakage`), the folder has a run
+folder's layout: `run.json` (run id, as_of, and the harness folder holding the
+transcripts), `events.jsonl` (a `session_launched` and a `session_ended` record for each
+session, with the session id the launcher chose), each session's stream at
+`.stemma/sessions/<name>.stream.jsonl`, the harness's saved tool output under
+`.stemma-tmp/`, and a copy of each session's transcript (and any subagents') under
+`transcripts/`, in case the harness folder is cleaned later. A transcript that cannot be
+found makes the real session's answer ineligible, since its audit could not be
+complete.
 """
 
 from __future__ import annotations
@@ -64,6 +82,7 @@ import argparse
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -85,7 +104,14 @@ BROKER: Final = "stemma"  # the MCP server's name in the as_of arm's configurati
 # date to the broker and the guard; the rest is the broker's store, the guard's log and
 # the launch files. Invariant: what the date and the record rest on.
 PROTECTED: Final = ("run.json", "store", "events.jsonl", "events.jsonl.lock", ".mcp.json",
-                    ".settings.json")
+                    ".settings.json", ".stemma", "transcripts")
+# Where the record the leakage audit reads is kept (invariant: a Stemma run folder's
+# layout, `stemma.driver.config.SESSIONS_DIR` and `stemma.driver.settings.SESSION_TMP`).
+SESSIONS: Final = ".stemma/sessions"
+SESSION_TMP: Final = ".stemma-tmp"
+TRANSCRIPTS: Final = "transcripts"
+CANARY_NAME: Final = "scope-canary"
+SESSION_NAME: Final = "bare"
 # Resource limits: seconds between checks of a session's deadlines, and seconds a
 # stopped or ending session is given to exit before it is killed.
 POLL_S: Final = 1.0
@@ -127,7 +153,7 @@ The question, exactly as asked:
 Scope: answer only this question. Research nothing outside it; say briefly, at the end,
 what you did not research that a reader might want.
 
-Use only information published on or before {as_of}; treat {as_of} as today.
+{cutoff}
 
 Write your answer as a markdown memo. Cite the source of every figure you state, with a
 link to the page it comes from.
@@ -156,16 +182,41 @@ def task(question_file: Path | None = None) -> dict[str, Any]:
     return t
 
 
+def task_from_file(path: Path) -> dict[str, Any]:
+    """The task the Stemma arm is given, read by the driver's own loader."""
+    from stemma.driver.errors import TaskInvalid
+    from stemma.driver.task import load_task
+
+    try:
+        t = load_task(path)
+    except TaskInvalid as exc:
+        raise BareError(f"{path}: {exc}") from exc
+    if t.attachments:
+        raise BareError(f"{path}: attachments are not given to the bare arm; refusing "
+                        "rather than giving it less than the Stemma arm")
+    return {"question": t.question, "intake": t.intake, "as_of": t.as_of,
+            "options": list(t.options) if t.options is not None else None,
+            "criteria": list(t.criteria), "scope": t.scope}
+
+
 def prompt_for(t: dict[str, Any]) -> str:
     intake = t.get("intake") or {}
     who = str(intake.get("Who asked for it, and who will use it?") or "the person who asked")
     options = t.get("options") or []
     opts = ("The options they named, to compare:\n"
             + "".join(f"- {o}\n" for o in options) + "\n") if options else ""
+    criteria = t.get("criteria") or []
+    if criteria:
+        opts += ("What done means:\n"
+                 + "".join(f"- C{i}: {c}\n" for i, c in enumerate(criteria, 1)) + "\n")
     lines = "".join(f"- {k} {v}\n" for k, v in intake.items())
+    as_of = t.get("as_of")
+    cutoff = (f"Use only information published before {as_of} 00:00 UTC; treat that "
+              "moment as now." if as_of else
+              "Use only information published on or before {d}; treat {d} as today.".format(
+                  d=datetime.now(UTC).date().isoformat()))
     return PROMPT.format(who=who, question=t["question"], options=opts,
-                         intake=lines.rstrip("\n") or "- nothing else",
-                         as_of=t.get("as_of") or datetime.now(UTC).date().isoformat())
+                         intake=lines.rstrip("\n") or "- nothing else", cutoff=cutoff)
 
 
 def tools_for(t: dict[str, Any]) -> tuple[str, ...]:
@@ -278,35 +329,47 @@ def _stop(proc: Any) -> int | None:
     return None
 
 
-def _session(folder: Path, prompt: str, stream_name: str, binary: Path, config: Path,
+def _session(folder: Path, prompt: str, name: str, binary: Path, config: Path,
              version: str, settings: dict[str, Any], popen: Any,
              max_s: float, tools: tuple[str, ...] = TOOLS,
              mcp_config: Path | None = None) -> tuple[dict[str, Any], dict[str, Any] | None, str]:
     """One headless session in `folder`: (outcome, result message, the whole stream).
     The init message's canary is checked first; a failed canary stops the session. A
     reader thread hands lines over, so the start-up deadline (INIT_TIMEOUT_S) and the
-    session deadline (`max_s`) stop a silent or stuck child too."""
+    session deadline (`max_s`) stop a silent or stuck child too. Its launch and end go
+    to `events.jsonl`, its stream to `.stemma/sessions/<name>.stream.jsonl`, and a copy
+    of its transcript to `transcripts/` (see the module's note)."""
     import queue
     import threading
+    import uuid
 
+    from stemma.driver import events
     from stemma.driver.clean import bare_expectation, check_canary, clean_launch
 
+    sid = str(uuid.uuid4())
+    tmp = folder / SESSION_TMP / sid
+    tmp.mkdir(parents=True, exist_ok=True)
     env_extra = {"CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS": "1",
-                 "CLAUDE_CODE_TMPDIR": str(folder / ".tmp")}
+                 "CLAUDE_CODE_TMPDIR": str(tmp)}
     if mcp_config is not None:
         env_extra["STEMMA_RUN_DIR"] = str(folder)  # the guard's: whose run.json to read
     cl = clean_launch(binary, config, prompt, cwd=folder, model=MODEL, effort=EFFORT,
                       tools=list(tools), settings_path=folder / ".settings.json",
                       settings_extra=settings, env_extra=env_extra,
                       strict_mcp_config=True, disable_slash_commands=True,
-                      mcp_config=mcp_config)
-    (folder / ".tmp").mkdir(exist_ok=True)
+                      mcp_config=mcp_config, session_id=sid)
+    stream_path = folder / SESSIONS / f"{name}.stream.jsonl"
+    stream_path.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
-    outcome: dict[str, Any] = {"canary": None, "exit_code": None}
+    outcome: dict[str, Any] = {"session": name, "session_id": sid, "canary": None,
+                               "exit_code": None}
     result: dict[str, Any] | None = None
+    init: dict[str, Any] | None = None
     seen: list[str] = []
     lines: queue.Queue[str | None] = queue.Queue()
-    with open(folder / stream_name, "w", encoding="utf-8") as stream:
+    events.emit(folder, "session_launched", session=name, role=SESSION_NAME,
+                session_id=sid, model=MODEL, effort=EFFORT, launcher="bare")
+    with open(stream_path, "w", encoding="utf-8") as stream:
         proc = popen(cl.argv, env=cl.env, cwd=folder, stdin=subprocess.DEVNULL,
                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
 
@@ -345,11 +408,13 @@ def _session(folder: Path, prompt: str, stream_name: str, binary: Path, config: 
                 continue
             if msg.get("type") == "system" and msg.get("subtype") == "init" \
                     and outcome["canary"] is None:
+                init = msg
                 problems = check_canary(msg, bare_expectation(
                     cwd=folder, tools=list(tools), harness_version=version,
-                    session_id=msg.get("session_id") if isinstance(
-                        msg.get("session_id"), str) else None,
-                    mcp_server=BROKER if mcp_config is not None else None))
+                    session_id=sid, mcp_server=BROKER if mcp_config is not None else None))
+                if msg.get("session_id") != sid:
+                    problems = [*problems, (f"the session id is {msg.get('session_id')!r}, "
+                                            f"not the {sid!r} it was launched with")]
                 outcome["canary"] = problems or "passed"
                 if problems:
                     break
@@ -366,7 +431,29 @@ def _session(folder: Path, prompt: str, stream_name: str, binary: Path, config: 
             outcome["exit_code"] = _stop(proc)
             outcome.setdefault("stopped", "stopped by the launcher")
     outcome["wall_s"] = round(time.monotonic() - started, 1)
+    outcome["transcript"] = keep_transcript(folder, config, init, sid)
+    events.emit(folder, "session_ended", session=name, session_id=sid,
+                exit_code=outcome["exit_code"], stopped=outcome.get("stopped"),
+                wall_s=outcome["wall_s"], transcript=outcome["transcript"], launcher="bare")
     return outcome, result, "".join(seen)
+
+
+def keep_transcript(folder: Path, config: Path, init: dict[str, Any] | None,
+                    sid: str) -> str | None:
+    """Copy the session's transcript, and its subagents' if any, into the folder; the
+    copy's path, or None when the harness wrote none that can be found."""
+    from stemma.driver.verify import find_transcript
+
+    found = find_transcript(config, folder, init, sid)
+    if found is None:
+        return None
+    dest = folder / TRANSCRIPTS / f"{sid}.jsonl"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(found, dest)
+    subs = found.with_suffix("")
+    if subs.is_dir():
+        shutil.copytree(subs, folder / TRANSCRIPTS / sid, dirs_exist_ok=True)
+    return str(dest.relative_to(folder))
 
 
 def eligible(outcome: dict[str, Any], result: dict[str, Any] | None) -> list[str]:
@@ -505,16 +592,19 @@ def canary_finished(outcome: dict[str, Any], result: dict[str, Any] | None) -> l
 
 
 def launch(root: Path, t: dict[str, Any], popen: Any = subprocess.Popen,
-           version: str | None = None) -> Path:
+           version: str | None = None, max_s: float = SESSION_MAX_S,
+           canary_only: bool = False) -> Path:
     """The scope canary, then one bare session, in a new folder under `root`; returns
-    the folder. Either canary failing refuses the arm, and nothing it wrote is used."""
+    the folder. Either canary failing refuses the arm, and nothing it wrote is used.
+    `canary_only` stops after the scope canary: the task is never sent to a model."""
     import secrets
 
     from stemma.driver.config import DriverConfig, default_plugin_src
     from stemma.driver.launch import harness_version
+    from stemma.driver.runfolder import new_run_id
 
     binary, config = _pinned()
-    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    stamp = new_run_id()  # a run id's form, which the leakage audit knows as run-time
     folder = Path(root).expanduser() / stamp
     folder.mkdir(parents=True, exist_ok=False)
     folder = folder.resolve()
@@ -529,13 +619,17 @@ def launch(root: Path, t: dict[str, Any], popen: Any = subprocess.Popen,
     settings = settings_extra(folder, config, python, as_of, Path(sys.executable))
     mcp_config: Path | None = None
     if as_of:
-        _write(folder / "run.json", json.dumps({"run_id": f"bare-{stamp}", "as_of": as_of}))
+        _write(folder / "run.json", json.dumps({
+            "run_id": stamp, "as_of": as_of, "arm": "bare",
+            "harness": {"binary": str(binary), "version": version,
+                        "config_dir": str(config)}}))
         mcp_config = folder / ".mcp.json"
         _write(mcp_config, json.dumps(broker_config(folder, Path(sys.executable)), indent=1))
     _write(folder / "launch.json", json.dumps({
         "model": MODEL, "effort": EFFORT, "tools": list(tools), "harness": version,
         "as_of": as_of, "broker_tools": list(broker_tools()) if as_of else [],
-        "settings_extra": settings, "task": t, "started_at": stamp}, indent=1))
+        "settings_extra": settings, "task": t, "started_at": stamp, "max_s": max_s,
+        "canary_only": canary_only}, indent=1))
 
     token, control_token = secrets.token_hex(16), secrets.token_hex(16)
     marker = folder.parent / f".scope-canary-{stamp}-{secrets.token_hex(4)}.txt"
@@ -547,23 +641,35 @@ def launch(root: Path, t: dict[str, Any], popen: Any = subprocess.Popen,
         c_out, c_res, c_stream = _session(
             folder, CANARY_PROMPT.format(marker=marker, control=control, page=CANARY_PAGE,
                                          network_step=step),
-            "scope-canary.jsonl", binary, config, version, settings, popen, CANARY_MAX_S,
+            CANARY_NAME, binary, config, version, settings, popen, CANARY_MAX_S,
             tools, mcp_config)
     finally:
         marker.unlink(missing_ok=True)
         control.unlink(missing_ok=True)
     problems = (canary_finished(c_out, c_res)
                 + scope_problems(c_stream, marker, token, control, control_token, as_of))
+    if not c_out.get("transcript"):
+        problems.append(f"the canary's transcript was not found under {config}, so the "
+                        "leakage audit could not read this arm's sessions")
     _write(folder / "scope-canary.json", json.dumps({**c_out, "problems": problems},
                                                     indent=1))
     if problems:
         raise BareError("the scope canary failed, so the bare session was not started: "
                         + "; ".join(problems))
+    if canary_only:
+        _write(folder / "outcome.json", json.dumps(
+            {"canary_only": True, "scope_canary": "passed",
+             "canary_transcript": c_out.get("transcript"), "eligible": False,
+             "not_eligible_because": ["canary only: the task was not sent"]}, indent=1))
+        return folder
 
-    outcome, result, _stream = _session(folder, prompt, "stream.jsonl", binary, config,
-                                        version, settings, popen, SESSION_MAX_S, tools,
+    outcome, result, _stream = _session(folder, prompt, SESSION_NAME, binary, config,
+                                        version, settings, popen, max_s, tools,
                                         mcp_config)
     why = eligible(outcome, result)
+    if not outcome.get("transcript"):
+        why.append("its transcript was not found, so the leakage audit could not be "
+                   "complete")
     outcome["eligible"] = not why
     outcome["not_eligible_because"] = why
     if why or result is None:
@@ -584,12 +690,20 @@ def main(argv: list[str] | None = None) -> int:
                                  description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--question-file", type=Path, default=None)
+    ap.add_argument("--task", type=Path, default=None,
+                    help="the task.json the Stemma arm is given (run 4); replaces run 3's")
+    ap.add_argument("--max-s", type=float, default=SESSION_MAX_S,
+                    help="the real session's wall-time limit in seconds (run 4: 9000)")
+    ap.add_argument("--canary-only", action="store_true",
+                    help="start, run the scope canary, and stop; the task is never sent")
     ap.add_argument("--out", type=Path, default=DEFAULT_ROOT)
     ap.add_argument("--dry-run", action="store_true",
                     help="print the prompt and the launch; create nothing")
     args = ap.parse_args(argv)
     try:
-        t = task(args.question_file)
+        if args.task is not None and args.question_file is not None:
+            raise BareError("give --task or --question-file, not both")
+        t = task_from_file(args.task) if args.task is not None else task(args.question_file)
         if args.dry_run:
             print(prompt_for(t))
             folder = Path(args.out).expanduser() / "<new run folder>"
@@ -603,13 +717,16 @@ def main(argv: list[str] | None = None) -> int:
                                   Path(sys.executable), as_of, Path(sys.executable)),
                               "mcp_config": broker_config(folder, Path(sys.executable))
                               if as_of else None,
-                              "out": str(args.out)}, indent=1))
+                              "max_s": args.max_s, "out": str(args.out)}, indent=1))
             return 0
-        folder = launch(args.out, t)
+        folder = launch(args.out, t, max_s=args.max_s, canary_only=args.canary_only)
     except BareError as exc:
         print(f"bare arm: {exc}", file=sys.stderr)
         return 2
-    print(f"bare arm: answer and usage in {folder}")
+    if args.canary_only:
+        print(f"bare arm: the scope canary passed; stopped before the task, in {folder}")
+    else:
+        print(f"bare arm: answer and usage in {folder}")
     return 0
 
 

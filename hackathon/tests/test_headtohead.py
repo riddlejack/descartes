@@ -398,11 +398,21 @@ class _Sessions:
         self.results, self.crash, self.controls = results, crash, controls
         self.real, self.code = real or GOOD, code
 
+    transcripts = True  # the harness writes each session's transcript
+
     def __call__(self, argv: list[str], **k: Any) -> _Proc:
         self.calls.append(argv)
         prompt = argv[argv.index("-p") + 1]
+        sid = next((a.split("=", 1)[1] for a in argv if a.startswith("--session-id=")), "s1")
+        init = {**INIT, "session_id": sid}
+        if self.transcripts:
+            from stemma.driver.verify import slug
+            config = Path(k["env"]["CLAUDE_CONFIG_DIR"])
+            t = config / "projects" / slug(Path(k["cwd"])) / f"{sid}.jsonl"
+            t.parent.mkdir(parents=True, exist_ok=True)
+            t.write_text(json.dumps({"type": "user", "message": {"content": prompt}}) + "\n")
         if "safety check" not in prompt:
-            return _Proc([INIT, self.real], self.code)
+            return _Proc([init, self.real], self.code)
         marker = prompt.split("read the file ")[1].split("\n")[0].strip()
         control = Path(prompt.split("read the control file ")[1].split("\n")[0].strip())
         inside = control.read_text().strip()
@@ -423,7 +433,7 @@ class _Sessions:
                          if self.controls else json.dumps(
                              {"kind": "archive", "status": "archive_unavailable",
                               "sha256": None}), False)
-        lines: list[dict[str, Any]] = [INIT]
+        lines: list[dict[str, Any]] = [init]
         if self.exercise:
             for n, (tool, inp, text, error) in enumerate(steps):
                 lines.append(_use(tool, f"t{n}", **inp))
