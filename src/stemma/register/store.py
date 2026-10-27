@@ -259,6 +259,81 @@ class Register:
         if state.request.round != max(r.request.round for r in rounds):
             raise Refused(f"Refused: this session was started for an earlier round of {prompt}.")
 
+    def _checker_may_judge(self, caller: Caller, cid: str) -> None:
+        """The caller is the main thread of the claim checker the driver launched either
+        for `claim:<cid>` (latest round) or for `doc:<receipt_id>` with `cid` in that
+        round's list (D7). Anything else is refused."""
+        if caller.agent_id:
+            raise Refused(f"Refused: this session was not started for claim:{cid}.")
+        state = checks_api.state_for_session(self.run_dir, caller.session_id)
+        if state is None or state.request.role != "claim-checker":
+            raise Refused(f"Refused: this session was not started for claim:{cid}.")
+        prompt = state.request.prompt
+        if prompt.startswith("doc:"):
+            listed = self._doc_lists().get((prompt[4:], state.request.round), [])
+            if cid not in listed:
+                raise Refused(f"Refused: this session was not started for claim:{cid}.")
+            return
+        self._session_prompt_is(caller, "claim-checker", f"claim:{cid}")
+
+    def _doc_lists(self) -> dict[tuple[str, int], list[str]]:
+        """The claims each document check lists, by (receipt id, round)."""
+        return {(str(r["receipt_id"]), int(r["round"])): list(r["claims"])
+                for r in self._run_facts("doc_check_listed")}
+
+    def request_claim_checks(self, claim_ids: list[str], event: str,
+                             version: int | None = None) -> list[str]:
+        """Ask for the checks of `claim_ids` (D7): one claim checker per source document
+        (the receipt of each claim's first support item), prompt `doc:<receipt_id>`, its
+        list written to `checks/doc-<receipt_id>.json`; a claim with no source document
+        gets `claim:<claim_id>`. Skipped: superseded claims, claims with a verdict, and
+        claims a check that has not ended already lists. Call under the lock. Returns the
+        request ids."""
+        states = checks_api.states(self.run_dir)
+        busy: set[str] = set()
+        for (rid, rnd), ids in self._doc_lists().items():
+            for st in states.values():
+                if (st.request.prompt == f"doc:{rid}" and st.request.round == rnd
+                        and st.status != "ended"):
+                    busy.update(ids)
+        for st in states.values():
+            if st.request.prompt.startswith("claim:") and st.status != "ended":
+                busy.add(st.request.prompt[6:])
+        by_doc: dict[str, list[str]] = {}
+        alone: list[str] = []
+        for cid in dict.fromkeys(claim_ids):
+            rec = self._claim_record(cid)
+            if rec["superseded_by"] or rec["verdict"] is not None or cid in busy:
+                continue
+            support = rec.get("support") or []
+            doc = support[0].get("receipt_id") if support else None
+            if isinstance(doc, str) and _SAFE_ID.fullmatch(doc):
+                by_doc.setdefault(doc, []).append(cid)
+            else:
+                alone.append(cid)
+        out: list[str] = []
+        source = {"kind": "register", "at": now(), "by": "stemma:register"}
+        for rid, ids in sorted(by_doc.items()):
+            prompt = f"doc:{rid}"
+            rnd = len(checks_api.for_prompt(self.run_dir, "claim-checker", prompt)) + 1
+            listing = {"receipt_id": rid, "round": rnd, "draft_version": version,
+                       "claims": sorted(ids),
+                       "statements": {c: self._claim_record(c)["statement"] for c in ids}}
+            self._write(f"checks/doc-{rid}.json", json.dumps(listing, indent=2))
+            self._ensure_entity(RUN_ENTITY, "run", "run", source)
+            self.wm.assertFact({"about": RUN_ENTITY, "predicate": "doc_check_listed",
+                                "value": {"receipt_id": rid, "round": rnd,
+                                          "claims": sorted(ids), "version": version},
+                                "source": source})
+            out.append(checks_api.request_check(self.run_dir, roles.CLAIM_CHECKER, prompt,
+                                                event, round_no=rnd).request_id)
+        for cid in alone:
+            prompt = f"claim:{cid}"
+            rnd = len(checks_api.for_prompt(self.run_dir, "claim-checker", prompt)) + 1
+            out.append(checks_api.request_check(self.run_dir, roles.CLAIM_CHECKER, prompt,
+                                                event, round_no=rnd).request_id)
+        return out
+
     def _revoked(self) -> frozenset[str]:
         return checks_api.revoked_sessions(self.run_dir)
 
@@ -410,19 +485,17 @@ class Register:
         with jsonl.exclusive(self._lock):
             self.wm.refresh()
             cid, existed = self._store_claim(result, caller, None)
-            req = checks_api.request_check(self.run_dir, roles.CLAIM_CHECKER, f"claim:{cid}",
-                                           "file_claim")
             self.rebuild_index()
+        # No check starts on filing (D7): a claim is checked once a submitted draft cites it.
         return {"claim_id": cid, "tag": f"[[c:{cid[:12]}]]", "already_filed": existed,
-                "checks": result.checks, "warnings": result.warnings,
-                "check_requested": req.request_id}
+                "checks": result.checks, "warnings": result.warnings}
 
     def record_claim_verdict(self, caller: Caller, claim_id: str, verdict: str,
                              evidence: str, corrected_claim: dict[str, Any] | None = None
                              ) -> dict[str, Any]:
         self._require(caller, frozenset({roles.CLAIM_CHECKER}), "record claim verdicts")
         cid = self.resolve_claim_id(claim_id)
-        self._session_prompt_is(caller, "claim-checker", f"claim:{cid}")  # early, cheap refusal
+        self._checker_may_judge(caller, cid)  # early, cheap refusal
         if verdict not in VERDICTS:
             raise Refused(f"Refused: verdict must be one of {', '.join(VERDICTS)}.")
         if verdict == "holds" and self._correction_refused(caller.session_id, cid):
@@ -462,7 +535,7 @@ class Register:
                                           self._rerun, self._inputs())
         with jsonl.exclusive(self._lock):
             self.wm.refresh()
-            self._session_prompt_is(caller, "claim-checker", f"claim:{cid}")  # binding, in lock
+            self._checker_may_judge(caller, cid)  # binding, in lock
             if self._claim_record(cid)["superseded_by"] is not None:
                 raise Refused("Refused: the claim is already superseded.")
             source = self._src(caller, kind="claim-checker")
@@ -1181,16 +1254,66 @@ class Register:
                               f"max_review_rounds in run.json, a resource limit). finish_run "
                               f"releases a reviewed version, listing the last round's "
                               f"criticisms.")
+            previous = self._previous_round(version, max(done)) if done else None
             try:
                 safeio.write_bytes(self.run_dir, frozen_draft(version), data)
             except safeio.UnsafePath as exc:
                 raise Refused("Refused: the frozen draft cannot be written safely.") from exc
+            if previous is not None:
+                self._write(previous_round_file(version), previous)
+            cited: list[str] = []
+            for short in dict.fromkeys(tags.claim_tags(data.decode("utf-8", "replace"))):
+                try:
+                    cited.append(self.resolve_claim_id(short))
+                except Refused:
+                    continue  # the gate names a tag that names no claim
+            # Before the submission is recorded: a refusal here leaves nothing submitted.
+            claim_reqs = self.request_claim_checks(cited, "submit_draft", version)
             self._run_fact(caller, "draft_submitted",
                            {"version": version, "sha256": sha256_bytes(data)})
             reqs = [checks_api.request_check(self.run_dir, role, f"draft:{version}",
                                              "submit_draft").request_id
                     for role in roles.FINAL_REVIEWERS]
-        return {"version": version, "checks_requested": reqs}
+        return {"version": version, "checks_requested": reqs,
+                "claim_checks_requested": claim_reqs}
+
+    def _previous_round(self, version: int, last: int) -> str:
+        """What the final reviewers of `version` are shown (D8): the points the reviews of
+        the last submitted version raised, with their ids, and the lead's response,
+        `draft/response.v<version>.md`, which must name each material point's id."""
+        have = self._recorded_reviews(last)
+        points = [pt for role in roles.FINAL_REVIEWERS
+                  for pt in have.get(role, {}).get("points", [])]
+        try:
+            response = safeio.read_text(self.run_dir, f"draft/response.v{version}.md")
+        except FileNotFoundError:
+            response = None
+        except (OSError, UnicodeDecodeError, safeio.UnsafePath) as exc:
+            raise Refused(f"Refused: draft/response.v{version}.md is not a plain text "
+                          f"file.") from exc
+        material = [pt for pt in points if pt["material"]]
+        if material and response is None:
+            raise Refused(f"Refused: version {last}'s reviews raised material points; "
+                          f"draft/response.v{version}.md answers them before version "
+                          f"{version} is submitted.")
+        for pt in material:
+            if pt.get("id") and pt["id"] not in (response or ""):
+                raise Refused(f"Refused: draft/response.v{version}.md does not name point "
+                              f"{pt['id']}.")
+        lines = [f"# The previous round: the reviews of version {last}", ""]
+        missing = [roles.short(r) for r in roles.FINAL_REVIEWERS if r not in have]
+        if missing:
+            lines += [f"Not recorded before this submission: {', '.join(missing)}.", ""]
+        lines += ["## Points raised", ""]
+        for pt in points:
+            where = _concerns(pt)
+            lines.append(f"- {pt.get('id', '')} ({'material' if pt['material'] else 'minor'};"
+                         f" {where}): {pt['point']}")
+        if not points:
+            lines.append("- none")
+        lines += ["", "## The lead's response", "",
+                  (response or "(none written)").strip(), ""]
+        return "\n".join(lines)
 
     # ------------------------------------------- frames and reviews (tool-written)
     def _recorded_frames(self, kind: str) -> list[dict[str, Any]]:
@@ -1556,12 +1679,16 @@ class Register:
             landed: dict[str, Any] = {}
             waiting: list[dict[str, Any]] = []
             all_states = list(checks_api.states(self.run_dir).values())
+            lists = self._doc_lists()
             for t in targets:
                 got = self._landed(t)
                 if got is not None:
                     landed[t] = got
                     continue
-                mine = [s for s in all_states if s.request.prompt == t]
+                mine = [s for s in all_states if s.request.prompt == t
+                        or (t.startswith("claim:") and s.request.prompt.startswith("doc:")
+                            and t[6:] in lists.get((s.request.prompt[4:], s.request.round),
+                                                   []))]
                 if not mine:
                     waiting.append({"id": t, "status": "not_requested"})
                 for s in mine:
@@ -1602,6 +1729,12 @@ class Register:
 def frozen_record(branch_id: str, round_no: int) -> str:
     """The record snapshot a branch reviewer is given for a round (tool-only)."""
     return f"register/branches/{branch_id}/record.r{round_no}.md"
+
+
+def previous_round_file(version: int) -> str:
+    """Where submit_draft writes what the final reviewers of `version` are shown of the
+    previous round (tool-only; D8)."""
+    return f"register/drafts/previous.v{version}.md"
 
 
 def frozen_draft(version: int) -> str:

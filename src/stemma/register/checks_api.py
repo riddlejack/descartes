@@ -172,10 +172,18 @@ def mark_verified(run_dir: Path, session_id: str, model: str, effort: str) -> No
 
 
 def verified_sessions(run_dir: Path) -> frozenset[str]:
+    """Sessions whose model and effort the driver verified since their latest launch. A
+    session launched again (a branch reviewer resumed for its next round, D8) counts as
+    unverified until the driver verifies that launch too."""
     records = jsonl.read_all(log_path(run_dir))
     revoked = {r["session_id"] for r in records if r["kind"] == "revoked"}
-    return frozenset(r["session_id"] for r in records
-                     if r["kind"] == "verified" and r["session_id"] not in revoked)
+    verified: set[str] = set()
+    for r in records:
+        if r["kind"] == "verified":
+            verified.add(r["session_id"])
+        elif r["kind"] == "launched":
+            verified.discard(r["session_id"])
+    return frozenset(verified - revoked)
 
 
 def block_release(run_dir: Path, reason: str) -> None:
@@ -199,10 +207,11 @@ def state_for_session(run_dir: Path, session_id: str) -> CheckState | None:
     """The check a live (not revoked) session was launched for."""
     if session_id in revoked_sessions(run_dir):
         return None
-    for s in states(run_dir).values():
-        if s.session_id == session_id:
-            return s
-    return None
+    # A resumed session serves several rounds (D8): the one it was launched for last.
+    mine = [s for s in states(run_dir).values() if s.session_id == session_id]
+    if not mine:
+        return None
+    return max(mine, key=lambda s: (s.launched_at or "", s.request.round))
 
 
 def draft_version_for_session(run_dir: Path, session_id: str) -> str | None:

@@ -119,7 +119,8 @@ def test_deciders_eye_reads_only_task_intake_and_its_draft(tmp: Path) -> None:
     fs = s["sandbox"]["filesystem"]
     assert fs["denyRead"] == [r, "/cfg/projects"]
     assert fs["allowRead"] == [f"{r}/task", f"{r}/intake.md",
-                               f"{r}/register/drafts/answer.v2.md"]
+                               f"{r}/register/drafts/answer.v2.md",
+                               f"{r}/register/drafts/previous.v2.md"]  # v0.4, D8
     with pytest.raises(AgentFileInvalid):
         build_settings(run, "deciders-eye-reviewer", "draft:x", split_tools([]), CONFIG)
 

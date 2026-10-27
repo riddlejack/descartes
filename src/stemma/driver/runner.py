@@ -331,8 +331,9 @@ class Driver:
             return
         attempts = self.state["check_attempts"]
         n = int(attempts.get(rid, 0)) + 1
+        prior = self._resumable_reviewer(req) if n == 1 else None
         try:
-            spec = self._spec(role, req.prompt, str(uuid.uuid4()), False,
+            spec = self._spec(role, req.prompt, prior or str(uuid.uuid4()), prior is not None,
                               f"check-{rid}-{n}", rid)
         except DriverError as exc:
             events.emit(self.run_dir, "launch_failed", request_id=rid, role=role,
@@ -350,6 +351,24 @@ class Driver:
             return
         self.api.mark_launched(self.run_dir, rid, spec.session_id, spec.model, spec.effort,
                                relaunch=relaunch)
+
+    def _resumable_reviewer(self, req: CheckRequestLike) -> str | None:
+        """Reviewer memory (D8): a branch's re-review resumes the session that reviewed
+        its previous round, when that session ended, was verified and not revoked. Any
+        other check, and a relaunch after a failed resume, starts fresh."""
+        if roles.short(req.role) != "branch-reviewer" or req.round < 2:
+            return None
+        prev = [st for st in self.api.states(self.run_dir).values()
+                if st.request.role == req.role and st.request.prompt == req.prompt
+                and st.request.round == req.round - 1]
+        if not prev or prev[0].status != "ended" or not prev[0].session_id:
+            return None
+        sid = str(prev[0].session_id)
+        if sid not in checks_api.verified_sessions(self.run_dir):
+            return None
+        events.emit(self.run_dir, "reviewer_resumed", request_id=req.request_id,
+                    prompt=req.prompt, round=req.round, session_id=sid)
+        return sid
 
     def _latest_round(self, req: CheckRequestLike) -> int:
         return max((o.request.round for o in self.api.states(self.run_dir).values()

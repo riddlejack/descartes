@@ -142,7 +142,9 @@ def _draft_version(prompt: str) -> str:
 
 def _deciders_eye_reads(prompt: str) -> list[str]:
     """The only run-folder paths the decider's-eye reviewer reads (section 6)."""
-    return ["task", "intake.md", f"register/drafts/answer.v{_draft_version(prompt)}.md"]
+    v = _draft_version(prompt)
+    return ["task", "intake.md", f"register/drafts/answer.v{v}.md",
+            f"register/drafts/previous.v{v}.md"]
 
 
 def _deciders_eye_denials(run_dir: Path, prompt: str) -> list[str]:
@@ -160,7 +162,7 @@ def _deciders_eye_denials(run_dir: Path, prompt: str) -> list[str]:
     drafts = register / "drafts"
     if drafts.is_dir():
         for p in sorted(drafts.iterdir()):
-            if p.name != f"answer.v{v}.md":
+            if p.name not in (f"answer.v{v}.md", f"previous.v{v}.md"):
                 out.append(f"register/drafts/{p.name}" + ("/" if p.is_dir() else ""))
     out.append("reviews/")  # reviews are tool-written; the reviewer records through a tool
     return list(dict.fromkeys(out))

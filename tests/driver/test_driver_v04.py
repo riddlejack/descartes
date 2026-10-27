@@ -184,3 +184,51 @@ def test_cli_frame_only_flag(cfg: DriverConfig, tmp: Path, monkeypatch: pytest.M
                         staticmethod(lambda _p=None: cfg))
     assert main(["start", "--frame-only", str(write_task(tmp))]) == 8
     assert seen["run"]["stop_after"] == "frame"
+
+
+# --- D8: a branch's re-review resumes its reviewer --------------------------------------
+
+def _review_round(run: Path, rnd: int) -> Any:
+    return checks_api.request_check(run, "branch-reviewer", "branch:b1", "propose_branch_done",
+                                    round_no=rnd)
+
+
+def test_a_branch_re_review_resumes_the_previous_reviewer(cfg: DriverConfig, tmp: Path,
+                                                          fake: Fake, limits: Limits) -> None:
+    from stemma.driver.runner import Driver
+
+    run = create_run(cfg, write_task(tmp), limits=limits)
+    r1 = _review_round(run, 1)
+    checks_api.mark_launched(run, r1.request_id, "s-rev1", "claude-opus-5-5", "high")
+    checks_api.mark_ended(run, r1.request_id, 0, "completed")
+    checks_api.mark_verified(run, "s-rev1", "claude-opus-5-5", "high")
+    r2 = _review_round(run, 2)
+    d = Driver(cfg, run, checks_api, limits)
+    d._launch_check(r2, relaunch=False)
+    while d.live:
+        d.step()
+    call = [c for c in fake.calls() if c["role"] == "branch-reviewer"][-1]
+    assert "--resume=s-rev1" in call["argv"]
+    assert kinds(run, "reviewer_resumed")[0]["session_id"] == "s-rev1"
+    st = checks_api.states(run)[r2.request_id]
+    assert st.session_id == "s-rev1" and st.status == "ended"
+    assert "s-rev1" in checks_api.verified_sessions(run)  # verified again after its round
+
+
+@pytest.mark.parametrize("why", ["unverified", "revoked", "running"])
+def test_a_reviewer_that_cannot_be_trusted_is_not_resumed(cfg: DriverConfig, tmp: Path,
+                                                          fake: Fake, limits: Limits,
+                                                          why: str) -> None:
+    from stemma.driver.runner import Driver
+
+    run = create_run(cfg, write_task(tmp), limits=limits)
+    r1 = _review_round(run, 1)
+    checks_api.mark_launched(run, r1.request_id, "s-rev1", "claude-opus-5-5", "high")
+    if why != "running":
+        checks_api.mark_ended(run, r1.request_id, 0, "completed")
+    if why != "unverified":
+        checks_api.mark_verified(run, "s-rev1", "claude-opus-5-5", "high")
+    if why == "revoked":
+        checks_api.revoke(run, "s-rev1", "wrong effort")
+    d = Driver(cfg, run, checks_api, limits)
+    assert d._resumable_reviewer(_review_round(run, 2)) is None

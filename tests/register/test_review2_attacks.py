@@ -103,7 +103,7 @@ def test_revoked_checker_verdict_is_discounted_and_further_ones_refused(reg: Reg
     with pytest.raises(Refused, match="not started for"):
         reg.record_claim_verdict(chk, cid, "holds", "again")
     # The driver relaunches the check; the new session's verdict counts.
-    req = checks_api.for_prompt(reg.run_dir, "claim-checker", f"claim:{cid}")[-1].request
+    req = next(s for s in checks_api.states(reg.run_dir).values() if s.request.prompt == "doc:r1").request
     checks_api.mark_launched(reg.run_dir, req.request_id, "s-right", "claude-opus-5-5", "high",
                              relaunch=True)
     reg.record_claim_verdict(Caller("stemma:claim-checker", None, "s-right"), cid, "holds", "ok")

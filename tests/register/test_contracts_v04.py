@@ -4,6 +4,7 @@ once, and the frame-only check. Hostile cases try to get round each."""
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from pathlib import Path
@@ -23,7 +24,7 @@ from test_store import (
 
 from stemma.register import checks_api, criteria
 from stemma.register.filing import Refused
-from stemma.register.store import Register, closure
+from stemma.register.store import Caller, Register, closure
 
 C = "- C1: Says whether the target is met.\n- C2: Says which count the target uses.\n"
 
@@ -276,3 +277,166 @@ def test_frame_failures_name_what_is_missing_until_the_frame_is_done(reg: Regist
     (reg.run_dir / "framer/lead-response.md").write_text("answered")
     assert reg.frame_failures() == []
 
+
+
+# --- D7: claim checks per source document, only for cited claims --------------------
+
+def _cite(reg: Register, version: int, *cids: str) -> None:
+    (reg.run_dir / "draft").mkdir(exist_ok=True)
+    body = "".join(f"Figure {i} [[c:{c[:12]}]].\n" for i, c in enumerate(cids, start=1))
+    (reg.run_dir / f"draft/answer.v{version}.md").write_text("# Answer\n\n" + body)
+    reg.submit_draft(LEAD, version)
+
+
+def test_submit_starts_one_checker_per_cited_document(reg: Register) -> None:
+    from test_store import claim
+
+    a = reg.file_claim(WORKER, claim())["claim_id"]
+    b = reg.file_claim(WORKER, claim(statement="Revenue rose from 1.0bn.", value={
+        "number": 1.0e9, "unit": "USD", "period": "FY2024", "kind": "level",
+        "as_written": "1.0bn"}, support=[{"receipt_id": "r2", "quote": "up from 1.0bn"}]))["claim_id"]
+    unused = reg.file_claim(WORKER, claim(statement="Unused 1.2bn."))["claim_id"]
+    assumed = reg.file_claim(WORKER, {"statement": "We assume 3 more years.", "tier": "assumed",
+                                      "support": [], "branch_id": "b1", "entities": []})["claim_id"]
+    assert checks_api.pending_checks(reg.run_dir) == []
+    _cite(reg, 1, a, b, assumed)
+    prompts = sorted(r.prompt for r in checks_api.pending_checks(reg.run_dir)
+                     if r.role == "claim-checker")
+    assert prompts == sorted(["doc:r1", "doc:r2", f"claim:{assumed}"])
+    listing = json.loads((reg.run_dir / "checks/doc-r1.json").read_text())
+    assert listing["claims"] == [a] and listing["round"] == 1 and listing["draft_version"] == 1
+    assert unused not in json.dumps(listing)
+    # A document's checker judges only the claims its list names.
+    chk1 = launched(reg, "claim-checker", "doc:r1", "s-d1")
+    with pytest.raises(Refused, match="not started for"):
+        reg.record_claim_verdict(chk1, b, "holds", "x")
+    with pytest.raises(Refused, match="not started for"):
+        reg.record_claim_verdict(chk1, unused, "holds", "x")
+    reg.record_claim_verdict(chk1, a, "holds", "the quote is there")
+    # A subagent inside that session is refused, as before.
+    with pytest.raises(Refused, match="not started for"):
+        reg.record_claim_verdict(Caller("stemma:claim-checker", "a1", "s-d1"), a, "holds", "x")
+
+
+def test_a_later_draft_checks_only_what_has_no_verdict(reg: Register) -> None:
+    from test_store import claim
+
+    a = reg.file_claim(WORKER, claim())["claim_id"]
+    c = reg.file_claim(WORKER, claim(statement="Also 1.2bn in fiscal 2025."))["claim_id"]
+    _cite(reg, 1, a)
+    reg.record_claim_verdict(launched(reg, "claim-checker", "doc:r1", "s-d1"), a, "holds", "ok")
+    _cite(reg, 2, a, c)
+    listing = json.loads((reg.run_dir / "checks/doc-r1.json").read_text())
+    assert listing["claims"] == [c] and listing["round"] == 2
+    # The round-1 session cannot judge round 2's claim; round 2's can.
+    with pytest.raises(Refused, match="not started for"):
+        reg.record_claim_verdict(Caller("stemma:claim-checker", None, "s-d1"), c, "holds", "x")
+    reg.record_claim_verdict(launched(reg, "claim-checker", "doc:r1", "s-d2"), c, "holds", "ok")
+    # Nothing left unverdicted: a third draft asks for no claim check.
+    _cite(reg, 3, a, c)
+    assert not [r for r in checks_api.pending_checks(reg.run_dir) if r.role == "claim-checker"]
+
+
+def test_a_claim_listed_by_a_running_check_is_not_listed_again(reg: Register) -> None:
+    from test_store import claim
+
+    a = reg.file_claim(WORKER, claim())["claim_id"]
+    _cite(reg, 1, a)
+    launched(reg, "claim-checker", "doc:r1", "s-d1")  # running, no verdict yet
+    _cite(reg, 2, a)
+    assert len(checks_api.for_prompt(reg.run_dir, "claim-checker", "doc:r1")) == 1
+
+
+def test_a_planted_link_never_redirects_the_listing(reg: Register, tmp_path: Path) -> None:
+    from test_store import claim
+
+    a = reg.file_claim(WORKER, claim())["claim_id"]
+    (reg.run_dir / "checks").mkdir()
+    (reg.run_dir / "elsewhere.json").write_text("{}")
+    (reg.run_dir / "checks/doc-r1.json").symlink_to(reg.run_dir / "elsewhere.json")
+    _cite(reg, 1, a)  # the link is replaced, never followed
+    assert (reg.run_dir / "elsewhere.json").read_text() == "{}"
+    assert not (reg.run_dir / "checks/doc-r1.json").is_symlink()
+    # A linked checks folder is refused outright.
+    b = reg.file_claim(WORKER, claim(statement="Also 1.2bn in fiscal 2025."))["claim_id"]
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    for f in (reg.run_dir / "checks").iterdir():
+        f.unlink()
+    (reg.run_dir / "checks").rmdir()
+    (reg.run_dir / "checks").symlink_to(outside)
+    with pytest.raises(Refused, match="cannot be written safely"):
+        _cite(reg, 2, b)
+    assert list(outside.iterdir()) == []
+    assert reg.submitted_versions() == [1]  # the refused submission recorded nothing
+
+
+# --- D8: final reviewers see the previous round's points and the lead's response ----
+
+def test_a_new_round_shows_the_previous_points_and_needs_a_response(reg: Register) -> None:
+    cid = ready_run(reg)  # v1 reviewed, no points
+    reg.record_claim_verdict(checker_for(reg, cid), cid, "holds", "ok")
+    (reg.run_dir / "draft/answer.v2.md").write_text("# v2\n")
+    reg.submit_draft(LEAD, 2)
+    shown = (reg.run_dir / "register/drafts/previous.v2.md").read_text()
+    assert "- none" in shown and "(none written)" in shown
+    for i, role in enumerate(("deciders-eye-reviewer", "evidence-auditor", "mechanical-reader")):
+        pts = [mat("the count mixes ports and stations", criterion="C2", node="n1"),
+               {"point": "a typo", "material": False, "node": "n1"}] if i == 0 else []
+        reg.record_review(launched(reg, role, "draft:2", f"s-v2-{i}"), 2, "r", pts)
+    (reg.run_dir / "draft/answer.v3.md").write_text("# v3\n")
+    with pytest.raises(Refused, match="answers them before version 3"):
+        reg.submit_draft(LEAD, 3)
+    (reg.run_dir / "draft/response.v3.md").write_text("Fixed the typo only.")
+    with pytest.raises(Refused, match="does not name point v2.de.1"):
+        reg.submit_draft(LEAD, 3)
+    assert reg.submitted_versions() == [1, 2]
+    (reg.run_dir / "draft/response.v3.md").write_text("v2.de.1: now ports throughout.")
+    reg.submit_draft(LEAD, 3)
+    shown = (reg.run_dir / "register/drafts/previous.v3.md").read_text()
+    assert "- v2.de.1 (material; criterion C2, node n1): the count mixes" in shown
+    assert "- v2.de.2 (minor; node n1): a typo" in shown
+    assert "v2.de.1: now ports throughout." in shown
+
+
+def test_the_deciders_eye_reviewer_reads_its_previous_round_only(reg: Register) -> None:
+    from stemma.driver import settings as st
+    from stemma.hooks import guards
+
+    rd = reg.run_dir
+    (rd / "register/drafts").mkdir(parents=True)
+    for name in ("answer.v2.md", "previous.v2.md", "previous.v3.md", "answer.v3.md"):
+        (rd / "register/drafts" / name).write_text("x")
+    deny = st.read_denials(rd, "deciders-eye-reviewer", "draft:2")
+    assert "register/drafts/previous.v3.md" in deny
+    assert "register/drafts/previous.v2.md" not in deny
+
+    def read(rel: str) -> bool:
+        hook = {"tool_name": "Read", "tool_input": {"file_path": str(rd / rel)},
+                "agent_type": "stemma:deciders-eye-reviewer", "session_id": "s",
+                "tool_use_id": "t", "cwd": str(rd)}
+        return guards.guard_read(hook, rd, "2").allow
+
+    assert read("register/drafts/previous.v2.md") and read("register/drafts/answer.v2.md")
+    assert not read("register/drafts/previous.v3.md")
+    assert not read("register/drafts/answer.v3.md")
+
+
+def test_a_resumed_reviewer_session_answers_its_new_round_once_verified(
+        reg: Register) -> None:
+    _proposed(reg)
+    rev = reviewer_for(reg, "b1", "s-mem")
+    reg.record_branch_verdict(rev, "b1", "analyse", "x", points=[mat(node="n1")])
+    revision(reg, "b1", 1, "b1.r1.1")
+    reg.propose_branch_done(WORKER, "b1")
+    # The driver resumes the same session for round 2 (D8).
+    req = next(r for r in checks_api.pending_checks(reg.run_dir) if r.prompt == "branch:b1")
+    checks_api.mark_launched(reg.run_dir, req.request_id, "s-mem", "claude-opus-5-5", "high")
+    assert checks_api.state_for_session(reg.run_dir, "s-mem").request.round == 2
+    assert "s-mem" not in checks_api.verified_sessions(reg.run_dir)  # until verified again
+    out = reg.record_branch_verdict(rev, "b1", "answered", "fixed", resolutions=[
+        {"point_id": "b1.r1.1", "status": "resolved"}])
+    assert out["round"] == 2
+    assert reg.await_checks(["branch:b1"], 0)["landed"] == {}
+    checks_api.mark_verified(reg.run_dir, "s-mem", "claude-opus-5-5", "high")
+    assert reg.await_checks(["branch:b1"], 0)["landed"]["branch:b1"]["round"] == 2

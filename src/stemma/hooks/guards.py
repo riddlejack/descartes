@@ -182,8 +182,10 @@ def _deciders_eye_allowed(rel: PurePosixPath, draft_version: str | None) -> bool
     if paths.under(rel, "task") or rel == PurePosixPath("intake.md"):
         return True
     # The frozen copy submit_draft made: what was submitted, whatever draft/ holds now.
-    return draft_version is not None and \
-        rel == PurePosixPath(f"register/drafts/answer.v{draft_version}.md")
+    # And what it is shown of the previous round (D8), written with that freeze.
+    return draft_version is not None and rel in (
+        PurePosixPath(f"register/drafts/answer.v{draft_version}.md"),
+        PurePosixPath(f"register/drafts/previous.v{draft_version}.md"))
 
 
 def blind_read_refusal(role: str, rel: PurePosixPath, run_dir: Path,

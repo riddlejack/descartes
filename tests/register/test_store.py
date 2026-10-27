@@ -50,20 +50,34 @@ def reg(tmp_path: Path) -> Register:
     return Register(tmp_path / "run", evidence=FakeEvidence())
 
 
+def _lists(reg: Register, cid: str, prompt: str, rnd: int) -> bool:
+    if prompt == f"claim:{cid}":
+        return True
+    return prompt.startswith("doc:") and cid in reg._doc_lists().get((prompt[4:], rnd), [])
+
+
 def checker_for(reg: Register, cid: str, session: str = "s-check") -> Caller:
-    req = next(r for r in checks_api.pending_checks(reg.run_dir) if r.prompt == f"claim:{cid}")
+    """The checker the driver would launch for the check that lists `cid` (D7), asking for
+    that check first if no submitted draft has."""
+    reg.wm.refresh()
+    if not any(_lists(reg, cid, r.prompt, r.round) for r in checks_api.pending_checks(reg.run_dir)):
+        from stemma.register import jsonl as _j
+
+        with _j.exclusive(reg._lock):
+            reg.request_claim_checks([cid], "test")
+    req = next(r for r in checks_api.pending_checks(reg.run_dir)
+               if _lists(reg, cid, r.prompt, r.round))
     checks_api.mark_launched(reg.run_dir, req.request_id, session, "claude-opus-5-5", "high")
     checks_api.mark_verified(reg.run_dir, session, "claude-opus-5-5", "high")  # as the driver
     return Caller("stemma:claim-checker", None, session)
 
 
-def test_file_claim_records_author_from_caller_and_requests_check(reg: Register) -> None:
+def test_file_claim_records_author_from_caller_and_requests_no_check(reg: Register) -> None:
     out = reg.file_claim(WORKER, claim())
     rec = reg.get_claim(out["claim_id"][:12])
     assert rec["author"] == "stemma:worker"
     assert rec["verdict"] is None
-    pending = checks_api.pending_checks(reg.run_dir)
-    assert [(p.role, p.prompt) for p in pending] == [("claim-checker", f"claim:{out['claim_id']}")]
+    assert checks_api.pending_checks(reg.run_dir) == []  # D7: nothing is checked on filing
 
 
 def test_refiling_is_idempotent(reg: Register) -> None:
@@ -72,7 +86,6 @@ def test_refiling_is_idempotent(reg: Register) -> None:
     b = reg.file_claim(LEAD, claim())
     assert (a["claim_id"], b["already_filed"]) == (b["claim_id"], True)
     assert (reg.dir / "log.jsonl").read_bytes() == log  # nothing appended
-    assert len(checks_api.pending_checks(reg.run_dir)) == 1
 
 
 @pytest.mark.parametrize("who", ["stemma:claim-checker", "stemma:branch-reviewer",
@@ -345,8 +358,10 @@ def test_await_checks_never_invents(reg: Register) -> None:
     cid = reg.file_claim(WORKER, claim())["claim_id"]
     out = reg.await_checks([cid[:12]], 0)
     assert out["landed"] == {}
-    assert out["not_landed"][0]["status"] == "pending"
+    assert out["not_landed"][0]["status"] == "not_requested"  # no draft cites it yet
     checker = checker_for(reg, cid)
+    waiting = reg.await_checks([cid[:12]], 0)["not_landed"]
+    assert [(w["status"], w["role"]) for w in waiting] == [("running", "claim-checker")]
     reg.record_claim_verdict(checker, cid, "holds", "matches")
     out = reg.await_checks([cid, "frame:own"], 0)
     assert out["landed"][f"claim:{cid}"]["verdict"] == "holds"
@@ -393,8 +408,7 @@ def test_two_processes_filing_at_once(tmp_path: Path) -> None:
     expected = sorted([f"w{w}-{i}" for w in (0, 1) for i in range(n)] +
                       [f"same-{i}" for i in range(n)])
     assert branches == expected
-    requests = checks_api.states(run_dir)
-    assert len(requests) == len(expected)  # one check per claim, none twice
+    assert checks_api.states(run_dir) == {}  # D7: filing starts no check
     seqs = [e["seq"] for e in reg.wm.events()]
     assert seqs == sorted(set(seqs))
 

@@ -109,8 +109,9 @@ def file_claim(ctx: Context[Any], statement: str, tier: str, branch_id: str | No
     value: {number, unit, period, kind (level|count|ratio|share|rate|change), as_written,
     denominator (for ratio, share, rate)}. support: [{receipt_id, quote}] (exact text from
     the receipt). derivation (estimated): {script: "analysis/<file>.py", inputs: [claim
-    ids]}. Code checks exact facts and refuses with the failed check; a checker session is
-    then started. Returns the claim id and its tag."""
+    ids]}. Code checks exact facts and refuses with the failed check. No check starts on
+    filing: once a submitted draft cites the claim, the host starts a checker for its
+    source document. Returns the claim id and its tag."""
     raw = {"statement": statement, "tier": tier, "branch_id": branch_id, "value": value,
            "support": support or [], "derivation": derivation, "entities": entities or []}
     return _call(ctx, "file_claim", lambda r, c: r.file_claim(c, raw))
@@ -119,7 +120,8 @@ def file_claim(ctx: Context[Any], statement: str, tier: str, branch_id: str | No
 @server.tool()
 def record_claim_verdict(ctx: Context[Any], claim_id: str, verdict: str, evidence: str,
                          corrected_claim: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Claim checker only: holds | holds_with_correction | not_supported |
+    """Claim checker only, for a claim your check lists (checks/doc-<receipt_id>.json for
+    a doc:<receipt_id> check): holds | holds_with_correction | not_supported |
     could_not_check, with its evidence. For holds_with_correction, corrected_claim is the
     corrected claim (same fields as file_claim); it supersedes the old one."""
     return _call(ctx, "record_claim_verdict",
@@ -232,9 +234,10 @@ def request_frame_critique(ctx: Context[Any]) -> dict[str, Any]:
 
 @server.tool()
 def submit_draft(ctx: Context[Any], version: int) -> dict[str, Any]:
-    """Lead only: freeze draft/answer.v<version>.md and start the three final reviews.
-    Each submission is one review round; after max_review_rounds (run.json, a resource
-    limit) it refuses another."""
+    """Lead only: freeze draft/answer.v<version>.md and start the three final reviews,
+    and a claim checker for each source document the draft's cited claims rest on (claims
+    with a verdict are not checked again). Each submission is one review round; after
+    max_review_rounds (run.json, a resource limit) it refuses another."""
     return _call(ctx, "submit_draft", lambda r, c: r.submit_draft(c, version))
 
 

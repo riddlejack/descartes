@@ -282,11 +282,11 @@ def test_claim_checker_cannot_read_frozen_drafts(tmp_path: Path) -> None:
 # --- 10. A torn last line does not stop the run --------------------------------------
 
 def test_torn_line_in_checks_log_is_recovered(reg: Register) -> None:
-    reg.file_claim(WORKER, claim())
+    checks_api.request_check(reg.run_dir, "claim-checker", "doc:r1", "test")
     log = checks_api.log_path(reg.run_dir)
     with open(log, "ab") as f:
         f.write(b'{"kind":"launched","request_id":"ab')  # a writer died mid-append
-    reg.file_claim(WORKER, claim(statement="Another 1.2bn claim."))
+    checks_api.request_check(reg.run_dir, "claim-checker", "doc:r2", "test")
     assert len(checks_api.pending_checks(reg.run_dir)) == 2
     assert Path(str(log) + ".torn").read_bytes() == b'{"kind":"launched","request_id":"ab\n'
 
