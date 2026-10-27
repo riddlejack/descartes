@@ -48,13 +48,24 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--models", default=f"{sf.PRIMARY_MODEL},{sf.FALLBACK_MODEL}")
+    ap.add_argument("--cited", action="store_true",
+                    help="only claims a submitted draft cites (what the driver asks about)")
+    ap.add_argument("--skip", type=Path, default=None,
+                    help="an earlier --out file: its claims are not asked again")
     args = ap.parse_args(argv)
     models = tuple(m for m in args.models.split(",") if m)
     with tempfile.TemporaryDirectory() as tmp:
         run = Path(tmp) / "run"
         shutil.copytree(args.run, run, symlinks=True)
         reg = Register.read_only(run)
-        claims = claims_with_verdicts(reg)[: args.limit]
+        claims = claims_with_verdicts(reg)
+        if args.cited:
+            cited = set(reg.cited_claims())
+            claims = [c for c in claims if c["claim_id"] in cited]
+        if args.skip:
+            done = {r["claim_id"] for r in json.loads(args.skip.read_text())["results"]}
+            claims = [c for c in claims if c["claim_id"] not in done]
+        claims = claims[: args.limit]
         questions = [(c, sf.messages(c, sf.passages(run, c, reg.evidence))) for c in claims]
         unplaced = sum(1 for c, _m in questions
                        for p in sf.passages(run, c, reg.evidence) if p["placed"] != "yes")
