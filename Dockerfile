@@ -1,4 +1,4 @@
-# Stemma 2 from a fresh clone: SAMPLE_MODE by default (replays a recorded run, every line
+# Descartes from a fresh clone: SAMPLE_MODE by default (replays a recorded run, every line
 # marked [replay] with its hash; World Model's conformance suite and the data layer run
 # live). Needs no Zetaris, no Nightshift and no credentials.
 #

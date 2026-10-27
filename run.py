@@ -1,4 +1,4 @@
-"""Stemma 2: one entry point.
+"""Descartes: one entry point.
 
     python run.py                          SAMPLE_MODE=true: replay the recorded sample run
     python run.py replay [PACK]            replay a recorded run (default: the bundled sample)

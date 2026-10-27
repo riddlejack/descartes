@@ -58,9 +58,6 @@ python run.py report RUN_DIR OUT_DIR                                 # a static 
 
 Copy `.env.example` and export its variables first. Zetaris (`STEMMA_DATALAYER=zetaris`, setup in [`hackathon/zetaris/README.md`](hackathon/zetaris/README.md)) and Nightshift (`METERLESS_BASE_URL`, `METERLESS_RUNTIME_TOKEN`) are optional. Every command is listed in [`hackathon/README.md`](hackathon/README.md).
 
-> [!IMPORTANT]
-> The project was called Stemma 2 while it was built. The Python package, its paths and its environment variables keep the name `stemma`.
-
 ## How it works
 
 ```mermaid

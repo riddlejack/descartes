@@ -1,4 +1,4 @@
-# Running Stemma 2: sample mode, live runs, logs and Docker
+# Running Descartes: sample mode, live runs, logs and Docker
 
 ## Sample mode (no credentials)
 

@@ -1,6 +1,6 @@
-# Contributing to Stemma 2
+# Contributing to Descartes
 
-Stemma 2 is a research system that answers a hard business question the way a strong
+Descartes is a research system that answers a hard business question the way a strong
 consulting team would, and shows every figure's evidence. This file is for people and
 coding agents who change the code. It never loads at runtime: the product's own
 instructions live in `plugin/`, and runs happen in run folders outside this repository.
