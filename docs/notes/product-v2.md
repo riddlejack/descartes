@@ -134,3 +134,46 @@ invented run built through the real evidence service and register. They include:
   to W2's `driver/__main__.py`; until then they are `run.py` commands.
 - The viewer's lead-response lookup follows W2's planned `draft/response.v<n>.md`; it
   is untested against a real v0.4 run.
+
+## Codex review, round 1: ten findings, all fixed
+
+Each fix below has a regression test built from the review's own probe.
+
+1. **Markdown could run a script.** A code span inside a link URL closed the `href`
+   attribute. The renderer now splits the raw text into tokens and escapes each token
+   at the moment it is inserted. It uses no placeholders, and a link is made only from
+   a URL that cannot leave a quoted attribute. The page carries a strict Content
+   Security Policy: only its own script and style run, allowed by their SHA-256.
+2. **Reads now stay inside the run.** All reads go through `report/safefs.py`:
+   - paths are checked before anything is opened;
+   - no symlink is followed in any part of the path;
+   - only regular files with a single name are read, so a hard link is refused too;
+   - every read has a byte limit.
+
+   This covers scripts, stored text, receipts and fingerprint paths.
+3. to 5. **Changes verify could not see now fail, once a run is sealed.**
+   - Verify reads `release/manifest.json`, which W2's `finish_run` will write (format
+     `stemma-release-manifest/1`, proposed to W2).
+   - Every file must match it. A file added, removed or changed fails, and so does any
+     change to the sealed part of the log.
+   - `--expect <sha256>` binds the manifest to a digest kept outside the run folder.
+   - A log that does not end with a newline fails.
+   - Without a manifest the result is UNSEALED (exit 4), never PASS. Run 1 is unsealed.
+6. **"Released" now requires a valid release.** The register must have recorded a
+   finish, the deliverable's bytes must match the SHA-256 it recorded, and no release
+   block or withdrawal may stand. The page no longer claims that nothing was edited.
+7. **Malformed records no longer crash.** Every check runs under a guard, and a record
+   in the wrong shape becomes a named failure.
+8. **Every traversal has limits.** The tree and branch folders are walked iteratively,
+   with depth and cycle limits. Each file has a size limit, and so does the walk of
+   the whole run folder.
+9. **Verify writes nothing.** `report/ledger.py` folds the register's log in memory
+   from its bytes. No file is opened for writing and no lock is taken; a test runs
+   verify on a read-only copy. Stop-gap: it reaches two private attributes of the
+   register until W2 provides a public read-only constructor.
+10. **A missing review no longer counts as a pass.** A criterion shows green only when
+    all three final reviews of the shown draft exist. If any is missing, the criterion
+    is shown as not checked.
+
+The bundle builder `verify.code_bundle` is marked as a stop-gap. It is to be replaced by
+W2's public builder, so that verify and `file_claim` re-run the same code.

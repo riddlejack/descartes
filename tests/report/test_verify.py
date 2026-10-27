@@ -9,11 +9,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from report_fixture import fresh_copy
+from report_fixture import fresh_copy, release, seal
 
 from stemma.register.derivation import DerivationError
 from stemma.report import verify
-from stemma.report.runread import RunReadError
 
 RUN1 = Path(os.environ.get("STEMMA_RUN1_DIR") or Path.home() / ".private/runs/"
             "stemma2-walking-skeleton/20261026-070412-2b3c98")
@@ -37,17 +36,36 @@ def receipt(run_dir: Path, rid: str) -> dict[str, Any]:
 
 
 @needs_sandbox
-def test_a_clean_run_passes_with_plain_counts(run: tuple[Path, dict[str, str]]) -> None:
+def test_an_unsealed_clean_run_is_unsealed_never_pass(run: tuple[Path, dict[str, str]]) -> None:
     run_dir, _ids = run
     result = verify.verify(run_dir)
-    assert result.outcome == "PASS", verify.render(result)
+    assert result.outcome == "UNSEALED" and result.exit_code == 4, verify.render(result)
     counts = {s.key: (s.done, len(s.failures)) for s in result.sections}
-    assert counts == {"captures": (2, 0), "texts": (2, 0), "quotations": (2, 0),
-                      "calculations": (1, 0), "log": (3, 0), "fingerprints": (1, 0)}
+    assert counts == {"seal": (0, 0), "captures": (2, 0), "texts": (2, 0),
+                      "quotations": (2, 0), "calculations": (1, 0), "log": (3, 0),
+                      "fingerprints": (1, 0)}
     text = verify.render(result)
     assert "2 captures re-hashed against their receipts, 0 changed" in text
     assert "1 calculations re-run in the sandbox, 0 differ" in text
-    assert "Result: PASS" in text and result.exit_code == 0
+    assert "Result: UNSEALED" in text and "PASS" not in text
+
+
+@needs_sandbox
+def test_a_sealed_run_passes_and_a_pinned_digest_is_checked(
+        run: tuple[Path, dict[str, str]]) -> None:
+    run_dir, _ids = run
+    release(run_dir)
+    digest = seal(run_dir)
+    result = verify.verify(run_dir)
+    assert result.outcome == "PASS" and result.seal.state == "sealed", verify.render(result)
+    assert "against the run's own manifest (not pinned)" in verify.render(result)
+    pinned = verify.verify(run_dir, expect=digest)
+    assert pinned.outcome == "PASS" and pinned.seal.state == "pinned"
+    assert result.release_state == "released"
+    wrong = verify.verify(run_dir, expect="0" * 64)
+    assert wrong.outcome == "FAIL" and "not to the pinned" in section(wrong, "seal").failures[0]
+    assert verify.main([str(run_dir), "--expect", digest]) == 0
+    assert verify.main([str(run_dir), "--expect", "nothex"]) == 2
 
 
 @needs_sandbox
@@ -103,11 +121,192 @@ def test_a_dropped_log_line_means_the_log_does_not_fold(
     log = run_dir / "register/log.jsonl"
     lines = log.read_text().splitlines(keepends=True)
     log.write_text("".join(lines[:2] + lines[3:]))
-    with pytest.raises(RunReadError, match="does not fold"):
-        verify.verify(run_dir)
-    assert verify.main([str(run_dir)]) == 2
-    sec = verify.check_log(run_dir)
-    assert sec.failures and "does not fold" in sec.failures[0]
+    result = verify.verify(run_dir)
+    assert result.outcome == "FAIL" and result.exit_code == 1
+    assert any("does not fold" in f for _l, f in result.failures)
+    assert verify.main([str(run_dir)]) == 1
+
+
+@pytest.mark.parametrize("tail", [b"", b'{"tx": 99', b"garbage"])
+def test_an_unterminated_log_tail_fails(run: tuple[Path, dict[str, str]], tail: bytes) -> None:
+    run_dir, _ids = run
+    log = run_dir / "register/log.jsonl"
+    data = log.read_bytes()
+    log.write_bytes(data[:-1] + tail if not tail else data + tail)
+    result = verify.verify(run_dir)
+    assert result.outcome == "FAIL"
+    assert any("unterminated tail" in f for _l, f in result.failures)
+
+
+@needs_sandbox
+@pytest.mark.parametrize("change", ["drop_last", "verdict", "reorder"])
+def test_a_sealed_log_rewritten_in_any_way_fails(run: tuple[Path, dict[str, str]],
+                                                 change: str) -> None:
+    """Codex probes: dropping the last transaction, changing a value in a fact, and
+    reordering transactions with their numbers adjusted all PASSED before the seal."""
+    run_dir, _ids = run
+    seal(run_dir)
+    log = run_dir / "register/log.jsonl"
+    lines = log.read_bytes().splitlines(keepends=True)
+    if change == "drop_last":
+        lines = lines[:-1]
+    elif change == "verdict":
+        i = next(i for i, ln in enumerate(lines) if b'"draft_submitted"' in ln)
+        lines[i] = lines[i].replace(b'"version":1', b'"version":2', 1)
+    else:
+        a, b = json.loads(lines[-2]), json.loads(lines[-1])
+        a["tx"], b["tx"] = b["tx"], a["tx"]
+        for ev in a["events"] + b["events"]:
+            ev["tx"] = a["tx"] if ev in a["events"] else b["tx"]
+        lines[-2:] = [(json.dumps(b, separators=(",", ":")) + "\n").encode(),
+                      (json.dumps(a, separators=(",", ":")) + "\n").encode()]
+    log.write_bytes(b"".join(lines))
+    result = verify.verify(run_dir)
+    assert result.outcome == "FAIL", verify.render(result)
+
+
+@needs_sandbox
+def test_a_same_length_change_to_unquoted_text_is_caught_by_the_seal(
+        run: tuple[Path, dict[str, str]]) -> None:
+    run_dir, ids = run
+    rec = receipt(run_dir, ids["r1"])
+    path = run_dir / "store/text" / f"{rec['text_id']}.txt"
+    unsealed_before = verify.verify(run_dir).outcome
+    seal(run_dir)
+    os.chmod(path, 0o644)
+    path.write_text(path.read_text().replace("from 180", "from 999"))
+    result = verify.verify(run_dir)
+    assert unsealed_before == "UNSEALED"
+    assert section(result, "quotations").failures == []
+    assert [f for f in section(result, "seal").failures if "store/text/" in f]
+
+
+@needs_sandbox
+def test_a_script_swapped_for_a_constant_and_added_or_removed_files_fail(
+        run: tuple[Path, dict[str, str]]) -> None:
+    run_dir, ids = run
+    seal(run_dir)
+    (run_dir / "analysis/proj.py").write_text(
+        "from stemma.analysis import result\nresult(372)\n")
+    (run_dir / "draft/answer.v2.md").write_text("A new working draft.\n")
+    rec = receipt(run_dir, ids["r2"])
+    (run_dir / "store/receipts" / f"{ids['r2']}.json").unlink()
+    result = verify.verify(run_dir)
+    assert section(result, "calculations").failures == []  # the number still matches
+    fails = section(result, "seal").failures
+    assert "analysis/proj.py changed after the release." in fails
+    assert "draft/answer.v2.md was added after the release." in fails
+    assert f"store/receipts/{ids['r2']}.json was removed after the release." in fails
+    assert rec["receipt_id"] == ids["r2"]
+
+
+def test_a_deliverable_added_to_an_unreleased_run_is_not_released(
+        run: tuple[Path, dict[str, str]]) -> None:
+    from stemma.report import runread
+
+    run_dir, _ids = run
+    (run_dir / "deliverable").mkdir()
+    (run_dir / "deliverable/answer.md").write_text("# Anything at all\n")
+    r = runread.load(run_dir)
+    assert r.release.state == "not_released" and r.deliverable.kind == "submitted_draft"
+    assert "no release" in r.release.detail
+
+
+def test_a_released_deliverable_changed_afterwards_is_a_mismatch(
+        run: tuple[Path, dict[str, str]]) -> None:
+    from stemma.report import runread
+
+    run_dir, _ids = run
+    release(run_dir)
+    assert runread.load(run_dir).release.state == "released"
+    (run_dir / "deliverable/answer.md").write_text("# Changed\n")
+    r = runread.load(run_dir)
+    assert r.release.state == "mismatch" and r.deliverable.kind == "submitted_draft"
+
+
+def test_a_release_block_withdraws_the_release(run: tuple[Path, dict[str, str]]) -> None:
+    from stemma.register import checks_api
+    from stemma.report import runread
+
+    run_dir, _ids = run
+    release(run_dir)
+    checks_api.block_release(run_dir, "a checking session ran on the wrong model")
+    r = runread.load(run_dir)
+    assert r.release.state == "withdrawn" and "wrong model" in r.release.detail
+
+
+def test_malformed_receipts_are_named_failures_not_crashes(
+        run: tuple[Path, dict[str, str]]) -> None:
+    run_dir, ids = run
+    p = run_dir / "store/receipts" / f"{ids['r1']}.json"
+    rec = json.loads(p.read_text())
+    rec["flagged_ranges"] = [{}]
+    os.chmod(p, 0o644)
+    p.write_text(json.dumps(rec))
+    q = run_dir / "store/receipts" / f"{ids['r2']}.json"
+    os.chmod(q, 0o644)
+    q.write_text("[" * 100_000 + "]" * 100_000)
+    result = verify.verify(run_dir, rerun_fn=lambda *a, **k: (_ for _ in ()).throw(
+        DerivationError("sandbox-exec is not available")))
+    fails = [f for _l, f in result.failures]
+    assert any("flagged_ranges is not a list" in f for f in fails)
+    assert any(ids["r2"] in f and "not JSON" in f for f in fails)
+    assert result.exit_code == 1
+
+
+def test_a_fifo_or_symlinked_source_is_refused_not_read(
+        run: tuple[Path, dict[str, str]], tmp_path: Path) -> None:
+    run_dir, ids = run
+    sha = receipt(run_dir, ids["r1"])["sha256"]
+    path = run_dir / "store/bytes" / sha
+    path.unlink()
+    os.mkfifo(path)
+    rec = receipt(run_dir, ids["r2"])
+    text = run_dir / "store/text" / f"{rec['text_id']}.txt"
+    outside = tmp_path / "secret.txt"
+    outside.write_text("SECRET OUTSIDE THE RUN")
+    text.unlink()
+    text.symlink_to(outside)
+    result = verify.verify(run_dir, rerun_fn=lambda *a, **k: (_ for _ in ()).throw(
+        DerivationError("sandbox-exec is not available")))
+    caps = section(result, "captures").failures
+    assert any("not a plain file" in f for f in caps)
+    assert any("link" in f for f in section(result, "texts").failures)
+    assert "SECRET" not in json.dumps(result.as_json())
+
+
+def test_unsafe_fingerprint_paths_are_refused_before_opening(
+        run: tuple[Path, dict[str, str]], tmp_path: Path) -> None:
+    from stemma.report import runread
+
+    run_dir, _ids = run
+    r = runread.load(run_dir)
+    r.run_facts["record_frozen"] = [
+        {"branch_id": "b1", "round": 1, "snapshot": "../outside.md", "sha256": "a" * 64},
+        {"branch_id": "b1", "round": 2, "snapshot": "/etc/passwd", "sha256": "a" * 64}]
+    fails = verify.check_fingerprints(r).failures
+    assert len(fails) == 2 and all("not a path inside the run folder" in f
+                                   or "plain path" in f for f in fails)
+
+
+@needs_sandbox
+def test_verify_writes_nothing_and_works_on_a_read_only_copy(
+        run: tuple[Path, dict[str, str]]) -> None:
+    import subprocess
+
+    run_dir, _ids = run
+    seal(run_dir)
+    for lock in run_dir.rglob("*.lock"):
+        lock.unlink()
+    before = sorted(p.relative_to(run_dir).as_posix() for p in run_dir.rglob("*"))
+    subprocess.run(["chmod", "-R", "a-w", str(run_dir)], check=True)
+    try:
+        result = verify.verify(run_dir)
+    finally:
+        subprocess.run(["chmod", "-R", "u+w", str(run_dir)], check=True)
+    after = sorted(p.relative_to(run_dir).as_posix() for p in run_dir.rglob("*"))
+    assert result.outcome == "PASS", verify.render(result)
+    assert after == before
 
 
 @needs_sandbox
@@ -159,7 +358,7 @@ def test_a_symlinked_helper_is_refused_not_followed(
     helper = run_dir / "analysis/helper.py"
     helper.unlink()
     helper.symlink_to(outside)
-    with pytest.raises(DerivationError, match="not a plain file"):
+    with pytest.raises(DerivationError, match="link or not a plain file"):
         verify.code_bundle(run_dir, "analysis/proj.py")
 
 
@@ -201,7 +400,7 @@ def test_a_memo_never_hides_a_changed_script(run: tuple[Path, dict[str, str]]) -
     """The tamper demo's second pass reuses only byte-identical re-runs."""
     run_dir, ids = run
     memo: verify.Memo = {}
-    assert verify.verify(run_dir, memo=memo).outcome == "PASS" and len(memo) == 1
+    assert not verify.verify(run_dir, memo=memo).failures and len(memo) == 1
     (run_dir / "analysis/helper.py").write_text("def years_left():\n    return 5\n")
     fails = section(verify.verify(run_dir, memo=memo), "calculations").failures
     assert len(fails) == 1 and ids["proj"][:12] in fails[0] and len(memo) == 2

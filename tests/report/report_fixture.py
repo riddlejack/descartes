@@ -106,3 +106,55 @@ def fresh_copy(base: Path, dest: Path) -> dict[str, str]:
     src, ids = _CACHE["run"]
     shutil.copytree(src, dest, symlinks=True)
     return ids
+
+
+# The operational files a release manifest leaves out (as proposed to W2 for finish_run).
+EXCLUDED = ["events.jsonl", "status.json", "status.html", "usage.jsonl", "usage.md",
+            ".stemma/**", "**/*.lock", "store/index.sqlite*", "register/index.sqlite*",
+            "register/calls/**", "release/**"]
+
+
+def seal(run_dir: Path) -> str:
+    """Write release/manifest.json as finish_run will (stemma-release-manifest/1) and
+    return its SHA-256. Test-only stand-in for W2's writer."""
+    import fnmatch
+    import hashlib
+
+    def excluded(rel: str) -> bool:
+        return any(fnmatch.fnmatchcase(rel, p) or (p.startswith("**/") and
+                                                   fnmatch.fnmatchcase(rel, p[3:]))
+                   for p in EXCLUDED)
+
+    files = []
+    for p in sorted(run_dir.rglob("*")):
+        rel = p.relative_to(run_dir).as_posix()
+        if p.is_file() and not p.is_symlink() and not excluded(rel) \
+                and rel != "register/log.jsonl":
+            data = p.read_bytes()
+            files.append({"path": rel, "size": len(data),
+                          "sha256": hashlib.sha256(data).hexdigest()})
+    log = (run_dir / "register/log.jsonl").read_bytes()
+    man = {"format": "stemma-release-manifest/1", "run_id": "20300101-000000-abcdef",
+           "version": 1, "released_at": "2030-01-02T00:00:00Z", "files": files,
+           "excluded": EXCLUDED,
+           "log": {"path": "register/log.jsonl", "bytes": len(log),
+                   "sha256": hashlib.sha256(log).hexdigest(),
+                   "transactions": log.count(b"\n")}}
+    raw = json.dumps(man, sort_keys=True, separators=(",", ":")).encode()
+    (run_dir / "release").mkdir(exist_ok=True)
+    (run_dir / "release/manifest.json").write_bytes(raw)
+    return hashlib.sha256(raw).hexdigest()
+
+
+def release(run_dir: Path) -> None:
+    """Record a release of draft v1 as the register would (test-only: the gate itself
+    is the register's, tested there)."""
+    import hashlib
+
+    data = (run_dir / "register/drafts/answer.v1.md").read_bytes()
+    (run_dir / "deliverable").mkdir(exist_ok=True)
+    (run_dir / "deliverable/answer.md").write_bytes(data)
+    reg = Register(run_dir)
+    reg._run_fact(LEAD, "finished", {"at": "2030-01-02T00:00:00Z", "version": 1,
+                                     "sha256": hashlib.sha256(data).hexdigest(),
+                                     "sessions": []})

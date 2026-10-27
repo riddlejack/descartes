@@ -70,7 +70,8 @@ def test_the_criteria_are_listed_with_what_the_reviewers_recorded(
     page = site.build(run[0])
     crit = page[page.index('id="criteria"'):page.index('id="tree"')]
     assert "C1</strong> Says whether 400 benches is reached by 2030" in crit
-    assert "No final review was recorded." in crit
+    assert "Not checked: no final review of the shown draft was recorded." in crit
+    assert 'class="said ok"' not in crit
 
 
 def test_criteria_md_wins_over_the_task(run: tuple[Path, dict[str, str]]) -> None:
@@ -148,13 +149,29 @@ def test_each_criterion_shows_the_open_material_points_raised_against_it(
         {"version": 1, "role": "stemma:deciders-eye-reviewer", "sha256": "y", "points": []}]
     out = site.criteria_html(r)
     c1, c2 = out.split("<strong>C2</strong>")
-    assert "Only points the reviewers marked not material" in c1
-    assert "1 open material point in the last review round (draft v1)" in c2
+    assert "Not checked: the review of draft v1 by Mechanical reader is not recorded." in c1
+    assert 'class="said ok"' not in out
+    assert "1 open material point raised against it in the reviews of draft v1" in c2
     assert "Today&#x27;s count has no date." in c2
+    r.run_facts["review_recorded"].append(
+        {"version": 1, "role": "stemma:mechanical-reader", "sha256": "z", "points": []})
+    full = site.criteria_html(r)
+    assert "Only points the reviewers marked not material" in full.split("<strong>C2")[0]
     reviews = site.reviews_html(r)
     assert "Draft v1: 2 points, 1 material. No later draft was submitted." in reviews
-    assert "Mechanical reader: not recorded." in reviews
     assert "<code>C2</code>" in reviews
+
+
+def test_one_reviewer_with_no_points_never_makes_a_criterion_green(
+        run: tuple[Path, dict[str, str]]) -> None:
+    """Codex probe: one review with no points, two missing, used to show green."""
+    from stemma.report import runread
+
+    r = runread.load(run[0])
+    r.run_facts["review_recorded"] = [
+        {"version": 1, "role": "stemma:evidence-auditor", "sha256": "x", "points": []}]
+    out = site.criteria_html(r)
+    assert 'class="said ok"' not in out and out.count("Not checked: the reviews of draft v1") == 2
 
 
 def test_a_branch_answered_with_bounded_points_says_so_and_the_lead_response_shows(
@@ -169,3 +186,111 @@ def test_a_branch_answered_with_bounded_points_says_so_and_the_lead_response_sho
     tree = tree[tree.index('id="tree"'):tree.index('id="checked"')]
     assert '<span class="state s-bounded">Bounded</span>' in tree
     assert "Branch reviewer: answered" in tree
+
+
+XSS = '[click](https://example.org/`" onmouseover="alert(1)//`)'
+
+
+def test_the_markdown_link_attribute_payload_stays_text(
+        run: tuple[Path, dict[str, str]]) -> None:
+    """Codex probe: a code span inside a link URL used to close the href attribute."""
+    out = md.inline(XSS)
+    assert "<a " not in out and 'onmouseover="' not in out
+    assert "<code>&quot; onmouseover=&quot;alert(1)//</code>" in out
+    run_dir, _ids = run
+    draft = run_dir / "register/drafts/answer.v1.md"
+    os.chmod(draft, 0o644)
+    draft.write_text(draft.read_text() + f"\n{XSS}\n")
+    page = site.build(run_dir)
+    assert 'onmouseover="' not in page and "href=\"https://example.org/`" not in page
+
+
+def test_nul_delimited_digits_do_not_crash_the_renderer() -> None:
+    assert "1" in md.render("a \x001\x00 b `x` \x00999\x00")
+
+
+def test_the_page_carries_a_strict_csp_matching_its_own_script_and_style(
+        run: tuple[Path, dict[str, str]]) -> None:
+    import base64
+    import hashlib
+
+    page = site.build(run[0])
+    csp = re.search(r'http-equiv="Content-Security-Policy" content="([^"]+)"', page)
+    assert csp is not None
+    policy = csp.group(1)
+    assert "default-src 'none'" in policy and "base-uri 'none'" in policy
+    script = re.search(r"<script>(.*?)</script>", page, re.DOTALL)
+    style = re.search(r"<style>(.*?)</style>", page, re.DOTALL)
+    assert script and style
+
+    def h(t: str) -> str:
+        return "'sha256-" + base64.b64encode(hashlib.sha256(t.encode()).digest()).decode() + "'"
+
+    assert f"script-src {h(script.group(1))}" in policy
+    assert f"style-src {h(style.group(1))}" in policy
+    assert " style=" not in page and " on" + "click=" not in page
+
+
+@pytest.mark.parametrize("script", ["../../outside.py", "/etc/passwd", "analysis/../x.py",
+                                    "analysis/x.txt"])
+def test_a_script_path_outside_analysis_is_never_read(run: tuple[Path, dict[str, str]],
+                                                       script: str) -> None:
+    text = site._script_text(run[0], script)
+    assert text.startswith("(") and "root:" not in text
+
+
+def test_a_symlinked_script_or_stored_text_is_not_embedded(
+        run: tuple[Path, dict[str, str]], tmp_path: Path) -> None:
+    run_dir, ids = run
+    outside = tmp_path / "secret.py"
+    outside.write_text("SECRET = 'outside the run'\n")
+    target = run_dir / "analysis/proj.py"
+    target.unlink()
+    target.symlink_to(outside)
+    rec = json.loads((run_dir / "store/receipts" / f"{ids['r1']}.json").read_text())
+    text = run_dir / "store/text" / f"{rec['text_id']}.txt"
+    text.unlink()
+    text.symlink_to(outside)
+    page = site.build(run_dir)
+    assert "outside the run" not in page
+    assert "the script cannot be shown" in page
+
+
+def test_a_deep_or_cyclic_tree_renders_without_recursion(
+        run: tuple[Path, dict[str, str]]) -> None:
+    run_dir, _ids = run
+    nodes = [{"id": f"N{i}", "parent": f"N{i - 1}" if i else None, "kind": "question",
+              "status": "open", "statement": f"step {i}"} for i in range(1100)]
+    nodes += [{"id": "A", "parent": "B", "kind": "question", "status": "open",
+               "statement": "a"}, {"id": "B", "parent": "A", "kind": "question",
+                                   "status": "open", "statement": "b"}]
+    (run_dir / "tree.json").write_text(json.dumps({"nodes": nodes}))
+    page = site.build(run_dir)
+    tree = page[page.index('id="tree"'):page.index('id="checked"')]
+    assert "deeper than 64 levels are not drawn" in tree
+    assert "their parents form a cycle" in tree and "<code>A</code>" in tree
+
+
+def test_the_banner_says_released_only_for_a_valid_release(
+        run: tuple[Path, dict[str, str]]) -> None:
+    from report_fixture import release
+
+    run_dir, _ids = run
+    (run_dir / "deliverable").mkdir()
+    (run_dir / "deliverable/answer.md").write_text("# Planted answer\n")
+    page = site.build(run_dir)
+    assert "Planted answer" not in page and "<strong>Not released.</strong>" in page
+    assert "nothing was edited after the run" not in page
+    (run_dir / "deliverable/answer.md").unlink()
+    release(run_dir)
+    assert "<strong>Released</strong> (draft v1)" in site.build(run_dir)
+    (run_dir / "deliverable/answer.md").write_text("# Changed after release\n")
+    page = site.build(run_dir)
+    assert "Release record does not match." in page and "Changed after release" not in page
+
+
+def test_a_huge_file_is_refused_by_its_limit(run: tuple[Path, dict[str, str]],
+                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    run_dir, _ids = run
+    monkeypatch.setattr(site, "MAX_SCRIPT_BYTES", 10)
+    assert "more than the 10 read" in site._script_text(run_dir, "analysis/proj.py")

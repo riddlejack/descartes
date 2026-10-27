@@ -163,7 +163,9 @@ def demo(run_dir: Path, what: str = "source", keep: bool = False,
         print(line, file=out, flush=True)
 
     run_dir = Path(run_dir).resolve()
-    original = runread.read_json(run_dir / "run.json") or {}
+    original = runread.read_json(run_dir, "run.json")
+    if not isinstance(original, dict):
+        raise runread.RunReadError(f"{run_dir} has no run.json; is it a run folder?")
     work = Path(tempfile.mkdtemp(prefix="stemma-tamper-"))
     # The second pass re-runs only calculations whose code, inputs or documents differ
     # from the first pass's; byte-identical re-runs reuse the first pass's result.

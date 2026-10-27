@@ -19,6 +19,8 @@ judges nothing; the one computed status ("not released") is the register's own g
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import html
 import json
 import re
@@ -31,14 +33,19 @@ from typing import Any
 from stemma.evidence.errors import EvidenceError
 from stemma.evidence.quotes import find_quote
 from stemma.register import tags
-from stemma.report import md, runread
+from stemma.report import md, runread, safefs
+from stemma.report.errors import RunReadError
 from stemma.report.runread import FINAL_REVIEW_FILES, Run
 
 # Resource limits: characters of context shown each side of a quotation; claims included
 # as inputs of cited estimates (followed transitively); characters of a script shown.
 CONTEXT_CHARS = 280
 MAX_CLAIMS = 3000
-MAX_SCRIPT_CHARS = 60_000
+MAX_SCRIPT_BYTES = 256 * 1024
+# Resource limits: levels of the tree drawn, and of branch folders (branches/<b>/sub/...)
+# looked in.
+MAX_TREE_DEPTH = 64
+MAX_BRANCH_DEPTH = 8
 REVIEWER_NAMES = {"stemma:deciders-eye-reviewer": "Decider's-eye reviewer",
                   "stemma:evidence-auditor": "Evidence auditor",
                   "stemma:mechanical-reader": "Mechanical reader"}
@@ -146,7 +153,10 @@ def _locator(rec: dict[str, Any], start: int) -> str:
 def passage_html(run: Run, item: dict[str, Any]) -> str:
     rid = str(item.get("receipt_id"))
     quote = str(item.get("quote") or "")
-    rec = runread.receipt(run.dir, rid)
+    try:
+        rec = runread.receipt(run.dir, rid)
+    except RunReadError as exc:
+        return f'<div class="passage missing">Receipt {esc(rid)} is refused: {esc(exc)}</div>'
     if rec is None:
         return f'<div class="passage missing">Receipt {esc(rid)} is not in this run.</div>'
     url = rec.get("final_url") or rec.get("requested_url") or rec.get("path") or ""
@@ -155,13 +165,17 @@ def passage_html(run: Run, item: dict[str, Any]) -> str:
     meta = (f'<div class="meta">Source: {link}<br>Captured {esc(_date(rec.get("fetched_at")))}'
             f' · receipt <code>{esc(rid)}</code> · SHA-256 of the captured bytes '
             f'<code class="hash">{esc(rec.get("sha256"))}</code></div>')
-    text = runread.stored_text(run.dir, rec)
+    try:
+        text = runread.stored_text(run.dir, rec)
+    except RunReadError as exc:
+        return f'<div class="passage missing">{meta}The stored text is refused: {esc(exc)}</div>'
     if text is None:
         return f'<div class="passage missing">{meta}The stored text is missing.</div>'
     try:
-        found = find_quote(text, quote, rec.get("flagged_ranges"))
-    except EvidenceError:
-        found = {"found": False, "matches": []}
+        found = find_quote(text, quote, runread.flagged_ranges(rec))
+    except (EvidenceError, RunReadError) as exc:
+        return (f'<div class="passage missing">{meta}<p>The quotation cannot be checked: '
+                f"{esc(exc)}</p></div>")
     if not found["found"]:
         return (f'<div class="passage missing">{meta}<p>The quotation is <strong>not found'
                 f'</strong> in the stored text now:</p><blockquote>{esc(quote)}</blockquote></div>')
@@ -244,10 +258,7 @@ def _derivation_html(run: Run, claims: Claims, deriv: dict[str, Any]) -> str:
         rows.append(f"<li>{claims.ref(short(inp['claim_id']))} = <strong>{esc(val)}</strong>: "
                     f"{md.inline(inp['statement'], claims.ref)}</li>")
     docs = "".join(f"<li><code>{esc(d)}</code></li>" for d in deriv.get("documents") or [])
-    try:
-        code = (run.dir / script).read_text(encoding="utf-8")[:MAX_SCRIPT_CHARS]
-    except (OSError, UnicodeDecodeError):
-        code = "(the script is not in the run folder)"
+    code = _script_text(run.dir, script)
     return (f'<div class="derivation"><p><strong>Calculation</strong> <code>{esc(script)}</code>'
             f", re-run by the register at filing, which reproduced this number exactly.</p>"
             f"<p>Inputs ({len(rows)}):</p><ul>{''.join(rows)}</ul>"
@@ -256,14 +267,48 @@ def _derivation_html(run: Run, claims: Claims, deriv: dict[str, Any]) -> str:
               f'<pre class="code">{esc(code)}</pre></details></div>')
 
 
+def _script_text(run_dir: Path, script: str) -> str:
+    """A recorded script's text: a .py file under analysis/, read confined and bounded."""
+    if not (script.startswith("analysis/") and script.endswith(".py")):
+        return "(the recorded script path is not a .py file in analysis/; not shown)"
+    try:
+        text = safefs.read_text(run_dir, script, MAX_SCRIPT_BYTES)
+    except safefs.Missing:
+        return "(the script is not in the run folder)"
+    except RunReadError as exc:
+        return f"(the script cannot be shown: {exc})"
+    return text
+
+
 # ----------------------------------------------------------------------- tree
+def _branch_folders(run_dir: Path) -> list[str]:
+    """branches/<b> and branches/<b>/sub/<b2>/..., found iteratively, depth-limited."""
+    out: list[str] = []
+    stack = [(f"branches/{n}", 0) for n in safefs.listdir(run_dir, "branches")]
+    while stack:
+        rel, depth = stack.pop()
+        if depth > MAX_BRANCH_DEPTH or not safefs.SEGMENT.fullmatch(rel.rsplit("/", 1)[-1]):
+            continue
+        out.append(rel)
+        try:
+            subs = safefs.listdir(run_dir, f"{rel}/sub")
+        except RunReadError:
+            continue  # not a folder, or a link: nothing below it is read
+        stack.extend((f"{rel}/sub/{n}", depth + 1) for n in subs)
+    return sorted(out)
+
+
 def _branch_verdicts(run_dir: Path) -> dict[str, dict[str, Any]]:
     latest: dict[str, dict[str, Any]] = {}
-    for vdir in sorted(run_dir.glob("branches/**/verdicts")):
-        files = sorted((p for p in vdir.glob("*.json") if p.stem.isdigit()),
-                       key=lambda p: int(p.stem))
-        if files:
-            v = runread.read_json(files[-1])
+    for folder in _branch_folders(run_dir):
+        try:
+            names = safefs.listdir(run_dir, f"{folder}/verdicts")
+        except RunReadError:
+            continue
+        numbers = sorted(int(n[:-5]) for n in names
+                         if n.endswith(".json") and n[:-5].isdigit() and len(n) < 16)
+        if numbers:
+            v = runread.read_json(run_dir, f"{folder}/verdicts/{numbers[-1]}.json")
             if isinstance(v, dict) and v.get("branch_id"):
                 latest[str(v["branch_id"])] = v
     return latest
@@ -289,80 +334,124 @@ def tree_html(run: Run, claims: Claims) -> str:
     ids = {str(n["id"]) for n in run.nodes}
     for n in run.nodes:
         parent = n.get("parent")
-        children.setdefault(str(parent) if parent in ids else None, []).append(n)
+        children.setdefault(str(parent) if parent is not None and str(parent) in ids
+                            else None, []).append(n)
 
-    def walk(parent: str | None) -> str:
-        items = []
-        for n in children.get(parent, []):
-            state, reason = node_state(n)
-            kind = KIND_WORDS.get(str(n.get("kind")), str(n.get("kind")))
-            badge = f'<span class="kind">{esc(kind)}</span> ' if kind else ""
-            crux = '<span class="kind">crux</span> ' if n.get("crux") else ""
-            body = [(f'<span class="state s-{esc(state)}">{esc(STATE_WORDS.get(state, state))}'
-                    f"</span> {badge}{crux}<code>{esc(n['id'])}</code> "
-                    f"{md.inline(str(n.get('statement', '')), claims.ref)}")]
-            if reason:
-                body.append(f'<div class="why">Set aside because: {esc(reason)}</div>')
-            v = n.get("branch_verdict") or verdicts.get(str(n.get("branch_id")))
-            forms = sorted({str(r.get("status")) for r in (v or {}).get("resolutions") or []
-                            if isinstance(r, dict)} & {"bounded", "conditional"})
-            if forms and state == "answered":
-                body[0] = body[0].replace(
-                    "</span>", "</span> " + " ".join(
-                        f'<span class="state s-{f}">{esc(STATE_WORDS[f])}</span>'
-                        for f in forms), 1)
-            if isinstance(v, dict) and v.get("reason"):
-                gap = f", gap type {esc(v['gap_type'])}" if v.get("gap_type") else ""
-                body.append(f"<details><summary>Branch reviewer: {esc(v.get('verdict'))}{gap}"
-                            f" (branch {esc(v.get('branch_id'))}, round {esc(v.get('round'))})"
-                            f"</summary>{md.render(str(v['reason']), claims.ref, 3)}</details>")
-            items.append(f"<li>{''.join(body)}{walk(str(n['id']))}</li>")
-        return f'<ul class="tree">{"".join(items)}</ul>' if items else ""
+    def item(n: dict[str, Any]) -> str:
+        state, reason = node_state(n)
+        kind = KIND_WORDS.get(str(n.get("kind")), str(n.get("kind")))
+        badge = f'<span class="kind">{esc(kind)}</span> ' if kind else ""
+        crux = '<span class="kind">crux</span> ' if n.get("crux") else ""
+        v = n.get("branch_verdict") or verdicts.get(str(n.get("branch_id")))
+        v = v if isinstance(v, dict) else None
+        forms = sorted({str(r.get("status")) for r in (v or {}).get("resolutions") or []
+                        if isinstance(r, dict)} & {"bounded", "conditional"})
+        extra = "".join(f' <span class="state s-{f}">{esc(STATE_WORDS[f])}</span>'
+                        for f in forms) if state == "answered" else ""
+        body = [(f'<span class="state s-{esc(state)}">{esc(STATE_WORDS.get(state, state))}'
+                f"</span>{extra} {badge}{crux}<code>{esc(n['id'])}</code> "
+                f"{md.inline(str(n.get('statement', '')), claims.ref)}")]
+        if reason:
+            body.append(f'<div class="why">Set aside because: {esc(reason)}</div>')
+        if v is not None and v.get("reason"):
+            gap = f", gap type {esc(v['gap_type'])}" if v.get("gap_type") else ""
+            body.append(f"<details><summary>Branch reviewer: {esc(v.get('verdict'))}{gap}"
+                        f" (branch {esc(v.get('branch_id'))}, round {esc(v.get('round'))})"
+                        f"</summary>{md.render(str(v['reason']), claims.ref, 3)}</details>")
+        return "".join(body)
+
+    # Iterative depth-first rendering; a node is shown once, so a cycle in the parents
+    # cannot loop, and nodes deeper than the limit are listed flat with a note.
+    out: list[str] = []
+    seen: set[str] = set()
+    stack_nodes: list[tuple[str, Any]] = [("kids", (None, 0))]
+    while stack_nodes:
+        what, arg = stack_nodes.pop()
+        if what == "emit":
+            out.append(arg)
+            continue
+        parent, depth = arg
+        kids = [n for n in children.get(parent, []) if str(n["id"]) not in seen]
+        if not kids:
+            continue
+        if depth > MAX_TREE_DEPTH:
+            out.append(f'<p class="small">{len(kids)} more node(s) deeper than '
+                       f"{MAX_TREE_DEPTH} levels are not drawn (a resource limit).</p>")
+            continue
+        out.append('<ul class="tree">')
+        stack_nodes.append(("emit", "</ul>"))
+        for n in reversed(kids):
+            seen.add(str(n["id"]))
+            stack_nodes.append(("emit", "</li>"))
+            stack_nodes.append(("kids", (str(n["id"]), depth + 1)))
+            stack_nodes.append(("emit", f"<li>{item(n)}"))
+    unreached = [n for n in run.nodes if str(n["id"]) not in seen]
+    if unreached:
+        out.append('<p class="small">Nodes not reachable from a root (their parents form a '
+                   "cycle):</p><ul>" + "".join(f"<li>{item(n)}</li>" for n in unreached)
+                   + "</ul>")
 
     old = any(n.get("kind") in ("option", "condition", "rival") for n in run.nodes)
     note = ('<p class="small">This run used the earlier tree form, with options, conditions '
             "and rivals as nodes; later runs break the question into sub-questions only.</p>"
             if old else "")
-    return note + walk(None)
+    return note + "".join(out)
 
 
 # ------------------------------------------------------------------ criteria
+def _points(r: dict[str, Any]) -> list[dict[str, Any]]:
+    pts = r.get("points") or []
+    return [p for p in pts if isinstance(p, dict)] if isinstance(pts, list) else []
+
+
 def _reviews(run: Run) -> dict[int, dict[str, dict[str, Any]]]:
     by_version: dict[int, dict[str, dict[str, Any]]] = {}
     for r in run.run_facts.get("review_recorded", []):
-        by_version.setdefault(int(r["version"]), {})[str(r["role"])] = r
+        v = r.get("version") if isinstance(r, dict) else None
+        if isinstance(v, int) and not isinstance(v, bool) and isinstance(r.get("role"), str):
+            by_version.setdefault(v, {})[r["role"]] = r
     return by_version
 
 
 def criteria_html(run: Run) -> str:
-    reviews = _reviews(run)
+    """Each criterion and what the final reviewers of the displayed draft recorded
+    against it. Green only when all three required reviews of that draft exist and none
+    holds a material point against the criterion; a missing review leaves it unchecked."""
     if not run.criteria:
         return ("<p>This run recorded no criteria for what a finished answer must meet "
                 "(runs since the onboarding step record three to five).</p>")
-    last = max(reviews) if reviews else None
-    points = [p for r in (reviews.get(last, {}) if last else {}).values()
-              for p in r.get("points", [])]
+    version = run.deliverable.version
+    have = _reviews(run).get(version, {}) if version is not None else {}
+    missing = [REVIEWER_NAMES[r] for r in FINAL_REVIEW_FILES if r not in have]
+    points = [p for r in have.values() for p in _points(r)]
     rows = []
     for cr in run.criteria:
         mine = [p for p in points if p.get("criterion") == cr.cid]
-        material = [p for p in mine if p.get("material")]
-        if last is None:
-            said = "No final review was recorded."
+        material = [p for p in mine if p.get("material") is True]
+        if version is None or len(missing) == len(FINAL_REVIEW_FILES):
+            said, cls = "Not checked: no final review of the shown draft was recorded.", "warn"
         elif material:
             said = (f"{len(material)} open material point{'s' if len(material) > 1 else ''} "
-                    f"in the last review round (draft v{last}):")
+                    f"raised against it in the reviews of draft v{version}:")
+            cls = "bad"
+        elif missing:
+            said = (f"Not checked: the review{'s' if len(missing) > 1 else ''} of draft "
+                    f"v{version} by {' and '.join(missing)} "
+                    f"{'are' if len(missing) > 1 else 'is'} not recorded.")
+            cls = "warn"
         elif mine:
-            said = f"Only points the reviewers marked not material, in round v{last}."
+            said, cls = (f"Only points the reviewers marked not material, in the reviews of "
+                         f"draft v{version}."), "ok"
         else:
-            said = f"The reviewers raised no point against it in the last round (v{last})."
-        pts = "".join(f"<li>{esc(p['point'])}</li>" for p in material)
-        cls = "bad" if material else "ok" if last is not None else "warn"
+            said, cls = (f"All three reviewers of draft v{version} recorded no material "
+                         f"point against it."), "ok"
+        pts = "".join(f"<li>{esc(p.get('point'))}</li>" for p in material)
         rows.append(f'<li><strong>{esc(cr.cid)}</strong> {esc(cr.text)}<div class="said '
                     f'{cls}">{esc(said)}</div>{"<ul>" + pts + "</ul>" if pts else ""}</li>')
     src = f" (from {esc(run.criteria_source)})" if run.criteria_source else ""
-    return (f"<p>What the answer had to do to count as done{src}. The reviewers judged "
-            f"each; this page only reports what they recorded.</p><ol class=\"criteria\">"
-            f"{''.join(rows)}</ol>")
+    return (f"<p>What the answer had to do to count as done{src}. The reviewers judge "
+            f"each; this page only reports what they recorded about the draft shown.</p>"
+            f"<ol class=\"criteria\">{''.join(rows)}</ol>")
 
 
 # --------------------------------------------------------- how it was checked
@@ -378,7 +467,7 @@ def checked_html(run: Run, claims: Claims) -> str:
     verdicts = Counter(_verdict(c) for c in all_claims)
     cited = [run.claims[c] for c in claims.cited]
     cited_v = Counter(_verdict(c) for c in cited)
-    checks = runread.jsonl_records(run.dir / "register" / "checks.jsonl")
+    checks = runread.jsonl_records(run.dir, "register/checks.jsonl")
     requests = Counter(str(r.get("role")) for r in checks if r.get("kind") == "request")
     out.append("<h3>Checks run</h3><ul>")
     out.append(f"<li>{len(all_claims):,} claims filed: "
@@ -422,8 +511,8 @@ def checked_html(run: Run, claims: Claims) -> str:
     out.append("<h3>The reviewers' points, round by round</h3>")
     out.append(reviews_html(run))
 
-    crit = runread.read_text(run.dir / "framer" / "critique.md")
-    resp = runread.read_text(run.dir / "framer" / "lead-response.md")
+    crit = runread.read_text(run.dir, "framer/critique.md")
+    resp = runread.read_text(run.dir, "framer/lead-response.md")
     if crit:
         out.append("<h3>The blind framer's challenge</h3><p>A separate agent framed the "
                    "question without seeing the lead's frame, then critiqued it.</p>"
@@ -445,11 +534,15 @@ def checked_html(run: Run, claims: Claims) -> str:
                         f"{md.inline(str(n.get('statement', '')), claims.ref)}</li>")
     if gaps:
         out.append("<ul>" + "".join(gaps) + "</ul>")
-    for rec in sorted(run.dir.glob("branches/*/record.md")):
-        text = runread.read_text(rec) or ""
+    for folder in _branch_folders(run.dir):
+        try:
+            text = runread.read_text(run.dir, f"{folder}/record.md") or ""
+        except RunReadError as exc:
+            text = f"## What was not checked\n\n(the record cannot be read: {exc})"
         body = _record_section(text, "What was not checked")
         if body:
-            out.append(f"<details><summary>Branch {esc(rec.parent.name)}: what was not "
+            name = folder.rsplit("/", 1)[-1]
+            out.append(f"<details><summary>Branch {esc(name)}: what was not "
                        f"checked</summary>{md.render(body, claims.ref, 3)}</details>")
     return "\n".join(out)
 
@@ -458,13 +551,13 @@ def reviews_html(run: Run) -> str:
     reviews = _reviews(run)
     if not reviews:
         return "<p>No final review was recorded.</p>"
-    submitted = sorted(int(d["version"]) for d in run.run_facts.get("draft_submitted", []))
+    submitted = sorted(runread.submitted_versions(run.run_facts))
     out = []
     for v in sorted(reviews):
         later = [s for s in submitted if s > v]
         then = (f"The lead then submitted draft v{later[0]}." if later
                 else "No later draft was submitted.")
-        pts = [(role, p) for role, r in reviews[v].items() for p in r.get("points", [])]
+        pts = [(role, p) for role, r in reviews[v].items() for p in _points(r)]
         material = sum(1 for _r, p in pts if p.get("material"))
         out.append(f"<details{' open' if v == max(reviews) else ''}><summary>Draft v{v}: "
                    f"{len(pts)} points, {material} material. {esc(then)}</summary>")
@@ -474,7 +567,7 @@ def reviews_html(run: Run) -> str:
                 out.append(f"<p>{esc(REVIEWER_NAMES[role])}: not recorded.</p>")
                 continue
             items = []
-            for p in r.get("points", []):
+            for p in _points(r):
                 tag = ('<span class="state s-bad">material</span>' if p.get("material")
                        else '<span class="state s-open">not material</span>')
                 where = " ".join(f"<code>{esc(p[k])}</code>" for k in ("criterion", "node")
@@ -482,20 +575,22 @@ def reviews_html(run: Run) -> str:
                 items.append(f"<li>{tag} {where} {esc(p.get('point'))}</li>")
             out.append(f"<p><strong>{esc(REVIEWER_NAMES[role])}</strong></p>"
                        f"<ul>{''.join(items) or '<li>No points.</li>'}</ul>")
-        responses = sorted(run.dir.glob(f"reviews/v{v}/*response*.md"))
+        responses = [f"reviews/v{v}/{n}" for n in safefs.listdir(run.dir, f"reviews/v{v}")
+                     if "response" in n and n.endswith(".md")]
         if later:
-            responses += [p for p in [run.dir / "draft" / f"response.v{later[0]}.md"]
-                          if p.is_file()]
-        for resp in responses:
-            out.append(f"<details><summary>The lead's response ({esc(resp.name)})</summary>"
-                       f"{md.render(runread.read_text(resp) or '', heading_shift=3)}</details>")
+            responses.append(f"draft/response.v{later[0]}.md")
+        for rel in responses:
+            text = runread.read_text(run.dir, rel)
+            if text is not None:
+                out.append(f"<details><summary>The lead's response ({esc(rel)})</summary>"
+                           f"{md.render(text, heading_shift=3)}</details>")
         out.append("</details>")
     return "\n".join(out)
 
 
 # ----------------------------------------------------------------- run facts
 def _events(run_dir: Path) -> list[dict[str, Any]]:
-    return runread.jsonl_records(run_dir / "events.jsonl")
+    return runread.jsonl_records(run_dir, "events.jsonl")
 
 
 def facts_html(run: Run) -> str:
@@ -532,7 +627,9 @@ def _usage_html(run: Run, events: list[dict[str, Any]]) -> str:
     from stemma.driver import usage
 
     models = run.run.get("models") or {}
-    records = usage.read_records(run.dir)
+    records = [r for r in runread.jsonl_records(run.dir, "usage.jsonl")
+               if all(isinstance(r.get(k), t) for k, t in
+                      (("kind", str), ("role", str), ("session", str), ("tokens", dict)))]
     if records:
         s = usage.summary(records)
         rows = []
@@ -587,30 +684,30 @@ def _models_line(models: dict[str, Any]) -> str:
 
 # ---------------------------------------------------------------------- page
 def status_html(run: Run) -> str:
+    r = run.release
     d = run.deliverable
-    if d.kind == "released":
-        withdrawn = bool(run.run_facts.get("release_withdrawn"))
-        return ('<div class="banner bad">This release was withdrawn after it was made: a '
-                "check it rested on was revoked.</div>" if withdrawn else
-                '<div class="banner ok">Released: every figure passed the release gate.</div>')
+    if r.state == "released":
+        return (f'<div class="banner ok"><strong>Released</strong> (draft v{r.version}). '
+                f"{esc(r.detail)}. To check that nothing changed since, run verify (below)."
+                f"</div>")
     if d.kind == "none":
-        return '<div class="banner bad">This run produced no draft.</div>'
+        return f'<div class="banner bad">This run produced no draft. {esc(r.detail)}.</div>'
     what = (f"the latest draft submitted for review, v{d.version}" if d.kind == "submitted_draft"
             else f"the latest working draft, v{d.version}, never submitted for review")
+    head = {"withdrawn": "Release withdrawn.", "mismatch": "Release record does not match.",
+            "not_released": "Not released."}[r.state]
     unmet: list[str] = []
-    if d.kind == "submitted_draft" and d.version is not None:
+    if d.kind == "submitted_draft" and d.version is not None and run.snapshot is not None:
         try:
-            from stemma.register.store import Register
-
-            unmet = Register(run.dir).finish_failures(d.version)
-        except Exception as exc:  # noqa: BLE001 - shown, never hidden
+            unmet = list(run.snapshot.register.finish_failures(d.version))
+        except Exception as exc:  # noqa: BLE001 - shown on the page, never hidden
             unmet = [f"the gate could not be read ({type(exc).__name__})"]
     items = "".join(f"<li>{esc(u)}</li>" for u in unmet)
     gate = (f"<details><summary>The release gate lists {len(unmet)} unmet condition"
             f"{'s' if len(unmet) != 1 else ''}</summary><ul>{items}</ul></details>"
             if unmet else "")
-    return (f'<div class="banner warn"><strong>Not released.</strong> The run stopped before '
-            f"its release gate passed. Shown below is {esc(what)}.{gate}</div>")
+    return (f'<div class="banner {"bad" if r.state != "not_released" else "warn"}"><strong>'
+            f"{head}</strong> {esc(r.detail)}. Shown below is {esc(what)}.{gate}</div>")
 
 
 CSS = """
@@ -692,6 +789,16 @@ d.addEventListener('click',function(e){if(e.target===d)d.close();});})();
 """
 
 
+def _csp_hash(text: str) -> str:
+    return "'sha256-" + base64.b64encode(hashlib.sha256(text.encode()).digest()).decode() + "'"
+
+
+# The page's only script and style are its own, allowed by hash; nothing else loads or
+# runs: no other script, style, image, frame, font, form target or base URL.
+CSP = ("default-src 'none'; " f"script-src {_csp_hash(JS)}; style-src {_csp_hash(CSS)}; "
+       "img-src 'none'; base-uri 'none'; form-action 'none'")
+
+
 def build(run_dir: Path, verify_result: dict[str, Any] | None = None) -> str:
     run = runread.load(run_dir)
     claims = Claims(run)
@@ -724,12 +831,14 @@ def build(run_dir: Path, verify_result: dict[str, Any] | None = None) -> str:
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
+<meta http-equiv="Content-Security-Policy" content="{CSP}">
 <title>Stemma: {esc(run.question[:80])}</title>
 <style>{CSS}</style></head><body><main>
 <header class="top"><span class="recorded">RECORDED · run {esc(run.run_id)} · {esc(date)}</span>
 <h1>{esc(run.question)}</h1>
-<p class="small">A recorded research run of Stemma, shown as it was recorded: nothing on this
-page is live, and nothing was edited after the run. {esc(scope_line)}</p>{toc}</header>
+<p class="small">A recorded research run of Stemma, shown from its run folder: nothing on this page
+is live. Whether the folder still matches what was checked is what verify (below) tests.
+{esc(scope_line)}</p>{toc}</header>
 {status_html(run)}
 <section id="answer"><h2>The answer</h2>
 <p class="small">Each numbered tag after a figure opens the claim behind it: what the source
