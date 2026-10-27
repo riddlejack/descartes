@@ -95,6 +95,33 @@ CONTRACT_TOOLS = frozenset(
     }
 )
 
+# Logical invariant: names and run-folder paths agreed with part B for the v2 texts
+# (brief W1-roles-v2, "Interfaces agreed with W2", 27 October) that docs/CONTRACTS.md
+# does not carry yet. Prose may use them until it does; once the contract names one,
+# `check` reports it here so the entry is deleted, and this list ends empty.
+PENDING_CONTRACT_NAMES = frozenset({"question_only", "broader_decision"})
+PENDING_CONTRACT_PATHS = frozenset({"criteria.md", "checks/"})
+
+# Logical invariant: the source-reading tools D6 takes from the lead (it reads branch
+# records, never sources); a read hook (part B) refuses its reads of stored sources.
+LEAD_FORBIDDEN_TOOLS = frozenset(
+    {
+        "WebSearch",
+        TOOL_PREFIX + "capture",
+        TOOL_PREFIX + "capture_file",
+        TOOL_PREFIX + "sec_filings",
+        TOOL_PREFIX + "sec_capture",
+        TOOL_PREFIX + "sec_facts",
+        TOOL_PREFIX + "outline",
+        TOOL_PREFIX + "read",
+        TOOL_PREFIX + "read_section",
+        TOOL_PREFIX + "search_store",
+        TOOL_PREFIX + "tables",
+        TOOL_PREFIX + "check_quote",
+        TOOL_PREFIX + "query_data",
+    }
+)
+
 # Logical invariant: the harness tools a role may list. WebFetch is denied (contract
 # 4); Grep and Glob are not tools in the pinned 2.1.308 (contract 6).
 HARNESS_TOOLS = frozenset(
@@ -453,6 +480,9 @@ def check_lead(errors: list[str]) -> None:
     if base is not None:
         check_role_meta(base, "lead", errors)
         check_deferred(base, errors)
+        tools = base.meta.get("tools", [])
+        for tool in sorted(set(tools if isinstance(tools, list) else []) & LEAD_FORBIDDEN_TOOLS):
+            errors.append(f"{rel(base.path)}: the lead holds {tool}, a source-reading tool")
     expected = {"base.md"} | {f"{s}.{v}.md" for s, vs in SWITCHES for v in vs}
     present = {p.name for p in LEAD_DIR.iterdir() if p.is_file()}
     for name in sorted(expected - present):
@@ -605,7 +635,8 @@ def check_skills(errors: list[str]) -> None:
 
 
 def contract_vocabulary() -> tuple[set[str], set[str], str]:
-    """Snake_case names, top-level run-folder entries, and the contract's text."""
+    """Snake_case names, top-level run-folder entries, and the contract's text, with
+    the agreed names the contract does not carry yet (PENDING_CONTRACT_*)."""
     text = CONTRACTS.read_text()
     names = set(IDENTIFIER.findall(text))
     section = text[text.index("## 3. The run folder") : text.index("## 4.")]
@@ -613,7 +644,23 @@ def contract_vocabulary() -> tuple[set[str], set[str], str]:
     for token in re.findall(r"`([^`]+)`", section):
         first = token.strip().split("/")[0]
         tops.add(first + "/" if "/" in token else first)
-    return names, tops, text
+    return names | PENDING_CONTRACT_NAMES, tops | PENDING_CONTRACT_PATHS, text
+
+
+def check_pending(errors: list[str]) -> None:
+    """A pending name the contract now carries is reported, so the list empties."""
+    text = CONTRACTS.read_text()
+    names = set(IDENTIFIER.findall(text))
+    section = text[text.index("## 3. The run folder") : text.index("## 4.")]
+    for name in sorted(PENDING_CONTRACT_NAMES & names):
+        errors.append(
+            f"tools/roles/rolemap.py: {name!r} is now in the contract; drop it from pending"
+        )
+    for path in sorted(PENDING_CONTRACT_PATHS):
+        if f"`{path}" in section:
+            errors.append(
+                f"tools/roles/rolemap.py: {path!r} is now in the contract; drop it from pending"
+            )
 
 
 def check_prose(doc: Doc, tools: list[str], errors: list[str]) -> None:
@@ -674,6 +721,7 @@ def check_all() -> list[str]:
     check_lead(errors)
     check_skills(errors)
     check_shared(errors)
+    check_pending(errors)
     if not errors:
         check_all_prose(errors)
     return errors

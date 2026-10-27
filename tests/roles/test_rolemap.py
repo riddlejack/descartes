@@ -349,3 +349,33 @@ def test_two_sentences_sharing_one_comment_fail(rm: ModuleType) -> None:
 def test_sentence_break_before_a_number_fails(rm: ModuleType) -> None:
     append(rm, "worker", "Read it whole. 2 passes follow. <!-- prevents: x; evidence: y -->")
     assert "not exactly one sentence" in errors_of(rm)
+
+
+def test_lead_with_a_source_reading_tool_fails(rm: ModuleType) -> None:
+    edit(rm.LEAD_DIR / "base.md", "  - Skill\n", "  - Skill\n  - mcp__plugin_stemma_stemma__read\n")
+    assert "the lead holds mcp__plugin_stemma_stemma__read, a source-reading tool" in errors_of(rm)
+
+
+def test_lead_with_websearch_fails(rm: ModuleType) -> None:
+    edit(rm.LEAD_DIR / "base.md", "  - Skill\n", "  - Skill\n  - WebSearch\n")
+    assert "the lead holds WebSearch" in errors_of(rm)
+
+
+def test_pending_name_and_path_pass_until_the_contract_names_them(rm: ModuleType) -> None:
+    line = "Read criteria.md and checks/ for question_only runs. <!-- prevents: x; evidence: y -->"
+    append(rm, "worker", line)
+    assert rm.check_all() == []
+    contract = rm.CONTRACTS.read_text().replace(
+        "## 4.", "- `criteria.md` and scope `question_only`.\n\n## 4.", 1
+    )
+    rm.CONTRACTS.write_text(contract)
+    errors = errors_of(rm)
+    assert "'question_only' is now in the contract; drop it from pending" in errors
+    assert "'criteria.md' is now in the contract; drop it from pending" in errors
+
+
+def test_unagreed_path_still_fails_beside_pending_ones(rm: ModuleType) -> None:
+    append(
+        rm, "worker", "Keep notes in checklist/notes.md always. <!-- prevents: x; evidence: y -->"
+    )
+    assert "the path 'checklist/notes.md', which the contract does not" in errors_of(rm)
