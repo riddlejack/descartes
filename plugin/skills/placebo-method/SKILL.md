@@ -21,4 +21,6 @@ The violin took its shape in northern Italy in the sixteenth century. Its later 
 
 7. **The nineteenth-century instrument.** As concert halls grew, makers lengthened necks, set them at a steeper angle and fitted heavier bass bars, so nearly every old violin played today was altered. The chin rest, attributed to the violinist Louis Spohr around 1820, belongs to the same period.
 
+8. **Strings and players.** For most of the violin's life its strings were gut, later wound with silver or copper on the lowest string. In the twentieth century steel strings, and then strings with a synthetic core, became common, giving a brighter and steadier sound. Virtuosos from Corelli to Paganini wrote music that shaped how the instrument was built and held.
+
 The viola and the cello follow the same design at larger sizes, while the double bass keeps features of the older viol family, such as sloping shoulders and, in some instruments, a flat back.

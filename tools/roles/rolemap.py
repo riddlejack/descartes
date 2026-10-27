@@ -156,6 +156,7 @@ AGENT_ROLES = (
     "evidence-auditor",
     "mechanical-reader",
     "retrospective-writer",
+    "idea-generator",
 )
 
 # Logical invariant: switches with text fragments, in assembly order (contract 7).

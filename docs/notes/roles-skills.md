@@ -547,3 +547,27 @@ keeps only "the question type (fact, cause or decision)". Reported, not restored
 `src/stemma/mcp_server.py`: tree_upsert's docstring gains one line (statement is one
 short question; doubt, settles_by and flip_point are for leaves). Nothing in
 `register/store.py` requires those fields on any node; they default to null.
+
+## Tree skill v3, ideas first (brief T3, 27 October)
+
+Evidence: owner ruling 48 and the tree check 2 owner judgment. Changes: a new
+idea-generator agent (Write only; the lead gives it the scoped question, onboarding
+answers and any as_of, and it writes framer/ideas.md); the lead builds the tree from
+those ideas and its own; the method rewritten around ideas, the pie test at every parent,
+and pruning, keeping every node-form rule; the framer names each parent's dimension and
+any idea dropped without a reason.
+
+Departures from the brief: its examples (residents, visitors and transfers; average and
+peak; another airport under demand shifted elsewhere) come from a test case, so the method
+uses invented ones (new and returning customers; weekdays and weekends; a bakery's café
+rival). The lead line was trimmed to keep the longest lead at 850: "Give idea-generator
+... as received" with no explicit wait (the Agent call returns when it is done); "making
+accepted changes by restructuring nodes"; set-aside "with a reason" (tree_upsert dropped);
+"never sources" dropped from the branch-records line (the guard and line 1 hold it);
+"attachments" dropped from the task.json parenthesis.
+
+Host wiring, needed for the role to start at all: `register/roles.py` adds
+IDEA_GENERATOR to SUBAGENT_TYPES and ALL_ROLES (so the Agent guard admits it and
+s5_models gives it a model); `driver/settings.py` hides framer/ideas.md from the blind
+framer's own frame. Not done: contract section 8 does not yet list the role; the run's
+CLAUDE.md (the standing rules) still loads for the subagent as for every session.
