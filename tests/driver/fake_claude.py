@@ -82,7 +82,13 @@ def main() -> int:
     own_names = {t.split("(", 1)[0] for t in own}
     if not agent:
         own_names = set(tools)  # no --agent: the whole --tools list
-    shown = ["Task" if t == "Agent" else t for t in tools if t in own_names]
+    # Like the harness: a tool the settings deny by its bare name is not offered.
+    denied: set[str] = set()
+    settings_arg = opt(argv, "--settings")
+    if settings_arg and Path(settings_arg).is_file():
+        perms = json.loads(Path(settings_arg).read_text()).get("permissions", {})
+        denied = {d for d in perms.get("deny", []) if "(" not in d}
+    shown = ["Task" if t == "Agent" else t for t in tools if t in own_names and t not in denied]
     shown += [t for t in own if t.startswith("mcp__")]
     agents = sorted(f"stemma:{p.stem}" for p in (plugin / "agents").glob("*.md"))
     skills = sorted(f"stemma:{p.name}" for p in (plugin / "skills").glob("*")

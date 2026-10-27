@@ -105,6 +105,59 @@ def merge_settings(extra: dict[str, Any] | None) -> dict[str, Any]:
     return out
 
 
+# Memory files the harness loads from a folder (probed on 2.1.308: it reads them in every
+# folder above the working folder, the home folder included, whatever CLAUDE_CONFIG_DIR
+# says). Invariant: the harness's own names.
+MEMORY_NAMES: Final = ("CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md",
+                       ".claude/CLAUDE.local.md")
+MEMORY_GLOBS: Final = (".claude/rules/**",)
+
+
+def _both_forms(p: Path) -> list[Path]:
+    """The path as given and fully resolved (macOS reaches /var through /private/var)."""
+    out = [Path(os.path.abspath(p))]
+    real = Path(os.path.realpath(p))
+    if real not in out:
+        out.append(real)
+    return out
+
+
+def memory_excludes(cwd: Path, config_dir: Path) -> list[str]:
+    """`claudeMdExcludes` for a clean session: every memory file the harness could load
+    from a folder above the working folder, from the home folder and from the config
+    folder. Only the working folder's own CLAUDE.md (a run's standing rules) stays."""
+    home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    out: list[str] = []
+    for base in _both_forms(cwd):
+        for folder in base.parents:
+            out += [str(folder / n) for n in MEMORY_NAMES]
+            out += [str(folder / g) for g in MEMORY_GLOBS]
+        out += [str(base / n) for n in MEMORY_NAMES if n != "CLAUDE.md"]
+        out += [str(base / g) for g in MEMORY_GLOBS]
+    # The user's own memory: in the home folder, its .claude/, and the config folder.
+    for folder in (*_both_forms(home), *_both_forms(home / ".claude"), *_both_forms(config_dir)):
+        out += [str(folder / n) for n in MEMORY_NAMES]
+        out += [str(folder / "rules/**")] + [str(folder / g) for g in MEMORY_GLOBS]
+    return list(dict.fromkeys(out))
+
+
+def memory_leaks(cwd: Path, config_dir: Path, excludes: list[str]) -> list[str]:
+    """Memory files that exist where the harness would load them and that `excludes`
+    does not name: each would load into a session meant to be clean."""
+    names = set(excludes)
+    home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    found: list[str] = []
+    for base in _both_forms(cwd):
+        folders = [*base.parents, *_both_forms(home), *_both_forms(home / ".claude"),
+                   *_both_forms(config_dir)]
+        for folder in folders:
+            for n in MEMORY_NAMES:
+                f = folder / n
+                if os.path.lexists(f) and str(f) not in names:
+                    found.append(str(f))
+    return sorted(set(found))
+
+
 def clean_launch(binary: Path, config_dir: Path, prompt: str, *, cwd: Path, model: str,
                  effort: str, tools: list[str] | tuple[str, ...], settings_path: Path,
                  plugin_dir: Path | None = None, agent: str | None = None,
@@ -132,6 +185,14 @@ def clean_launch(binary: Path, config_dir: Path, prompt: str, *, cwd: Path, mode
         if not t or "," in t or t.startswith("mcp__"):
             raise HarnessError(f"--tools takes built-in tool names, got {t!r}")
     settings = merge_settings(settings_extra)
+    # No memory file from above the working folder, the home folder or the config folder
+    # loads (the tree check found the owner's preferences in every clean session).
+    excludes = list(dict.fromkeys([*memory_excludes(cwd, config_dir),
+                                   *settings.get("claudeMdExcludes", [])]))
+    settings["claudeMdExcludes"] = excludes
+    leaks = memory_leaks(cwd, config_dir, excludes)
+    if leaks:
+        raise HarnessError(f"memory files outside the run would load: {leaks}")
     argv = [str(binary), "-p", prompt, "--output-format", "stream-json", "--verbose"]
     if agent is not None:
         argv += ["--agent", agent]
