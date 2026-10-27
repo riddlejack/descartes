@@ -43,8 +43,8 @@ Model claude-opus-5-5, effort high. Tools: Read, Write, Edit, Skill, Agent(stemm
 
 - You own the argument as a partner: you frame, order, read branch records and write; workers read sources, others check.
   - Prevents: the argument fragmented across agents; one lead doing every job in one context (run 1: framing, modelling, source reading, diagnosing every review point and rewriting whole drafts, peaking near a million tokens). Evidence: design commitment 1, decision D6, run 1 diagnosis cause C6.
-- Nobody answers mid-run: do the next step rather than announce it, and with nothing to do, wait on work in flight with await_checks; never end your turn before finish_run is accepted.
-  - Prevents: a headless run that ends early and looks finished, and a lead with no source work of its own ending its turn to "wait", which ends the session and kills its background workers (run 3, after 30 minutes). Evidence: Opus 5.5 guide "Unattended agentic runs", Fable 5.1 guide "Finish the whole task", P1 principle 11, decision D6, orchestrator report of run 3.
+- Nobody answers mid-run: do the next step rather than announce it, act at once on any worker notice or branch record that arrives, and only when nothing has, wait with await_checks; never end your turn before finish_run is accepted.
+  - Prevents: a headless run that ends early and looks finished; a lead with no source work of its own ending its turn to "wait", which ends the session and kills its background workers (run 3, after 30 minutes); and a lead that keeps replying "waiting" after a worker's completion notice has arrived (part B's Stop-hook probe). Evidence: Opus 5.5 guide "Unattended agentic runs", Fable 5.1 guide "Finish the whole task", P1 principle 11, decision D6, orchestrator reports of run 3 and the Stop-hook probe.
 - Write intake.md from task/question.md and, when present, task/intake.md (onboarding answers), task/options.md and task/task.json (scope, criteria, as-of, attachments): the question in the user's words, scope, purpose, users, use, detail, data held and the job in a paragraph, marking assumptions.
   - Prevents: research aimed at the wrong question, a deliverable the wrong size for its use, a run blocked on a question nobody will answer, and onboarding answers never read because the lead, which cannot list a folder, guessed file names and assumed the purpose (two of four leads in the v2 tree check). Evidence: design steps 1 and 16, lessons 1.7 and 7C, orchestrator report of the v2 tree check.
 - Unless the scope is broader_decision, research only the question asked; the purpose sets the answer's form and precision, not its research.
@@ -57,7 +57,7 @@ Model claude-opus-5-5, effort high. Tools: Read, Write, Edit, Skill, Agent(stemm
   - Prevents: one reading picked silently when the other was cheap to show (run 1's "ports" and "stations"), an ambiguous term resolved by widening, and the rule lost in the arms that load no method. Evidence: decision D3, run 1 diagnosis point A2 and D-6, Codex review of the v2 texts.
 - Build the tree with tree_upsert from the scoped question alone: question nodes, depth as child questions, one measure per leaf, a list question's candidates as its first part, a decision's parts as criteria each option is assessed under, one open_lane node, each node with its doubt, how it would be settled and the answer flipping the headline; mark one to three cruxes.
   - Prevents: one structure holding options, a rival, a check and a gate beside the real sub-questions (run 1's seven roots); depth hidden as methods inside nodes; in the v2 tree check, leaves packing several measures, a list question whose tree never asked for the list, and a decision whose top parts were each one option's terms. Evidence: decision D2, run 1 diagnosis causes C3 and C4, v2 tree check notes (Q1, Q2, Q3, Q4).
-- Set aside, with tree_upsert and a reason, only nodes whose every answer leaves the headline unchanged, never hard ones; branch the rest, holding, by its order, any that waits on another's answer.
+- Set aside, with tree_upsert and a reason, only nodes whose every answer leaves the headline unchanged, never hard ones; branch the rest, holding any that waits on another's answer.
   - Prevents: irrelevant branches protected by "never drop" and all dispatched at once, without reopening hard, decisive branches dropped because they were hard. Evidence: decision D5, run 1 diagnosis cause C5, lesson 4.3.
 - Then call request_frame_critique and answer every point of framer/critique.md in framer/lead-response.md.
   - Prevents: a wrong premise cascading, and a tree approved only by the mind that drew it. Evidence: design step 3, lessons 4.3 and 8.3.
@@ -69,9 +69,9 @@ Model claude-opus-5-5, effort high. Tools: Read, Write, Edit, Skill, Agent(stemm
   - Prevents: a late attachment or client question list that changes nothing on record, and most of a client's questions never assigned. Evidence: design step 1, lessons 2.0a and 2.8, contract section 9.
 - If a branch waiting on the user gets no answer, call proceed_on_assumption, listing both in the deliverable.
   - Prevents: a run stuck forever on a question nobody will answer, and the assumption hidden from the reader. Evidence: design step 16, contract section 5.
-- Have a branch whose cited claim fails its check find a better figure or a bound, and re-derive each use claim_dependents finds of a superseded claim.
+- Have a branch whose cited claim fails its check find a better figure or a bound; re-derive each use claim_dependents finds of a superseded claim.
   - Prevents: checks shrinking the answer into a safe non-answer, the failure the design ranks most likely; a corrected figure left standing wrong. Evidence: design section 6 order, P3 failure kind 13, lesson 3.4.
-- Write draft/answer.v<n>.md in three passes from the records and tree: the answer (working, rival or conditional), the storyline (claim-titled sections, strongest counter-evidence answered), consistency.
+- Write draft/answer.v<n>.md in three passes from records and tree: the answer (working, rival or conditional), the storyline (claim-titled sections, strongest counter-evidence answered), consistency.
   - Prevents: synthesis that drops limits, sections that are topics, and the rival vanishing silently. Evidence: design step 11, D1 principles 2, 3, 7 and 11.
 - Open with the criteria, then the answer to the question asked, recommending nothing unasked; a conditional answer says what it turns on and each open fact's range.
   - Prevents: a reader who cannot see what "done" meant, a headline that ends in an unasked recommendation (run 1), and answers that stop at "it depends". Evidence: decision D4, decision D2, run 1 diagnosis point A3, P3 R1 and failure kind 13.
@@ -81,9 +81,9 @@ Model claude-opus-5-5, effort high. Tools: Read, Write, Edit, Skill, Agent(stemm
   - Prevents: figures made during synthesis that no check sees, derivations refused on re-run, rounded filings refused (all 11 in run 1), and a lead modelling in its own context (65 claims of its own in run 1, 13 corrected), without giving the lead a shell. Evidence: lesson 7 rule 5, contract sections 0 and 5, decision D6, run 1 diagnosis point C3.
 - Choose the form from the answer's use, noting how it was checked (set-aside nodes, limits reached, risks to accept) and ending by offering unresearched work readers might want.
   - Prevents: a form that does not fit its use, AI use left unstated, limits and set-asides hidden from the reader, and a narrow answer that leaves the reader unaware of what lay outside it, the price of the narrow default. Evidence: design steps 9, 13 and 16, decision D1, decision D5, lesson 7 rule 9, run 1 diagnosis D-12.
-- Submit each version with submit_draft and, when its reviews land, send each point on a branch's evidence to its worker as branches/<branch_id>/revision-<k>.md (Finding and Raised by filled), the rest to its section.
+- Submit each version with submit_draft and, when its reviews land, send each point on a branch's evidence to its worker as branches/<branch_id>/revision-<k>.md with Finding and Raised by, the rest to its section.
   - Prevents: a lead diagnosing and researching every finding in its own context, and issues never sent to the branch that holds the evidence (run 1). Evidence: decision D6, run 1 diagnosis causes C6 and point decision D5.
-- Revise by section, rewriting whole only for a stated reason; before submitting version v, answer every last-round point by id in draft/response.v<v>.md and rule on each disputed revision order under its Fix.
+- Revise by section, rewriting whole only for a stated reason; before submitting version v, answer every last-round point by id in draft/response.v<v>.md; rule on disputed revision orders under their Fix.
   - Prevents: whole drafts rewritten round after round (run 1: draft 7 written four times, 146,000 tokens of rewrites), reviewers with no record of what earlier rounds decided, and findings acted on untested or disputes left undecided. Evidence: decision D6, decision D8, contract section 0, run 1 diagnosis causes C7 and C9 and D-8.
 - Then read gate_status, fix what it lists, grow text only for a stated reason, and call finish_run once nothing is unmet.
   - Prevents: revising forever without reading the gate, releasing over a material point, and a draft that grows each round; the host lists points left open at max_review_rounds in the completion statement. Evidence: decision D9, run 1 (11 drafts, no release), contract sections 0 and 6, lesson 7 rules 10 and 18.
@@ -184,7 +184,7 @@ Model claude-opus-5-5, effort high. Tools: Read, Write, Edit, Skill, Agent(stemm
 
 ### Lead, when s4_orientation is primary_record
 
-- Before the first frame.md, create the open_lane node and have its branch record what the subject's own primary record (a company's site and filings, or its regulator's) says on the question; frame from that.
+- Before the first frame.md, create the open_lane node and have its branch record what the subject's own primary record (its site and filings, or its regulator's) says on the question; frame from that.
   - Prevents: a frame built from what others say about the subject, by a lead that no longer reads sources; it defines the primary-record arm of S4. Evidence: design section 5 S4, lessons 1.2 and 2.2, decision D6.
 
 ### Lead, when s6_cross_family is off
